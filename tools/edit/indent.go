@@ -265,12 +265,11 @@ func findEditorConfig(filePath string) *IndentStyle {
 
 func findEditorConfigFull(filePath string) *EditorConfigResult {
 	dir := filepath.Dir(filePath)
-	filename := filepath.Base(filePath)
 
 	for {
 		ecPath := filepath.Join(dir, ".editorconfig")
 		if _, err := os.Stat(ecPath); err == nil {
-			if result := parseEditorConfig(ecPath, filename); result != nil {
+			if result := parseEditorConfig(ecPath, filePath); result != nil {
 				return result
 			}
 			// 설정이 없는(result==nil) .editorconfig도 root=true이면 상위 탐색 중단
@@ -287,12 +286,17 @@ func findEditorConfigFull(filePath string) *EditorConfigResult {
 	return nil
 }
 
-func parseEditorConfig(ecPath, filename string) *EditorConfigResult {
+// parseEditorConfig는 .editorconfig 파일에서 filePath에 매칭되는 설정을 추출한다.
+// filePath는 절대 경로여야 한다.
+func parseEditorConfig(ecPath, filePath string) *EditorConfigResult {
 	f, err := os.Open(ecPath)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
+
+	filename := filepath.Base(filePath)
+	ecDir := filepath.Dir(ecPath)
 
 	scanner := bufio.NewScanner(f)
 	props := make(map[string]string)
@@ -309,7 +313,16 @@ func parseEditorConfig(ecPath, filename string) *EditorConfigResult {
 			patterns := expandBraces(pattern)
 			inMatchingSection = false
 			for _, p := range patterns {
-				matched, _ := filepath.Match(p, filename)
+				var matched bool
+				if strings.Contains(p, "/") {
+					// 경로 포함 패턴: .editorconfig 위치 기준 상대 경로로 매칭
+					relPath, relErr := filepath.Rel(ecDir, filePath)
+					if relErr == nil {
+						matched, _ = filepath.Match(p, filepath.ToSlash(relPath))
+					}
+				} else {
+					matched, _ = filepath.Match(p, filename)
+				}
 				if matched {
 					inMatchingSection = true
 					break
@@ -400,6 +413,9 @@ func parseInt(s string) int {
 			return n
 		}
 		n = n*10 + int(c-'0')
+		if n > 1000 {
+			return n // 오버플로우 방지: indent_size에 합리적인 상한
+		}
 	}
 	return n
 }

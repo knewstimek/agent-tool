@@ -2,6 +2,7 @@ package help
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"agent-tool/common"
@@ -61,7 +62,7 @@ agent-tool provides encoding-aware and indentation-aware file tools.
 It auto-detects file encoding and indentation style, preserving them across edits.
 
 ## Current Configuration
-- Fallback encoding: ` + common.FallbackEncoding + `
+- Fallback encoding: ` + common.GetFallbackEncoding() + `
 
 ## Available Tools
 - edit: String replacement with smart indentation + encoding preservation
@@ -74,7 +75,7 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - decompress: Extract zip / tar.gz archives
 - backup: Timestamped zip backup with exclude patterns
 - convert_encoding: Convert file encoding (EUC-KR ↔ UTF-8, BOM, etc.)
-- set_config: Change runtime settings (fallback encoding)
+- set_config: Change runtime settings (fallback encoding, encoding warnings, max file size)
 - agent_tool_help: This help tool
 
 ## Quick Tips
@@ -89,7 +90,7 @@ func helpEncoding() string {
 Priority order:
 1. .editorconfig 'charset' value (highest priority)
 2. chardet auto-detection (confidence >= 50%)
-3. Fallback encoding (currently: ` + common.FallbackEncoding + `)
+3. Fallback encoding (currently: ` + common.GetFallbackEncoding() + `)
 
 ## Setting up for non-UTF-8 projects
 
@@ -100,11 +101,17 @@ Add to your project's .editorconfig:
 
 This is the most reliable method. The charset value is used directly without auto-detection.
 
-### Option 2: Fallback encoding (server-wide)
+### Option 2: Environment variable (persistent, no token cost)
+Set AGENT_TOOL_FALLBACK_ENCODING environment variable:
+  Windows:  setx AGENT_TOOL_FALLBACK_ENCODING EUC-KR
+  Linux:    export AGENT_TOOL_FALLBACK_ENCODING=EUC-KR  (add to ~/.bashrc)
+
+### Option 3: CLI flag (per-session)
 Start agent-tool with:
   agent-tool --fallback-encoding EUC-KR
 
-This applies when chardet auto-detection fails (confidence < 50%).
+Priority: CLI flag > environment variable > default (UTF-8).
+These apply when chardet auto-detection fails (confidence < 50%).
 
 ## Supported encodings
 UTF-8, UTF-8 BOM, EUC-KR, Shift_JIS, ISO-8859-1, UTF-16BE, UTF-16LE, and more.
@@ -113,7 +120,11 @@ UTF-8, UTF-8 BOM, EUC-KR, Shift_JIS, ISO-8859-1, UTF-16BE, UTF-16LE, and more.
 - "Encoding detection failed (low confidence)": chardet couldn't identify the encoding.
   → Add charset to .editorconfig or set --fallback-encoding.
 - "Encoding detected as X (confidence: N%)": chardet is unsure about the result.
-  → If text looks correct, no action needed. If garbled, add charset to .editorconfig.`
+  → If text looks correct, no action needed. If garbled, add charset to .editorconfig.
+
+## Disabling warnings
+To suppress encoding warning messages:
+  Use set_config with encoding_warnings = false`
 }
 
 func helpIndentation() string {
@@ -161,7 +172,8 @@ Parameters: file_path, old_string, new_string, replace_all, indent_style
 
 ## read
 Read a file with encoding auto-detection. Returns content with line numbers.
-Parameters: file_path, offset (1-based), limit
+Supports negative offset to read from end (e.g. offset=-5 reads last 5 lines).
+Parameters: file_path, offset (1-based, or negative for end-relative), limit
 
 ## write
 Create or overwrite a file. Preserves encoding for existing files.
@@ -184,7 +196,9 @@ Create zip or tar.gz archive.
 Parameters: sources (array), output
 
 ## decompress
-Extract zip or tar.gz archive. Includes Zip Slip protection.
+Extract zip or tar.gz archive. Includes Zip Slip and Zip Bomb protection.
+Symlinks are skipped by default (security). Enable via set_config allow_symlinks=true.
+Even when enabled, symlinks targeting outside the output directory are blocked.
 Parameters: archive, output_dir
 
 ## backup
@@ -198,9 +212,9 @@ Parameters: file_path, to_encoding
 
 ## set_config
 Change agent-tool runtime configuration.
-Currently supports: fallback_encoding (used when auto-detection fails).
+Supports: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks.
 Call with no arguments to view current config.
-Parameters: fallback_encoding`
+Parameters: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks`
 }
 
 func helpTroubleshooting() string {
@@ -243,6 +257,9 @@ If it does, check:
 3. Report as a bug if encoding changes unexpectedly.
 
 ## Current server configuration
-- Fallback encoding: ` + common.FallbackEncoding + `
-- This can be changed by restarting agent-tool with --fallback-encoding <CHARSET>`
+- Fallback encoding: ` + common.GetFallbackEncoding() + `
+- Encoding warnings: ` + fmt.Sprintf("%v", common.GetEncodingWarnings()) + `
+- Max file size: ` + fmt.Sprintf("%d MB", common.GetMaxFileSize()/(1024*1024)) + `
+- Allow symlinks: ` + fmt.Sprintf("%v", common.GetAllowSymlinks()) + `
+- Use set_config to change at runtime, or --fallback-encoding <CHARSET> at startup`
 }

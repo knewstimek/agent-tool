@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"agent-tool/common"
 	"agent-tool/install"
@@ -39,10 +40,26 @@ func main() {
 		return
 	}
 
-	// --fallback-encoding 옵션 파싱
+	// fallback-encoding 설정 (우선순위: CLI > 환경변수 > 기본값)
+	// 1. 환경변수에서 읽기
+	if envEnc := os.Getenv("AGENT_TOOL_FALLBACK_ENCODING"); envEnc != "" {
+		if normalized := config.NormalizeAndValidate(envEnc); normalized != "" {
+			common.SetFallbackEncoding(normalized)
+		} else {
+			common.SetFallbackEncoding(strings.ToUpper(strings.TrimSpace(envEnc)))
+		}
+	}
+	// 2. CLI 옵션 (환경변수보다 우선)
 	for i, arg := range args {
 		if arg == "--fallback-encoding" && i+1 < len(args) {
-			common.FallbackEncoding = args[i+1]
+			enc := args[i+1]
+			normalized := config.NormalizeAndValidate(enc)
+			if normalized == "" {
+				fmt.Fprintf(os.Stderr, "warning: unknown encoding %q, using as-is. Supported: UTF-8, EUC-KR, Shift_JIS, ISO-8859-1, etc.\n", enc)
+				common.SetFallbackEncoding(strings.ToUpper(strings.TrimSpace(enc)))
+			} else {
+				common.SetFallbackEncoding(normalized)
+			}
 		}
 	}
 

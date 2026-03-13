@@ -9,33 +9,6 @@ import (
 	"strings"
 )
 
-// 지원하는 에이전트 목록
-var agents = map[string]agentConfig{
-	"claude": {
-		name:       "Claude Code",
-		configPath: filepath.Join(homeDir(), ".claude", "settings.json"),
-		format:     "json",
-		jsonKey:    "mcpServers",
-	},
-	"cursor": {
-		name:       "Cursor",
-		configPath: filepath.Join(homeDir(), ".cursor", "mcp.json"),
-		format:     "json",
-		jsonKey:    "mcpServers",
-	},
-	"windsurf": {
-		name:       "Windsurf",
-		configPath: filepath.Join(homeDir(), ".codeium", "windsurf", "mcp_config.json"),
-		format:     "json",
-		jsonKey:    "mcpServers",
-	},
-	"codex": {
-		name:       "Codex CLI",
-		configPath: filepath.Join(homeDir(), ".codex", "config.toml"),
-		format:     "toml",
-	},
-}
-
 type agentConfig struct {
 	name       string
 	configPath string
@@ -43,9 +16,48 @@ type agentConfig struct {
 	jsonKey    string // JSON 설정 내 MCP 서버 키
 }
 
+// getAgents는 지원 에이전트 목록을 반환한다.
+// 홈 디렉토리 조회 실패 시 에러를 반환한다.
+func getAgents() (map[string]agentConfig, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("홈 디렉토리를 가져올 수 없음: %w", err)
+	}
+	return map[string]agentConfig{
+		"claude": {
+			name:       "Claude Code",
+			configPath: filepath.Join(home, ".claude", "settings.json"),
+			format:     "json",
+			jsonKey:    "mcpServers",
+		},
+		"cursor": {
+			name:       "Cursor",
+			configPath: filepath.Join(home, ".cursor", "mcp.json"),
+			format:     "json",
+			jsonKey:    "mcpServers",
+		},
+		"windsurf": {
+			name:       "Windsurf",
+			configPath: filepath.Join(home, ".codeium", "windsurf", "mcp_config.json"),
+			format:     "json",
+			jsonKey:    "mcpServers",
+		},
+		"codex": {
+			name:       "Codex CLI",
+			configPath: filepath.Join(home, ".codex", "config.toml"),
+			format:     "toml",
+		},
+	}, nil
+}
+
 // Run은 install 명령을 실행한다.
 // target이 빈 문자열이면 감지된 모든 에이전트에 등록한다.
 func Run(target string) error {
+	agents, err := getAgents()
+	if err != nil {
+		return err
+	}
+
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("실행 파일 경로를 가져올 수 없음: %w", err)
@@ -179,9 +191,14 @@ func installTOML(agent agentConfig, exePath string) error {
 				skip = true
 				continue
 			}
-			// 다른 섹션이 시작되면 skip 해제
-			if skip && strings.HasPrefix(strings.TrimSpace(line), "[") {
-				skip = false
+			// 다른 섹션이 시작되면 skip 해제.
+			// 실제 섹션 헤더 판별: [로 시작하고 ]로 끝나며, =를 포함하지 않아야 함.
+			// 이렇게 해야 args = ["--flag"] 같은 TOML 배열 값의 [를 섹션으로 오인하지 않는다.
+			if skip {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") && !strings.Contains(trimmed, "=") {
+					skip = false
+				}
 			}
 			if !skip {
 				result = append(result, line)
@@ -204,12 +221,4 @@ func installTOML(agent agentConfig, exePath string) error {
 
 	fmt.Printf("[%s] 등록 완료: %s\n", agent.name, agent.configPath)
 	return nil
-}
-
-func homeDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return home
 }

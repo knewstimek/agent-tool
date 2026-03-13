@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -48,19 +49,44 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GlobInput) (*mc
 		return errorResult(fmt.Sprintf("glob error: %v", err))
 	}
 
-	// 수정 시간 기준 정렬 (최신 먼저)
-	sort.Slice(matches, func(i, j int) bool {
-		fi, _ := os.Stat(matches[i])
-		fj, _ := os.Stat(matches[j])
-		if fi == nil || fj == nil {
-			return false
+	// 수정 시간 기준 정렬 (최신 먼저).
+	// sort.Slice 내에서 매 비교마다 os.Stat를 호출하면 O(N log N) syscall이 발생하므로,
+	// 미리 한 번 순회하며 modTime을 캐싱하여 O(N) syscall로 제한한다.
+	type fileWithTime struct {
+		path    string
+		modTime time.Time
+		valid   bool
+	}
+	filesWithTime := make([]fileWithTime, len(matches))
+	for i, m := range matches {
+		fi, err := os.Stat(m)
+		if err != nil {
+			filesWithTime[i] = fileWithTime{path: m}
+		} else {
+			filesWithTime[i] = fileWithTime{path: m, modTime: fi.ModTime(), valid: true}
 		}
-		return fi.ModTime().After(fj.ModTime())
+	}
+	sort.Slice(filesWithTime, func(i, j int) bool {
+		if !filesWithTime[i].valid {
+			return false // stat 실패 파일은 뒤로
+		}
+		if !filesWithTime[j].valid {
+			return true
+		}
+		return filesWithTime[i].modTime.After(filesWithTime[j].modTime)
 	})
 
-	// MCP 응답 크기가 과도해지지 않도록 최대 500개로 제한
-	if len(matches) > 500 {
-		matches = matches[:500]
+	// stat 실패 파일(삭제됨, 권한 없음 등)은 결과에서 제외한다.
+	// 500개 제한은 유효한 파일만 카운트하여 사용자가 요청한 만큼 결과를 받을 수 있게 한다.
+	matches = matches[:0]
+	for _, ft := range filesWithTime {
+		if !ft.valid {
+			continue
+		}
+		matches = append(matches, ft.path)
+		if len(matches) >= 500 {
+			break
+		}
 	}
 
 	var sb strings.Builder
@@ -79,6 +105,11 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GlobInput) (*mc
 	}, GlobOutput{Files: matches, Count: len(matches)}, nil
 }
 
+// findMatches는 baseDir에서 pattern에 매칭되는 파일 경로를 반환한다.
+// "**" 패턴은 재귀 디렉토리 탐색으로 처리하며, 숨김 디렉토리(.git 등)와
+// node_modules, vendor는 자동 스킵한다.
+// 예: "**/*.go" → baseDir 하위 모든 .go 파일
+//     "src/**/*.ts" → baseDir/src/ 하위 모든 .ts 파일
 func findMatches(baseDir, pattern string) ([]string, error) {
 	var matches []string
 

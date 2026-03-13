@@ -118,7 +118,8 @@ func searchFile(path string, re *regexp.Regexp, maxResults int) (searchFileResul
 	hintCharset := edit.FindEditorConfigCharset(path)
 	content, encInfo, err := common.ReadFileWithEncoding(path, hintCharset)
 	if err != nil {
-		return searchFileResult{}, err
+		// 대용량 파일 등 읽기 실패 시 스킵 (에러 대신 빈 결과)
+		return searchFileResult{}, nil
 	}
 
 	result := searchFileResult{

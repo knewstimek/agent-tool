@@ -1,6 +1,7 @@
 package read
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -15,7 +16,7 @@ import (
 
 type ReadInput struct {
 	FilePath string `json:"file_path" jsonschema:"description=Absolute path to the file to read"`
-	Offset   int    `json:"offset" jsonschema:"description=Line number to start reading from (1-based). Default: 1"`
+	Offset   int    `json:"offset" jsonschema:"description=Line number to start reading from (1-based). Negative = from end (e.g. -5 = last 5 lines). Default: 1"`
 	Limit    int    `json:"limit" jsonschema:"description=Maximum number of lines to read. Default: 0 (all)"`
 }
 
@@ -53,28 +54,45 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
 	}
 
-	lines := strings.Split(content, "\n")
-	totalLines := len(lines)
+	// 총 줄 수 카운트 (할당 없는 O(N))
+	totalLines := strings.Count(content, "\n") + 1
 
-	// offset/limit 적용
-	offset := input.Offset
-	if offset < 1 {
-		offset = 1
-	}
-	if offset > totalLines {
-		offset = totalLines
+	var startIdx, endIdx int
+
+	if input.Offset < 0 {
+		// 음수 인덱스: 끝에서부터 계산
+		startIdx = totalLines + input.Offset
+		if startIdx < 0 {
+			startIdx = 0
+		}
+	} else {
+		offset := input.Offset
+		if offset < 1 {
+			offset = 1
+		}
+		if offset > totalLines {
+			offset = totalLines
+		}
+		startIdx = offset - 1
 	}
 
-	startIdx := offset - 1 // 0-based
-	endIdx := totalLines
+	endIdx = totalLines
 	if input.Limit > 0 && startIdx+input.Limit < endIdx {
 		endIdx = startIdx + input.Limit
 	}
 
-	// 줄 번호 포맷 (cat -n 스타일)
+	// Scanner로 필요한 범위만 처리 (전체 Split 대비 메모리 절약)
 	var sb strings.Builder
-	for i := startIdx; i < endIdx; i++ {
-		fmt.Fprintf(&sb, "%6d\t%s\n", i+1, lines[i])
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	lineNum := 0
+	for scanner.Scan() {
+		if lineNum >= endIdx {
+			break
+		}
+		if lineNum >= startIdx {
+			fmt.Fprintf(&sb, "%6d\t%s\n", lineNum+1, scanner.Text())
+		}
+		lineNum++
 	}
 
 	result := sb.String()
@@ -100,7 +118,8 @@ func Register(server *mcp.Server) {
 		Name: "read",
 		Description: `Reads a file and returns its contents with line numbers.
 Encoding-aware: auto-detects file encoding (UTF-8, EUC-KR, Shift-JIS, etc.).
-Supports offset/limit for reading specific line ranges.`,
+Supports offset/limit for reading specific line ranges.
+Negative offset reads from end (e.g. offset=-5 reads last 5 lines).`,
 	}, Handle)
 }
 

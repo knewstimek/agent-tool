@@ -29,10 +29,10 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **Glob** | File pattern matching with `**` recursive support | ✅ |
 | **ListDir** | Tree-style directory listing | ✅ |
 | **Compress** | Create zip / tar.gz archives | ✅ |
-| **Decompress** | Extract zip / tar.gz archives | ✅ |
+| **Decompress** | Extract zip / tar.gz archives (Zip Slip/Bomb protection) | ✅ |
 | **Backup** | Timestamped zip backup with exclude patterns | ✅ |
 | **ConvertEncoding** | Convert file encoding (EUC-KR ↔ UTF-8, add/remove BOM, etc.) | ✅ |
-| **SetConfig** | Change runtime settings (e.g. fallback encoding) | ✅ |
+| **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 | SSH | Remote server connection and command execution | Planned |
 | SFTP | File upload/download over SSH | Planned |
@@ -94,6 +94,31 @@ command = "/path/to/agent-tool"
 agent-tool --fallback-encoding EUC-KR
 ```
 
+### Environment Variable
+
+Set `AGENT_TOOL_FALLBACK_ENCODING` to avoid repeating the CLI flag every session:
+
+```bash
+# Windows (no admin required)
+setx AGENT_TOOL_FALLBACK_ENCODING EUC-KR
+
+# Linux / macOS (add to ~/.bashrc or ~/.zshrc)
+export AGENT_TOOL_FALLBACK_ENCODING=EUC-KR
+```
+
+Priority: CLI flag > environment variable > default (UTF-8).
+
+### Runtime Configuration
+
+Agents can change settings at runtime via `set_config` without restarting:
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `fallback_encoding` | Fallback encoding when auto-detection fails | `UTF-8` |
+| `encoding_warnings` | Show encoding detection warnings | `true` |
+| `max_file_size_mb` | Max file size for read/edit/grep (MB) | `50` |
+| `allow_symlinks` | Allow symlink extraction from tar archives | `false` |
+
 ## Build
 
 ```bash
@@ -119,7 +144,13 @@ If Korean, Japanese, or other non-ASCII text appears as garbage characters:
 charset = euc-kr
 ```
 
-**Option 2**: Start agent-tool with fallback encoding:
+**Option 2**: Set environment variable (persistent):
+```bash
+setx AGENT_TOOL_FALLBACK_ENCODING EUC-KR   # Windows
+export AGENT_TOOL_FALLBACK_ENCODING=EUC-KR  # Linux
+```
+
+**Option 3**: CLI flag (per-session):
 ```bash
 agent-tool --fallback-encoding EUC-KR
 ```
@@ -133,6 +164,14 @@ agent-tool includes a `agent_tool_help` tool that agents can call for usage guid
 ```
 
 Available topics: `overview`, `encoding`, `indentation`, `tools`, `troubleshooting`
+
+## Security
+
+- **Zip Slip protection**: Archive entries with `../` path traversal are blocked (both zip and tar)
+- **Zip Bomb protection**: Single file limit (1GB), total extraction limit (5GB)
+- **Symlinks**: Skipped by default. Enable via `set_config allow_symlinks=true` (tar only; zip symlinks always skipped). Even when enabled, symlinks targeting outside the output directory are blocked
+- **File size limit**: Configurable max file size (default 50MB) prevents OOM on large files
+- **Encoding safety**: chardet uses 64KB sample (not full file) for memory efficiency
 
 ## Tech Stack
 
