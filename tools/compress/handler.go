@@ -24,8 +24,8 @@ const (
 )
 
 type CompressInput struct {
-	Sources []string `json:"sources" jsonschema:"description=List of absolute paths to files or directories to compress"`
-	Output  string   `json:"output" jsonschema:"description=Absolute path for the output archive file (.zip or .tar.gz)"`
+	Sources []string `json:"sources" jsonschema:"List of absolute paths to files or directories to compress"`
+	Output  string   `json:"output" jsonschema:"Absolute path for the output archive file (.zip or .tar.gz)"`
 }
 
 type CompressOutput struct {
@@ -34,8 +34,8 @@ type CompressOutput struct {
 }
 
 type DecompressInput struct {
-	Archive string `json:"archive" jsonschema:"description=Absolute path to the archive file (.zip or .tar.gz)"`
-	Output  string `json:"output" jsonschema:"description=Absolute path to the output directory"`
+	Archive string `json:"archive" jsonschema:"Absolute path to the archive file (.zip or .tar.gz)"`
+	Output  string `json:"output,omitempty" jsonschema:"Absolute path to the output directory. Defaults to archive's directory"`
 }
 
 type DecompressOutput struct {

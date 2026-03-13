@@ -15,11 +15,11 @@ import (
 
 // EditInput은 Edit 도구의 입력 파라미터이다.
 type EditInput struct {
-	FilePath    string `json:"file_path" jsonschema:"description=Absolute path to the file to edit"`
-	OldString   string `json:"old_string" jsonschema:"description=Exact text to find in the file"`
-	NewString   string `json:"new_string" jsonschema:"description=Replacement text (must differ from old_string)"`
-	ReplaceAll  bool   `json:"replace_all" jsonschema:"description=Replace all occurrences instead of just the first (default false)"`
-	IndentStyle string `json:"indent_style" jsonschema:"description=Override indentation style. Values: tabs or spaces-N (e.g. spaces-4). Empty = auto-detect (default)"`
+	FilePath    string `json:"file_path" jsonschema:"Absolute path to the file to edit"`
+	OldString   string `json:"old_string" jsonschema:"Exact text to find in the file"`
+	NewString   string `json:"new_string" jsonschema:"Replacement text (must differ from old_string)"`
+	ReplaceAll  bool   `json:"replace_all,omitempty" jsonschema:"Replace all occurrences instead of just the first (default false)"`
+	IndentStyle string `json:"indent_style,omitempty" jsonschema:"Override indentation style. Values: tabs or spaces-N (e.g. spaces-4). Empty = auto-detect (default)"`
 }
 
 // EditOutput은 Edit 도구의 출력이다.

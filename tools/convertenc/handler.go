@@ -14,8 +14,8 @@ import (
 )
 
 type ConvertInput struct {
-	FilePath   string `json:"file_path" jsonschema:"description=Absolute path to the file to convert"`
-	ToEncoding string `json:"to_encoding" jsonschema:"description=Target encoding. Examples: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1"`
+	FilePath   string `json:"file_path" jsonschema:"Absolute path to the file to convert"`
+	ToEncoding string `json:"to_encoding" jsonschema:"Target encoding. Examples: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1"`
 }
 
 type ConvertOutput struct {
@@ -73,12 +73,16 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConvertInput) (
 		HasBOM:  targetBOM,
 	}
 
-	if err := common.WriteFileWithEncoding(input.FilePath, content, dstInfo); err != nil {
-		return errorResult(fmt.Sprintf("failed to write file: %v", err))
-	}
-
 	srcName := formatEncName(srcInfo.Charset, srcInfo.HasBOM)
 	dstName := formatEncName(targetCharset, targetBOM)
+
+	if err := common.WriteFileWithEncoding(input.FilePath, content, dstInfo); err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "rune not supported") {
+			return errorResult(fmt.Sprintf("conversion failed: file contains characters that cannot be represented in %s (e.g. special Unicode symbols like em-dash, emoji). Remove or replace unsupported characters first.", dstName))
+		}
+		return errorResult(fmt.Sprintf("failed to write file: %v", err))
+	}
 	msg := fmt.Sprintf("OK: converted %s → %s (%s)", srcName, dstName, input.FilePath)
 
 	return &mcp.CallToolResult{

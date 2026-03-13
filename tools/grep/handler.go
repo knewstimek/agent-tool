@@ -21,11 +21,11 @@ import (
 var errMaxResults = errors.New("max results reached")
 
 type GrepInput struct {
-	Pattern    string `json:"pattern" jsonschema:"description=Regular expression pattern to search for"`
-	Path       string `json:"path" jsonschema:"description=File or directory to search in (absolute path)"`
-	Glob       string `json:"glob" jsonschema:"description=Glob pattern to filter files (e.g. *.go). Only used when path is a directory"`
-	IgnoreCase bool   `json:"ignore_case" jsonschema:"description=Case insensitive search (default false)"`
-	MaxResults int    `json:"max_results" jsonschema:"description=Maximum number of matching lines to return. Default: 100"`
+	Pattern    string `json:"pattern" jsonschema:"Regular expression pattern to search for"`
+	Path       string `json:"path,omitempty" jsonschema:"File or directory to search in (absolute path). Defaults to current directory"`
+	Glob       string `json:"glob,omitempty" jsonschema:"Glob pattern to filter files (e.g. *.go). Only used when path is a directory"`
+	IgnoreCase bool   `json:"ignore_case,omitempty" jsonschema:"Case insensitive search (default false)"`
+	MaxResults int    `json:"max_results,omitempty" jsonschema:"Maximum number of matching lines to return. Default: 100"`
 }
 
 type GrepOutput struct {

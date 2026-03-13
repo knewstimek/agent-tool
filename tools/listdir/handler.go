@@ -11,8 +11,8 @@ import (
 )
 
 type ListDirInput struct {
-	Path     string `json:"path" jsonschema:"description=Absolute path to the directory to list"`
-	MaxDepth int    `json:"max_depth" jsonschema:"description=Maximum depth for tree traversal. Default: 3"`
+	Path     string `json:"path" jsonschema:"Absolute path to the directory to list"`
+	MaxDepth int    `json:"max_depth,omitempty" jsonschema:"Maximum depth for tree traversal. Default: 3"`
 }
 
 type ListDirOutput struct {

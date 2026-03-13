@@ -96,6 +96,131 @@ func Run(target string) error {
 	return nil
 }
 
+// Uninstall은 지정된 에이전트(또는 모든 에이전트)에서 agent-tool을 제거한다.
+func Uninstall(target string) error {
+	agents, err := getAgents()
+	if err != nil {
+		return err
+	}
+
+	if target != "" {
+		agent, ok := agents[strings.ToLower(target)]
+		if !ok {
+			return fmt.Errorf("알 수 없는 에이전트: %s (지원: claude, cursor, windsurf, codex)", target)
+		}
+		return uninstallFromAgent(agent)
+	}
+
+	// 모든 에이전트에서 제거 시도
+	removed := 0
+	for _, agent := range agents {
+		if _, err := os.Stat(agent.configPath); os.IsNotExist(err) {
+			continue
+		}
+		if err := uninstallFromAgent(agent); err != nil {
+			fmt.Fprintf(os.Stderr, "[%s] 실패: %v\n", agent.name, err)
+		} else {
+			removed++
+		}
+	}
+
+	if removed == 0 {
+		fmt.Println("등록된 에이전트가 없습니다.")
+	}
+	return nil
+}
+
+func uninstallFromAgent(agent agentConfig) error {
+	switch agent.format {
+	case "json":
+		return uninstallJSON(agent)
+	case "toml":
+		return uninstallTOML(agent)
+	default:
+		return fmt.Errorf("지원하지 않는 설정 형식: %s", agent.format)
+	}
+}
+
+func uninstallJSON(agent agentConfig) error {
+	data, err := os.ReadFile(agent.configPath)
+	if err != nil {
+		return fmt.Errorf("설정 파일 읽기 실패: %w", err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("설정 파일 파싱 실패: %w", err)
+	}
+
+	servers, ok := config[agent.jsonKey].(map[string]any)
+	if !ok {
+		fmt.Printf("[%s] agent-tool이 등록되어 있지 않습니다.\n", agent.name)
+		return nil
+	}
+
+	if _, exists := servers["agent-tool"]; !exists {
+		fmt.Printf("[%s] agent-tool이 등록되어 있지 않습니다.\n", agent.name)
+		return nil
+	}
+
+	// agent-tool 키만 제거 (다른 MCP 서버는 유지)
+	delete(servers, "agent-tool")
+	config[agent.jsonKey] = servers
+
+	output, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("JSON 직렬화 실패: %w", err)
+	}
+
+	if err := os.WriteFile(agent.configPath, output, 0644); err != nil {
+		return fmt.Errorf("설정 파일 쓰기 실패: %w", err)
+	}
+
+	fmt.Printf("[%s] 제거 완료: %s\n", agent.name, agent.configPath)
+	return nil
+}
+
+func uninstallTOML(agent agentConfig) error {
+	data, err := os.ReadFile(agent.configPath)
+	if err != nil {
+		return fmt.Errorf("설정 파일 읽기 실패: %w", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "[mcp_servers.agent-tool]") {
+		fmt.Printf("[%s] agent-tool이 등록되어 있지 않습니다.\n", agent.name)
+		return nil
+	}
+
+	// 섹션 제거 (install과 동일한 로직)
+	lines := strings.Split(content, "\n")
+	var result []string
+	skip := false
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "[mcp_servers.agent-tool]" {
+			skip = true
+			continue
+		}
+		if skip {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") && !strings.Contains(trimmed, "=") {
+				skip = false
+			}
+		}
+		if !skip {
+			result = append(result, line)
+		}
+	}
+
+	content = strings.TrimRight(strings.Join(result, "\n"), "\n") + "\n"
+	if err := os.WriteFile(agent.configPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("설정 파일 쓰기 실패: %w", err)
+	}
+
+	fmt.Printf("[%s] 제거 완료: %s\n", agent.name, agent.configPath)
+	return nil
+}
+
 func installForAgent(agent agentConfig, exePath string) error {
 	switch agent.format {
 	case "json":

@@ -15,9 +15,9 @@ import (
 )
 
 type ReadInput struct {
-	FilePath string `json:"file_path" jsonschema:"description=Absolute path to the file to read"`
-	Offset   int    `json:"offset" jsonschema:"description=Line number to start reading from (1-based). Negative = from end (e.g. -5 = last 5 lines). Default: 1"`
-	Limit    int    `json:"limit" jsonschema:"description=Maximum number of lines to read. Default: 0 (all)"`
+	FilePath string `json:"file_path" jsonschema:"Absolute path to the file to read"`
+	Offset   int    `json:"offset,omitempty" jsonschema:"Line number to start reading from (1-based). Negative = from end (e.g. -5 = last 5 lines). Default: 1"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"Maximum number of lines to read. Default: 0 (all)"`
 }
 
 type ReadOutput struct {

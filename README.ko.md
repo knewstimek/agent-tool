@@ -66,6 +66,10 @@ agent-tool install claude
 agent-tool install codex
 agent-tool install cursor
 agent-tool install windsurf
+
+# 제거 (agent-tool 항목만 삭제, 다른 설정은 보존)
+agent-tool uninstall          # 모든 에이전트에서 제거
+agent-tool uninstall claude   # 특정 에이전트에서만 제거
 ```
 
 ### 수동 설정

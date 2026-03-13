@@ -66,6 +66,10 @@ agent-tool install claude
 agent-tool install codex
 agent-tool install cursor
 agent-tool install windsurf
+
+# Uninstall (removes agent-tool entry only, preserves other settings)
+agent-tool uninstall          # from all agents
+agent-tool uninstall claude   # from specific agent
 ```
 
 ### Manual setup

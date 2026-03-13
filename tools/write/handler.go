@@ -13,8 +13,8 @@ import (
 )
 
 type WriteInput struct {
-	FilePath string `json:"file_path" jsonschema:"description=Absolute path to the file to write"`
-	Content  string `json:"content" jsonschema:"description=Content to write to the file"`
+	FilePath string `json:"file_path" jsonschema:"Absolute path to the file to write"`
+	Content  string `json:"content" jsonschema:"Content to write to the file"`
 }
 
 type WriteOutput struct {

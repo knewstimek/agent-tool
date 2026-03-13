@@ -27,13 +27,19 @@ import (
 func main() {
 	args := os.Args[1:]
 
-	// install 서브커맨드
-	if len(args) > 0 && args[0] == "install" {
+	// install / uninstall 서브커맨드
+	if len(args) > 0 && (args[0] == "install" || args[0] == "uninstall") {
 		target := ""
 		if len(args) > 1 {
 			target = args[1]
 		}
-		if err := install.Run(target); err != nil {
+		var err error
+		if args[0] == "install" {
+			err = install.Run(target)
+		} else {
+			err = install.Uninstall(target)
+		}
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -67,7 +73,7 @@ func main() {
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "agent-tool",
-			Version: "v0.1.0",
+			Version: "v0.2.1",
 		},
 		nil,
 	)

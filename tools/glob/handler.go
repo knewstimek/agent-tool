@@ -13,8 +13,8 @@ import (
 )
 
 type GlobInput struct {
-	Pattern string `json:"pattern" jsonschema:"description=Glob pattern to match files (e.g. **/*.go or src/**/*.ts)"`
-	Path    string `json:"path" jsonschema:"description=Directory to search in (absolute path). Defaults to current directory if empty"`
+	Pattern string `json:"pattern" jsonschema:"Glob pattern to match files (e.g. **/*.go or src/**/*.ts)"`
+	Path    string `json:"path,omitempty" jsonschema:"Directory to search in (absolute path). Defaults to current directory if empty"`
 }
 
 type GlobOutput struct {

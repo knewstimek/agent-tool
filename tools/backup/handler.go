@@ -14,9 +14,9 @@ import (
 )
 
 type BackupInput struct {
-	Source    string   `json:"source" jsonschema:"description=Absolute path to the directory to backup"`
-	OutputDir string   `json:"output_dir" jsonschema:"description=Absolute path to the backup output directory. Default: ./backups/"`
-	Excludes []string `json:"excludes" jsonschema:"description=Glob patterns to exclude (e.g. node_modules, *.log, .git)"`
+	Source    string   `json:"source" jsonschema:"Absolute path to the directory to backup"`
+	OutputDir string   `json:"output_dir,omitempty" jsonschema:"Absolute path to the backup output directory. Default: ./backups/"`
+	Excludes []string `json:"excludes,omitempty" jsonschema:"Glob patterns to exclude (e.g. node_modules, *.log, .git)"`
 }
 
 type BackupOutput struct {

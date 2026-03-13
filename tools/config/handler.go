@@ -11,10 +11,10 @@ import (
 )
 
 type ConfigInput struct {
-	FallbackEncoding string `json:"fallback_encoding" jsonschema:"description=Set the fallback encoding for files when auto-detection fails. Examples: EUC-KR, Shift_JIS, ISO-8859-1. Empty = no change"`
-	EncodingWarnings *bool  `json:"encoding_warnings" jsonschema:"description=Enable/disable encoding detection warning messages in tool results. Default: true"`
-	MaxFileSizeMB    *int   `json:"max_file_size_mb" jsonschema:"description=Maximum file size in MB that read/edit/grep tools will accept. Min: 1, Default: 50"`
-	AllowSymlinks    *bool  `json:"allow_symlinks" jsonschema:"description=Allow creating symlinks when extracting archives. Default: false (skipped for security)"`
+	FallbackEncoding string `json:"fallback_encoding,omitempty" jsonschema:"Set the fallback encoding for files when auto-detection fails. Examples: EUC-KR, Shift_JIS, ISO-8859-1. Empty = no change"`
+	EncodingWarnings *bool  `json:"encoding_warnings,omitempty" jsonschema:"Enable/disable encoding detection warning messages in tool results. Default: true"`
+	MaxFileSizeMB    *int   `json:"max_file_size_mb,omitempty" jsonschema:"Maximum file size in MB that read/edit/grep tools will accept. Min: 1, Default: 50"`
+	AllowSymlinks    *bool  `json:"allow_symlinks,omitempty" jsonschema:"Allow creating symlinks when extracting archives. Default: false (skipped for security)"`
 }
 
 type ConfigOutput struct {

@@ -11,7 +11,7 @@ import (
 )
 
 type HelpInput struct {
-	Topic string `json:"topic" jsonschema:"description=Help topic. Available: overview, encoding, indentation, tools, troubleshooting. Empty = overview"`
+	Topic string `json:"topic,omitempty" jsonschema:"Help topic. Available: overview, encoding, indentation, tools, troubleshooting. Empty = overview"`
 }
 
 type HelpOutput struct {
