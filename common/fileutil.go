@@ -65,13 +65,13 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 		detector := chardet.NewTextDetector()
 		result, detectErr := detector.DetectBest(raw)
 		if detectErr == nil && result.Confidence >= 50 {
-			charset = result.Charset
+			charset = normalizeCharsetName(result.Charset)
 		}
 	}
 
 	// 3. 폴백
 	if charset == "" {
-		charset = FallbackEncoding
+		charset = normalizeCharsetName(FallbackEncoding)
 	}
 
 	info.Charset = charset

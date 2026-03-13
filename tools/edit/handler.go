@@ -41,8 +41,11 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 	}
 
 	// 파일 존재 확인
-	if _, err := os.Stat(input.FilePath); os.IsNotExist(err) {
-		return errorResult(fmt.Sprintf("file not found: %s", input.FilePath))
+	if _, err := os.Stat(input.FilePath); err != nil {
+		if os.IsNotExist(err) {
+			return errorResult(fmt.Sprintf("file not found: %s", input.FilePath))
+		}
+		return errorResult(fmt.Sprintf("cannot access file: %v", err))
 	}
 
 	// .editorconfig에서 charset 힌트 가져오기

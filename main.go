@@ -9,6 +9,9 @@ import (
 	"agent-tool/common"
 	"agent-tool/install"
 	edit "agent-tool/tools/edit"
+	"agent-tool/tools/glob"
+	"agent-tool/tools/grep"
+	"agent-tool/tools/read"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -46,6 +49,9 @@ func main() {
 	)
 
 	edit.Register(server)
+	read.Register(server)
+	grep.Register(server)
+	glob.Register(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)

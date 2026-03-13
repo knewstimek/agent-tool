@@ -49,6 +49,9 @@ func DetectIndentOfString(s string) IndentStyle {
 
 // SpacesToTabs는 각 줄의 선행 공백을 탭으로 변환한다.
 func SpacesToTabs(text string, indentSize int) string {
+	if indentSize <= 0 {
+		indentSize = 4
+	}
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		if len(line) == 0 || line[0] != ' ' {
@@ -71,6 +74,9 @@ func SpacesToTabs(text string, indentSize int) string {
 
 // TabsToSpaces는 각 줄의 선행 탭을 공백으로 변환한다.
 func TabsToSpaces(text string, indentSize int) string {
+	if indentSize <= 0 {
+		indentSize = 4
+	}
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		if len(line) == 0 || line[0] != '\t' {
