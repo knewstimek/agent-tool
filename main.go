@@ -8,10 +8,13 @@ import (
 
 	"agent-tool/common"
 	"agent-tool/install"
+	"agent-tool/tools/compress"
 	edit "agent-tool/tools/edit"
 	"agent-tool/tools/glob"
 	"agent-tool/tools/grep"
+	"agent-tool/tools/listdir"
 	"agent-tool/tools/read"
+	"agent-tool/tools/write"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -50,8 +53,12 @@ func main() {
 
 	edit.Register(server)
 	read.Register(server)
+	write.Register(server)
 	grep.Register(server)
 	glob.Register(server)
+	listdir.Register(server)
+	compress.RegisterCompress(server)
+	compress.RegisterDecompress(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)
