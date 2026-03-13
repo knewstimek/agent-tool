@@ -13,6 +13,7 @@ import (
 	edit "agent-tool/tools/edit"
 	"agent-tool/tools/glob"
 	"agent-tool/tools/grep"
+	"agent-tool/tools/help"
 	"agent-tool/tools/listdir"
 	"agent-tool/tools/read"
 	"agent-tool/tools/write"
@@ -61,6 +62,7 @@ func main() {
 	compress.RegisterCompress(server)
 	compress.RegisterDecompress(server)
 	backup.Register(server)
+	help.Register(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)

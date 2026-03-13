@@ -85,6 +85,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 	}
 
 	msg := fmt.Sprintf("OK: %s (%s, encoding=%s)", result.Message, input.FilePath, encInfo.Charset)
+
+	// 인코딩 감지 신뢰도가 낮으면 경고 추가
+	if warning := common.EncodingWarning(encInfo); warning != "" {
+		msg += warning
+	}
+
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 	}, EditOutput{Result: msg}, nil

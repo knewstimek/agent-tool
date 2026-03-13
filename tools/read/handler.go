@@ -78,6 +78,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 	}
 
 	result := sb.String()
+
+	// 인코딩 감지 신뢰도가 낮으면 경고 추가
+	if warning := common.EncodingWarning(encInfo); warning != "" {
+		result += warning
+	}
+
 	out := ReadOutput{
 		Content:    result,
 		Encoding:   encInfo.Charset,

@@ -31,6 +31,7 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **Compress** | Create zip / tar.gz archives | ✅ |
 | **Decompress** | Extract zip / tar.gz archives | ✅ |
 | **Backup** | Timestamped zip backup with exclude patterns | ✅ |
+| **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 | SSH | Remote server connection and command execution | Planned |
 | SFTP | File upload/download over SSH | Planned |
 
@@ -103,6 +104,33 @@ GOOS=linux GOARCH=amd64 go build -o agent-tool .
 GOOS=darwin GOARCH=arm64 go build -o agent-tool .
 GOOS=windows GOARCH=amd64 go build -o agent-tool.exe .
 ```
+
+## Troubleshooting
+
+### Garbled text (encoding issues)
+
+If Korean, Japanese, or other non-ASCII text appears as garbage characters:
+
+**Option 1**: Add `charset` to your `.editorconfig`:
+```ini
+[*]
+charset = euc-kr
+```
+
+**Option 2**: Start agent-tool with fallback encoding:
+```bash
+agent-tool --fallback-encoding EUC-KR
+```
+
+### Built-in help for agents
+
+agent-tool includes a `agent_tool_help` tool that agents can call for usage guidance. When an agent encounters encoding warnings or garbled text, it can call:
+
+```json
+{ "tool": "agent_tool_help", "arguments": { "topic": "encoding" } }
+```
+
+Available topics: `overview`, `encoding`, `indentation`, `tools`, `troubleshooting`
 
 ## Tech Stack
 

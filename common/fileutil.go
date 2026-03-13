@@ -16,8 +16,10 @@ import (
 
 // EncodingInfo는 파일의 인코딩 정보를 담는다.
 type EncodingInfo struct {
-	Charset string // IANA 이름: "UTF-8", "EUC-KR", "Shift_JIS" 등
-	HasBOM  bool   // UTF-8 BOM 존재 여부
+	Charset    string // IANA 이름: "UTF-8", "EUC-KR", "Shift_JIS" 등
+	HasBOM     bool   // UTF-8 BOM 존재 여부
+	Confidence int    // chardet 감지 신뢰도 (0-100). 힌트/BOM/폴백 사용 시 100.
+	UsedSource string // 인코딩 결정 출처: "bom", "hint", "chardet", "fallback"
 }
 
 // FallbackEncoding은 chardet 감지 실패 시 사용할 폴백 인코딩이다.
@@ -34,7 +36,7 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 		return "", EncodingInfo{}, fmt.Errorf("파일 읽기 실패: %w", err)
 	}
 
-	info := EncodingInfo{Charset: "UTF-8"}
+	info := EncodingInfo{Charset: "UTF-8", Confidence: 100, UsedSource: "bom"}
 
 	// UTF-8 BOM 확인 (BOM은 항상 최우선)
 	if bytes.HasPrefix(raw, utf8BOM) {
@@ -45,6 +47,7 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 
 	// 빈 파일
 	if len(raw) == 0 {
+		info.UsedSource = "fallback"
 		return "", info, nil
 	}
 
@@ -58,6 +61,8 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 	// 1. 힌트 charset
 	if hintCharset != "" {
 		charset = normalizeCharsetName(hintCharset)
+		info.Confidence = 100
+		info.UsedSource = "hint"
 	}
 
 	// 2. chardet 감지
@@ -66,12 +71,16 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 		result, detectErr := detector.DetectBest(raw)
 		if detectErr == nil && result.Confidence >= 50 {
 			charset = normalizeCharsetName(result.Charset)
+			info.Confidence = result.Confidence
+			info.UsedSource = "chardet"
 		}
 	}
 
 	// 3. 폴백
 	if charset == "" {
 		charset = normalizeCharsetName(FallbackEncoding)
+		info.Confidence = 0
+		info.UsedSource = "fallback"
 	}
 
 	info.Charset = charset
@@ -156,6 +165,22 @@ func normalizeCharsetName(name string) string {
 	default:
 		return strings.ToUpper(name)
 	}
+}
+
+// EncodingWarning은 인코딩 감지 신뢰도가 낮을 때 경고 메시지를 반환한다.
+// 경고가 없으면 빈 문자열을 반환한다.
+func EncodingWarning(info EncodingInfo) string {
+	if info.UsedSource == "fallback" && info.Confidence == 0 && info.Charset == "UTF-8" {
+		return "\n⚠ Encoding detection failed (low confidence). " +
+			"If text looks garbled, set --fallback-encoding (e.g. EUC-KR) " +
+			"or add 'charset = euc-kr' to .editorconfig."
+	}
+	if info.UsedSource == "chardet" && info.Confidence < 70 {
+		return fmt.Sprintf("\n⚠ Encoding detected as %s (confidence: %d%%). "+
+			"If text looks wrong, add 'charset' to .editorconfig for reliable detection.",
+			info.Charset, info.Confidence)
+	}
+	return ""
 }
 
 // decodeBytes는 enc 인코딩의 바이트를 UTF-8 문자열로 디코딩한다.
