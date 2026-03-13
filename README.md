@@ -31,6 +31,8 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **Compress** | Create zip / tar.gz archives | ✅ |
 | **Decompress** | Extract zip / tar.gz archives | ✅ |
 | **Backup** | Timestamped zip backup with exclude patterns | ✅ |
+| **ConvertEncoding** | Convert file encoding (EUC-KR ↔ UTF-8, add/remove BOM, etc.) | ✅ |
+| **SetConfig** | Change runtime settings (e.g. fallback encoding) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 | SSH | Remote server connection and command execution | Planned |
 | SFTP | File upload/download over SSH | Planned |

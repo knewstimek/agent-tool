@@ -67,11 +67,18 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GrepInput) (*mc
 	}
 
 	var matches []string
+	hasLowConfidence := false
 
 	if fi.IsDir() {
-		matches, err = searchDir(input.Path, input.Glob, re, maxResults)
+		var dirResult searchDirResult
+		dirResult, err = searchDir(input.Path, input.Glob, re, maxResults)
+		matches = dirResult.matches
+		hasLowConfidence = dirResult.lowConfidenceCount > 0
 	} else {
-		matches, err = searchFile(input.Path, re, maxResults)
+		var fileResult searchFileResult
+		fileResult, err = searchFile(input.Path, re, maxResults)
+		matches = fileResult.matches
+		hasLowConfidence = fileResult.lowConfidence
 	}
 
 	if err != nil {
@@ -89,36 +96,58 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GrepInput) (*mc
 		text = "No matches found"
 	}
 
+	// 인코딩 감지 신뢰도 낮은 파일이 있으면 경고 추가
+	if hasLowConfidence {
+		text += "\n⚠ Some files had low encoding detection confidence. " +
+			"Results may be incomplete. Consider setting fallback_encoding via set_config tool " +
+			"or adding 'charset' to .editorconfig."
+	}
+
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
 	}, GrepOutput{Matches: matches, Count: len(matches)}, nil
 }
 
-func searchFile(path string, re *regexp.Regexp, maxResults int) ([]string, error) {
+// searchFileResult는 searchFile의 반환값이다.
+type searchFileResult struct {
+	matches    []string
+	lowConfidence bool // 인코딩 감지 신뢰도가 낮은 파일
+}
+
+func searchFile(path string, re *regexp.Regexp, maxResults int) (searchFileResult, error) {
 	hintCharset := edit.FindEditorConfigCharset(path)
-	content, _, err := common.ReadFileWithEncoding(path, hintCharset)
+	content, encInfo, err := common.ReadFileWithEncoding(path, hintCharset)
 	if err != nil {
-		return nil, err
+		return searchFileResult{}, err
 	}
 
-	var matches []string
+	result := searchFileResult{
+		lowConfidence: common.EncodingWarning(encInfo) != "",
+	}
+
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	lineNum := 0
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Text()
 		if re.MatchString(line) {
-			matches = append(matches, fmt.Sprintf("%s:%d:%s", path, lineNum, line))
-			if len(matches) >= maxResults {
+			result.matches = append(result.matches, fmt.Sprintf("%s:%d:%s", path, lineNum, line))
+			if len(result.matches) >= maxResults {
 				break
 			}
 		}
 	}
-	return matches, nil
+	return result, nil
 }
 
-func searchDir(dir, globPattern string, re *regexp.Regexp, maxResults int) ([]string, error) {
-	var matches []string
+// searchDirResult는 searchDir의 반환값이다.
+type searchDirResult struct {
+	matches          []string
+	lowConfidenceCount int // 인코딩 감지 신뢰도가 낮았던 파일 수
+}
+
+func searchDir(dir, globPattern string, re *regexp.Regexp, maxResults int) (searchDirResult, error) {
+	result := searchDirResult{}
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -146,22 +175,25 @@ func searchDir(dir, globPattern string, re *regexp.Regexp, maxResults int) ([]st
 		}
 
 		// 전체 maxResults에서 이미 수집한 수를 빼서 파일별 검색 한도를 제한
-		fileMatches, err := searchFile(path, re, maxResults-len(matches))
+		fileResult, err := searchFile(path, re, maxResults-len(result.matches))
 		if err != nil {
 			return nil // 읽기 실패한 파일은 스킵
 		}
-		matches = append(matches, fileMatches...)
+		result.matches = append(result.matches, fileResult.matches...)
+		if fileResult.lowConfidence {
+			result.lowConfidenceCount++
+		}
 
-		if len(matches) >= maxResults {
+		if len(result.matches) >= maxResults {
 			return errMaxResults
 		}
 		return nil
 	})
 
 	if err != nil && !errors.Is(err, errMaxResults) {
-		return matches, err
+		return result, err
 	}
-	return matches, nil
+	return result, nil
 }
 
 func isBinaryExt(name string) bool {

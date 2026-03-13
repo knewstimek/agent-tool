@@ -10,6 +10,8 @@ import (
 	"agent-tool/install"
 	"agent-tool/tools/backup"
 	"agent-tool/tools/compress"
+	"agent-tool/tools/config"
+	"agent-tool/tools/convertenc"
 	edit "agent-tool/tools/edit"
 	"agent-tool/tools/glob"
 	"agent-tool/tools/grep"
@@ -62,6 +64,8 @@ func main() {
 	compress.RegisterCompress(server)
 	compress.RegisterDecompress(server)
 	backup.Register(server)
+	config.Register(server)
+	convertenc.Register(server)
 	help.Register(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

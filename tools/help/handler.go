@@ -73,6 +73,8 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - compress: Create zip / tar.gz archives
 - decompress: Extract zip / tar.gz archives
 - backup: Timestamped zip backup with exclude patterns
+- convert_encoding: Convert file encoding (EUC-KR ↔ UTF-8, BOM, etc.)
+- set_config: Change runtime settings (fallback encoding)
 - agent_tool_help: This help tool
 
 ## Quick Tips
@@ -187,7 +189,18 @@ Parameters: archive, output_dir
 
 ## backup
 Create timestamped zip backup with exclude patterns.
-Parameters: source, output_dir, excludes`
+Parameters: source, output_dir, excludes
+
+## convert_encoding
+Convert a file's encoding to a different character set.
+Supports: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1, UTF-16, ASCII, Windows-1252, Big5, GB18030.
+Parameters: file_path, to_encoding
+
+## set_config
+Change agent-tool runtime configuration.
+Currently supports: fallback_encoding (used when auto-detection fails).
+Call with no arguments to view current config.
+Parameters: fallback_encoding`
 }
 
 func helpTroubleshooting() string {

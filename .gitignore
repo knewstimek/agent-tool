@@ -2,3 +2,4 @@ CLAUDE.md
 OVERVIEW.md
 .env
 *.exe
+temp/
