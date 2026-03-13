@@ -4,7 +4,7 @@ import "testing"
 
 func TestReplace_DirectMatch(t *testing.T) {
 	content := "func main() {\n\tfmt.Println(\"hello\")\n}"
-	result := Replace(content, "\"hello\"", "\"world\"", false, IndentStyle{UseTabs: true, IndentSize: 4})
+	result := Replace(content, "\"hello\"", "\"world\"", false, IndentStyle{UseTabs: true, IndentSize: 4}, false)
 
 	if !result.Applied {
 		t.Fatalf("expected match, got: %s", result.Message)
@@ -25,7 +25,7 @@ func TestReplace_SpacesToTabsConversion(t *testing.T) {
 	oldStr := "    fmt.Println(\"hello\")"
 	newStr := "    fmt.Println(\"world\")"
 
-	result := Replace(content, oldStr, newStr, false, IndentStyle{UseTabs: true, IndentSize: 4})
+	result := Replace(content, oldStr, newStr, false, IndentStyle{UseTabs: true, IndentSize: 4}, false)
 
 	if !result.Applied {
 		t.Fatalf("expected match after indent conversion, got: %s", result.Message)
@@ -38,7 +38,7 @@ func TestReplace_SpacesToTabsConversion(t *testing.T) {
 
 func TestReplace_NotFound(t *testing.T) {
 	content := "func main() {}"
-	result := Replace(content, "nonexistent", "replacement", false, IndentStyle{UseTabs: false, IndentSize: 4})
+	result := Replace(content, "nonexistent", "replacement", false, IndentStyle{UseTabs: false, IndentSize: 4}, false)
 
 	if result.Applied {
 		t.Error("expected no match")
@@ -50,7 +50,7 @@ func TestReplace_NotFound(t *testing.T) {
 
 func TestReplace_MultipleMatches_NoReplaceAll(t *testing.T) {
 	content := "a = 1\nb = 1\nc = 1"
-	result := Replace(content, "1", "2", false, IndentStyle{UseTabs: false, IndentSize: 4})
+	result := Replace(content, "1", "2", false, IndentStyle{UseTabs: false, IndentSize: 4}, false)
 
 	if result.Applied {
 		t.Error("should fail with multiple matches when replace_all=false")
@@ -59,7 +59,7 @@ func TestReplace_MultipleMatches_NoReplaceAll(t *testing.T) {
 
 func TestReplace_MultipleMatches_ReplaceAll(t *testing.T) {
 	content := "a = 1\nb = 1\nc = 1"
-	result := Replace(content, "1", "2", true, IndentStyle{UseTabs: false, IndentSize: 4})
+	result := Replace(content, "1", "2", true, IndentStyle{UseTabs: false, IndentSize: 4}, false)
 
 	if !result.Applied {
 		t.Fatalf("expected match with replace_all=true, got: %s", result.Message)
@@ -73,7 +73,7 @@ func TestReplace_MultipleMatches_ReplaceAll(t *testing.T) {
 func TestReplace_LineEndingPreservation(t *testing.T) {
 	// CRLF 파일
 	content := "line1\r\nline2\r\nline3"
-	result := Replace(content, "line2", "replaced", false, IndentStyle{UseTabs: false, IndentSize: 4})
+	result := Replace(content, "line2", "replaced", false, IndentStyle{UseTabs: false, IndentSize: 4}, false)
 
 	if !result.Applied {
 		t.Fatalf("expected match, got: %s", result.Message)

@@ -15,7 +15,8 @@ type ReplaceResult struct {
 
 // Replace는 content에서 oldStr을 newStr로 치환한다.
 // 파일의 들여쓰기 스타일에 맞게 자동 변환을 시도한다.
-func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentStyle) ReplaceResult {
+// forceStyle이 true이면 1차 직접 매칭에서도 newStr의 들여쓰기를 fileStyle로 강제 변환한다.
+func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentStyle, forceStyle bool) ReplaceResult {
 	// 줄바꿈 정규화: old_string의 \n을 파일의 줄바꿈에 맞게 변환
 	lineEnding := "\n"
 	if strings.Contains(content, "\r\n") {
@@ -29,7 +30,15 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 	// 1차: 원본 문자열로 직접 매칭
 	count := strings.Count(content, normalizedOld)
 	if count > 0 {
-		return applyReplace(content, normalizedOld, normalizedNew, count, replaceAll)
+		finalNew := normalizedNew
+		// forceStyle: 명시적 indent_style 지정 시 newStr도 fileStyle로 강제 변환
+		if forceStyle {
+			newStyle := DetectIndentOfString(newStr)
+			if newStyle.UseTabs != fileStyle.UseTabs || newStyle.IndentSize != fileStyle.IndentSize {
+				finalNew = ConvertIndent(normalizedNew, newStyle, fileStyle)
+			}
+		}
+		return applyReplace(content, normalizedOld, finalNew, count, replaceAll)
 	}
 
 	// 2차: 들여쓰기 변환 후 매칭 (공백 → 탭 또는 탭 → 공백)
@@ -61,6 +70,8 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 	}
 }
 
+// applyReplace는 실제 치환을 수행한다.
+// count > 1이고 replaceAll이 false이면 치환하지 않고 오류를 반환한다.
 func applyReplace(content, oldStr, newStr string, count int, replaceAll bool) ReplaceResult {
 	if !replaceAll && count > 1 {
 		return ReplaceResult{

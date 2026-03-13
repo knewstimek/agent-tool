@@ -16,6 +16,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// errMaxResults는 filepath.Walk를 조기 종료하기 위한 센티넬 에러이다.
+// 호출자에서 errors.Is로 실제 오류와 구분한다.
 var errMaxResults = errors.New("max results reached")
 
 type GrepInput struct {
@@ -143,6 +145,7 @@ func searchDir(dir, globPattern string, re *regexp.Regexp, maxResults int) ([]st
 			return nil
 		}
 
+		// 전체 maxResults에서 이미 수집한 수를 빼서 파일별 검색 한도를 제한
 		fileMatches, err := searchFile(path, re, maxResults-len(matches))
 		if err != nil {
 			return nil // 읽기 실패한 파일은 스킵

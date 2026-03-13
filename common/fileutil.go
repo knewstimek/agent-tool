@@ -158,6 +158,7 @@ func normalizeCharsetName(name string) string {
 	}
 }
 
+// decodeBytes는 enc 인코딩의 바이트를 UTF-8 문자열로 디코딩한다.
 func decodeBytes(raw []byte, enc encoding.Encoding) (string, error) {
 	reader := transform.NewReader(bytes.NewReader(raw), enc.NewDecoder())
 	decoded, err := io.ReadAll(reader)
@@ -167,7 +168,9 @@ func decodeBytes(raw []byte, enc encoding.Encoding) (string, error) {
 	return string(decoded), nil
 }
 
+// encodeString은 UTF-8 문자열을 enc 인코딩 바이트로 변환한다.
 func encodeString(s string, enc encoding.Encoding) ([]byte, error) {
+	// UTF-8 계열은 변환 불필요. BOM 접두사는 WriteFileWithEncoding에서 별도 처리한다.
 	if enc == unicode.UTF8 || enc == unicode.UTF8BOM {
 		return []byte(s), nil
 	}

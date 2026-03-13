@@ -72,8 +72,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 		fileStyle = DetectIndent(input.FilePath, content)
 	}
 
-	// 치환 실행
-	result := Replace(content, input.OldString, input.NewString, input.ReplaceAll, fileStyle)
+	// 치환 실행 (indent_style 명시 지정 시 new_string도 fileStyle로 강제 변환)
+	forceStyle := input.IndentStyle != ""
+	result := Replace(content, input.OldString, input.NewString, input.ReplaceAll, fileStyle, forceStyle)
 	if !result.Applied {
 		return errorResult(result.Message)
 	}

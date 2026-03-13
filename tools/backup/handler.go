@@ -74,7 +74,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BackupInput) (*
 	excludes := append([]string{}, defaultExcludes...)
 	excludes = append(excludes, input.Excludes...)
 
-	// 백업 디렉토리 자체도 제외
+	// 백업 출력 디렉토리가 source 하위일 수 있으므로 (기본값: source/backups/)
+	// 절대 경로로 정규화해서 자기 자신을 압축하는 무한 루프를 방지한다.
 	absOutputDir, _ := filepath.Abs(outputDir)
 
 	count, err := createBackupZip(archivePath, input.Source, excludes, absOutputDir)

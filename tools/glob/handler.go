@@ -58,7 +58,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GlobInput) (*mc
 		return fi.ModTime().After(fj.ModTime())
 	})
 
-	// 최대 500개로 제한
+	// MCP 응답 크기가 과도해지지 않도록 최대 500개로 제한
 	if len(matches) > 500 {
 		matches = matches[:500]
 	}
@@ -83,6 +83,8 @@ func findMatches(baseDir, pattern string) ([]string, error) {
 	var matches []string
 
 	// ** 패턴 지원: 재귀 탐색
+	// 단순 구현: **는 한 번만 처리하며, ** 뒤 suffix는 파일명 glob으로 매칭한다.
+	// 예: "src/**/*.ts" → prefix="src/", suffix="*.ts"
 	if strings.Contains(pattern, "**") {
 		parts := strings.SplitN(pattern, "**", 2)
 		prefix := parts[0]

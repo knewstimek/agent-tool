@@ -31,7 +31,8 @@ var (
 func DetectIndent(filePath string, content string) IndentStyle {
 	// 1. .editorconfig 확인
 	if ec := findEditorConfig(filePath); ec != nil {
-		// 레거시 보호: .editorconfig가 탭이어도 실제 파일이 공백이면 변환 안 함
+		// 레거시 보호: .editorconfig는 탭이지만, 실제 파일에 탭 줄이 없고
+		// 공백 들여쓰기가 존재하면 → 파일의 기존 공백 스타일을 유지한다.
 		if ec.UseTabs && !detectTabsFromContent(content) && hasSpaceIndentation(content) {
 			return IndentStyle{UseTabs: false, IndentSize: ec.IndentSize}
 		}
@@ -61,6 +62,7 @@ func SpacesToTabs(text string, indentSize int) string {
 		stripped := strings.TrimLeft(line, " ")
 		nSpaces := len(line) - len(stripped)
 
+		// 공백 1개는 들여쓰기가 아닌 정렬(alignment)일 가능성이 높으므로 변환 안 함
 		if nSpaces < 2 {
 			continue
 		}
@@ -91,14 +93,46 @@ func TabsToSpaces(text string, indentSize int) string {
 }
 
 // ConvertIndent는 src 스타일의 텍스트를 dst 스타일로 변환한다.
+// 탭↔공백 변환뿐 아니라 공백 크기 변환(2→4, 4→2 등)도 처리한다.
 func ConvertIndent(text string, src, dst IndentStyle) string {
-	if src.UseTabs == dst.UseTabs {
+	if src.UseTabs == dst.UseTabs && src.IndentSize == dst.IndentSize {
 		return text
 	}
 	if src.UseTabs && !dst.UseTabs {
+		// 탭 → 공백
 		return TabsToSpaces(text, dst.IndentSize)
 	}
-	return SpacesToTabs(text, src.IndentSize)
+	if !src.UseTabs && dst.UseTabs {
+		// 공백 → 탭
+		return SpacesToTabs(text, src.IndentSize)
+	}
+	// 공백 → 공백 (크기 변환: 예 2칸→4칸)
+	if src.IndentSize != dst.IndentSize && src.IndentSize > 0 {
+		return RescaleSpaces(text, src.IndentSize, dst.IndentSize)
+	}
+	return text
+}
+
+// RescaleSpaces는 선행 공백의 크기를 변환한다.
+// 예: srcSize=2, dstSize=4이면 공백 2개를 공백 4개로 변환 (들여쓰기 레벨 유지).
+func RescaleSpaces(text string, srcSize, dstSize int) string {
+	if srcSize <= 0 || dstSize <= 0 || srcSize == dstSize {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if len(line) == 0 || line[0] != ' ' {
+			continue
+		}
+		stripped := strings.TrimLeft(line, " ")
+		nSpaces := len(line) - len(stripped)
+		// 들여쓰기 레벨 계산 후 새 크기로 변환
+		level := nSpaces / srcSize
+		remainder := nSpaces % srcSize
+		newSpaces := level*dstSize + remainder
+		lines[i] = strings.Repeat(" ", newSpaces) + stripped
+	}
+	return strings.Join(lines, "\n")
 }
 
 // HasLeadingSpaces는 텍스트에 공백 들여쓰기가 있는지 확인한다.
@@ -111,6 +145,8 @@ func HasLeadingSpaces(text string) bool {
 	return false
 }
 
+// detectIndentFromContent는 최대 100줄을 스캔해 들여쓰기 스타일을 추정한다.
+// 탭 줄이 공백 줄 이상이면 탭, 아니면 연속 줄 간 공백 차이로 indentSize를 추정한다.
 func detectIndentFromContent(content string) IndentStyle {
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	tabLines := 0
@@ -135,6 +171,7 @@ func detectIndentFromContent(content string) IndentStyle {
 		} else if line[0] == ' ' && reLeadingSpaces.MatchString(line) {
 			spaceLines++
 			nSpaces := len(line) - len(strings.TrimLeft(line, " "))
+			// 유효 들여쓰기 단위: 1~8. 9 이상은 정렬(alignment)일 가능성이 높아 제외한다.
 			if diff := nSpaces - prevSpaces; diff > 0 && diff <= 8 {
 				spaceDiffs[diff]++
 			}
@@ -161,6 +198,8 @@ func detectIndentFromContent(content string) IndentStyle {
 	return IndentStyle{UseTabs: false, IndentSize: indentSize}
 }
 
+// detectTabsFromContent는 탭 들여쓰기 줄이 공백 줄보다 많은지 반환한다.
+// DetectIndent에서 .editorconfig 결과와 실제 파일의 일치 여부 확인에 사용된다.
 func detectTabsFromContent(content string) bool {
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	tabLines := 0
@@ -187,6 +226,8 @@ func detectTabsFromContent(content string) bool {
 	return tabLines > 0 && tabLines > spaceLines
 }
 
+// hasSpaceIndentation는 공백 들여쓰기가 1줄이라도 존재하는지 반환한다.
+// detectTabsFromContent와 달리 비율이 아닌 존재 여부만 판단한다.
 func hasSpaceIndentation(content string) bool {
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	lineCount := 0
@@ -232,7 +273,7 @@ func findEditorConfigFull(filePath string) *EditorConfigResult {
 			if result := parseEditorConfig(ecPath, filename); result != nil {
 				return result
 			}
-			// root = true이면 상위 탐색 중단
+			// 설정이 없는(result==nil) .editorconfig도 root=true이면 상위 탐색 중단
 			if isRootEditorConfig(ecPath) {
 				break
 			}
@@ -335,7 +376,7 @@ func expandBraces(pattern string) []string {
 	if end < 0 {
 		return []string{pattern}
 	}
-	end += start
+	end += start // pattern[start:] 기준 → 전체 기준 절대 인덱스로 변환
 
 	prefix := pattern[:start]
 	suffix := pattern[end+1:]
@@ -349,6 +390,9 @@ func expandBraces(pattern string) []string {
 	return result
 }
 
+// parseInt는 문자열 앞부분의 연속된 숫자만 파싱한다.
+// strconv.Atoi와 달리 비숫자 문자에서 에러 없이 멈추므로,
+// "4  # comment" 같은 .editorconfig 인라인 주석을 자연스럽게 무시한다.
 func parseInt(s string) int {
 	n := 0
 	for _, c := range s {
