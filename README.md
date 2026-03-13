@@ -1,10 +1,18 @@
-# AgentTool
+# agent-tool
 
 [한국어](README.ko.md)
 
 MCP (Model Context Protocol) tool server for AI coding agents.
 
-Improves built-in tool limitations (encoding, tab handling) and adds new capabilities (SSH, compression, backup).
+## Why?
+
+Built-in Edit tools in AI coding agents (Claude Code, Cursor, Codex, etc.) have known limitations:
+
+- **Tab indentation breaks**: LLMs output spaces, but your project uses tabs. The built-in Edit tool writes spaces as-is, corrupting your indentation style.
+- **Encoding corruption**: Editing EUC-KR, Shift-JIS, or UTF-8 BOM files silently converts them to plain UTF-8, breaking legacy projects.
+- **No SSH/SFTP**: Can't manage remote servers directly from the agent.
+
+**agent-tool** solves these by providing drop-in replacement tools that respect your project's conventions.
 
 ## Supported Agents
 
@@ -16,12 +24,13 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 |------|-------------|--------|
 | **Edit** | String replacement with smart indentation and encoding preservation | ✅ |
 | **Read** | Encoding-aware file reading with line range support | ✅ |
+| **Write** | Encoding-aware file creation/overwrite | ✅ |
 | **Grep** | Encoding-aware regex content search | ✅ |
 | **Glob** | File pattern matching with `**` recursive support | ✅ |
-| Write | Encoding-aware file creation/overwrite | Planned |
-| ListDir | Tree-style directory listing | Planned |
-| Compress / Decompress | Zip compression | Planned |
-| Backup | Timestamped zip backup | Planned |
+| **ListDir** | Tree-style directory listing | ✅ |
+| **Compress** | Create zip / tar.gz archives | ✅ |
+| **Decompress** | Extract zip / tar.gz archives | ✅ |
+| **Backup** | Timestamped zip backup with exclude patterns | ✅ |
 | SSH | Remote server connection and command execution | Planned |
 | SFTP | File upload/download over SSH | Planned |
 
