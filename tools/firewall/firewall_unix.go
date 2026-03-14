@@ -10,21 +10,21 @@ import (
 	"time"
 )
 
-// getRules는 Linux에서 iptables 또는 nft로 방화벽 규칙을 조회한다.
+// getRules queries firewall rules on Linux using iptables or nft.
 func getRules(filter string) (string, string, error) {
-	// 1. iptables 시도
+	// 1. Try iptables
 	result, err := tryIptables(filter)
 	if err == nil && strings.TrimSpace(result) != "" {
 		return result, "iptables", nil
 	}
 
-	// 2. nftables 시도
+	// 2. Try nftables
 	result, err = tryNft(filter)
 	if err == nil && strings.TrimSpace(result) != "" {
 		return result, "nftables", nil
 	}
 
-	// 3. firewalld 시도
+	// 3. Try firewalld
 	result, err = tryFirewalld(filter)
 	if err == nil && strings.TrimSpace(result) != "" {
 		return result, "firewalld", nil
@@ -84,8 +84,8 @@ func tryFirewalld(filter string) (string, error) {
 	return result, nil
 }
 
-// filterLines는 출력에서 filter 문자열이 포함된 줄만 반환한다.
-// 체인 헤더도 포함시켜 문맥을 유지한다.
+// filterLines returns only lines containing the filter string from the output.
+// Chain headers are also included to preserve context.
 func filterLines(output, filter string) string {
 	lines := strings.Split(output, "\n")
 	filterLower := strings.ToLower(filter)
@@ -113,7 +113,7 @@ func filterLines(output, filter string) string {
 	return strings.Join(result, "\n")
 }
 
-// sanitizeFilterForOutput은 필터 문자열에서 개행 등 제어문자를 제거한다.
+// sanitizeFilterForOutput removes newlines and other control characters from the filter string.
 func sanitizeFilterForOutput(filter string) string {
 	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' {

@@ -51,7 +51,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ChecksumInput) 
 		return errorResult(fmt.Sprintf("unsupported algorithm: %s (supported: md5, sha1, sha256)", algo))
 	}
 
-	// symlink 검사
+	// Symlink check
 	if !common.GetAllowSymlinks() {
 		if lfi, err := os.Lstat(input.FilePath); err == nil && lfi.Mode()&os.ModeSymlink != 0 {
 			return errorResult("symlinks are not allowed (see set_config allow_symlinks)")

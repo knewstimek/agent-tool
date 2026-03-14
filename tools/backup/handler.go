@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/zip"
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -15,10 +16,11 @@ import (
 )
 
 type BackupInput struct {
-	Source    string   `json:"source" jsonschema:"Absolute path to the directory to backup"`
-	OutputDir string   `json:"output_dir,omitempty" jsonschema:"Absolute path to the backup output directory. Default: ./backups/"`
-	Excludes []string `json:"excludes,omitempty" jsonschema:"Glob patterns to exclude (e.g. node_modules, *.log, .git)"`
-	DryRun   bool     `json:"dry_run,omitempty" jsonschema:"Preview backup without creating archive. Shows summary with directory counts, exclude pattern matches, and largest files (default false)"`
+	Source       string   `json:"source" jsonschema:"Absolute path to the directory to backup"`
+	OutputDir    string   `json:"output_dir,omitempty" jsonschema:"Absolute path to the backup output directory. Default: ./backups/"`
+	Excludes     []string `json:"excludes,omitempty" jsonschema:"Glob patterns to exclude (e.g. node_modules, *.log, .git)"`
+	ExcludesFile string   `json:"excludes_file,omitempty" jsonschema:"Absolute path to a file containing exclude patterns (one per line). Lines starting with # are comments. Patterns are appended to excludes list"`
+	DryRun       bool     `json:"dry_run,omitempty" jsonschema:"Preview backup without creating archive. Shows summary with directory counts, exclude pattern matches, and largest files (default false)"`
 }
 
 type BackupOutput struct {
@@ -72,9 +74,21 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BackupInput) (*
 	timestamp := time.Now().Format("20060102_150405")
 	archivePath := filepath.Join(outputDir, fmt.Sprintf("%s_%s.zip", dirName, timestamp))
 
-	// Exclude patterns (default + user-specified)
+	// Exclude patterns (default + user-specified + file-based)
 	excludes := append([]string{}, defaultExcludes...)
 	excludes = append(excludes, input.Excludes...)
+
+	// Load patterns from excludes_file if specified
+	if input.ExcludesFile != "" {
+		if !filepath.IsAbs(input.ExcludesFile) {
+			return errorResult("excludes_file must be an absolute path")
+		}
+		filePatterns, err := loadExcludesFile(input.ExcludesFile)
+		if err != nil {
+			return errorResult(fmt.Sprintf("failed to read excludes_file: %v", err))
+		}
+		excludes = append(excludes, filePatterns...)
+	}
 
 	// Normalize backup output directory to prevent infinite loop
 	absOutputDir, _ := filepath.Abs(outputDir)
@@ -404,6 +418,30 @@ Output: {dirname}_{YYYYMMDD_HHMMSS}.zip
 Default excludes: .git, node_modules, __pycache__, binaries.
 Custom excludes can be added via the excludes parameter.`,
 	}, Handle)
+}
+
+// loadExcludesFile reads exclude patterns from a file (one per line).
+// Empty lines and lines starting with # are ignored.
+func loadExcludesFile(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var patterns []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return patterns, nil
 }
 
 func errorResult(msg string) (*mcp.CallToolResult, BackupOutput, error) {

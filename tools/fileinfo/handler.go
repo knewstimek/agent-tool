@@ -40,20 +40,20 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input FileInfoInput) 
 		return errorResult("path is a directory, not a file")
 	}
 
-	// 인코딩 감지
+	// Detect encoding
 	hintCharset := edit.FindEditorConfigCharset(input.FilePath)
 	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
 	}
 
-	// 줄바꿈 감지
+	// Detect line ending
 	lineEnding := "LF"
 	if strings.Contains(content, "\r\n") {
 		lineEnding = "CRLF"
 	}
 
-	// 총 줄 수
+	// Total line count
 	totalLines := 1
 	for _, c := range content {
 		if c == '\n' {
@@ -64,14 +64,14 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input FileInfoInput) 
 		totalLines = 0
 	}
 
-	// 들여쓰기 감지
+	// Detect indentation
 	indent := edit.DetectIndent(input.FilePath, content)
 	indentStr := "tabs"
 	if !indent.UseTabs {
 		indentStr = fmt.Sprintf("spaces-%d", indent.IndentSize)
 	}
 
-	// BOM 표시
+	// Display BOM indicator
 	encName := encInfo.Charset
 	if encInfo.HasBOM {
 		encName += " (BOM)"

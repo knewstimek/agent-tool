@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// ReplaceResult는 치환 결과를 담는다.
+// ReplaceResult holds the result of a replacement operation.
 type ReplaceResult struct {
 	Content    string
 	MatchCount int
@@ -13,25 +13,25 @@ type ReplaceResult struct {
 	Message    string
 }
 
-// Replace는 content에서 oldStr을 newStr로 치환한다.
-// 파일의 들여쓰기 스타일에 맞게 자동 변환을 시도한다.
-// forceStyle이 true이면 1차 직접 매칭에서도 newStr의 들여쓰기를 fileStyle로 강제 변환한다.
+// Replace replaces oldStr with newStr in content.
+// Attempts automatic conversion to match the file's indentation style.
+// If forceStyle is true, newStr's indentation is force-converted to fileStyle even on direct match.
 func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentStyle, forceStyle bool) ReplaceResult {
-	// 줄바꿈 정규화: old_string의 \n을 파일의 줄바꿈에 맞게 변환
+	// Line ending normalization: convert \n in old_string to match the file's line endings
 	lineEnding := "\n"
 	if strings.Contains(content, "\r\n") {
 		lineEnding = "\r\n"
 	}
 
-	// old_string/new_string의 줄바꿈을 파일과 일치시킴
+	// Match line endings of old_string/new_string to the file
 	normalizedOld := normalizeLineEnding(oldStr, lineEnding)
 	normalizedNew := normalizeLineEnding(newStr, lineEnding)
 
-	// 1차: 원본 문자열로 직접 매칭
+	// 1st pass: direct match with original string
 	count := strings.Count(content, normalizedOld)
 	if count > 0 {
 		finalNew := normalizedNew
-		// forceStyle: 명시적 indent_style 지정 시 newStr도 fileStyle로 강제 변환
+		// forceStyle: force-convert newStr to fileStyle when indent_style is explicitly specified
 		if forceStyle {
 			newStyle := DetectIndentOfString(newStr)
 			if newStyle.UseTabs != fileStyle.UseTabs || newStyle.IndentSize != fileStyle.IndentSize {
@@ -41,7 +41,7 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 		return applyReplace(content, normalizedOld, finalNew, count, replaceAll)
 	}
 
-	// 2차: 들여쓰기 변환 후 매칭 (공백 → 탭 또는 탭 → 공백)
+	// 2nd pass: match after indent conversion (spaces -> tabs or tabs -> spaces)
 	srcStyle := DetectIndentOfString(oldStr)
 	if srcStyle.UseTabs != fileStyle.UseTabs {
 		convertedOld := ConvertIndent(normalizedOld, srcStyle, fileStyle)
@@ -53,7 +53,7 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 		}
 	}
 
-	// 3차: 파일이 탭인데 old_string에 공백이 있는 경우 강제 변환 시도
+	// 3rd pass: force conversion when file uses tabs but old_string has spaces
 	if fileStyle.UseTabs && HasLeadingSpaces(normalizedOld) {
 		convertedOld := SpacesToTabs(normalizedOld, fileStyle.IndentSize)
 		convertedNew := SpacesToTabs(normalizedNew, fileStyle.IndentSize)
@@ -70,8 +70,8 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 	}
 }
 
-// applyReplace는 실제 치환을 수행한다.
-// count > 1이고 replaceAll이 false이면 치환하지 않고 오류를 반환한다.
+// applyReplace performs the actual replacement.
+// If count > 1 and replaceAll is false, returns an error without replacing.
 func applyReplace(content, oldStr, newStr string, count int, replaceAll bool) ReplaceResult {
 	if !replaceAll && count > 1 {
 		return ReplaceResult{
@@ -96,9 +96,9 @@ func applyReplace(content, oldStr, newStr string, count int, replaceAll bool) Re
 }
 
 func normalizeLineEnding(s, target string) string {
-	// 먼저 모든 줄바꿈을 \n으로 통일
+	// First normalize all line endings to \n
 	s = strings.ReplaceAll(s, "\r\n", "\n")
-	// 대상 줄바꿈으로 변환
+	// Convert to target line ending
 	if target == "\r\n" {
 		s = strings.ReplaceAll(s, "\n", "\r\n")
 	}

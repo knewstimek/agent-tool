@@ -22,7 +22,7 @@ type ListDirOutput struct {
 	TotalDirs  int    `json:"total_dirs"`
 }
 
-// 스킵할 디렉토리
+// Directories to skip
 var skipDirs = map[string]bool{
 	".git":         true,
 	"node_modules": true,
@@ -91,7 +91,7 @@ func buildTree(sb *strings.Builder, dir, prefix string, depth, maxDepth int, tot
 		return
 	}
 
-	// 숨김 파일/디렉토리 필터링 (. 으로 시작)
+	// Filter out hidden files/directories (starting with .)
 	var visible []os.DirEntry
 	for _, e := range entries {
 		if !strings.HasPrefix(e.Name(), ".") {

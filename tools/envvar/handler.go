@@ -19,24 +19,24 @@ type EnvVarOutput struct {
 	Result string `json:"result"`
 }
 
-// sensitiveKeywords는 값을 마스킹할 변수 이름 키워드이다.
-// AUTH는 범위가 넓어 AUTHOR 등을 오탐하므로 구체적 패턴만 사용.
+// sensitiveKeywords lists variable name keywords whose values should be masked.
+// AUTH is too broad (false positives like AUTHOR), so only specific patterns are used.
 var sensitiveKeywords = []string{
 	"PASSWORD", "PASSWD", "SECRET", "TOKEN", "CREDENTIAL",
 	"API_KEY", "APIKEY", "PRIVATE", "ACCESS_KEY", "SIGNING_KEY",
 	"AUTH_TOKEN", "AUTH_KEY", "AUTH_SECRET",
 }
 
-// safeSuffixes는 키워드가 포함되어도 마스킹하지 않을 접미사이다.
+// safeSuffixes lists suffixes that should not be masked even if a keyword is present.
 var safeSuffixes = []string{
 	"_PATH", "_FILE", "_DIR", "_HOME", "_ROOT", "_URL", "_URI",
 	"_STORE", "_PROVIDER", "_TYPE", "_MODE", "_LEVEL",
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input EnvVarInput) (*mcp.CallToolResult, EnvVarOutput, error) {
-	// 특정 변수 조회
+	// Look up a specific variable
 	if input.Name != "" {
-		// 개행 제거 (출력 인젝션 방지)
+		// Remove newlines (prevent output injection)
 		name := strings.Map(func(r rune) rune {
 			if r == '\n' || r == '\r' {
 				return -1
@@ -56,7 +56,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EnvVarInput) (*
 		}, EnvVarOutput{Result: msg}, nil
 	}
 
-	// 전체 또는 필터된 목록
+	// Full or filtered list
 	envs := os.Environ()
 	filter := strings.ToUpper(strings.TrimSpace(strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' {
@@ -82,7 +82,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EnvVarInput) (*
 			value = maskValue(value)
 		}
 
-		// 긴 값 자르기 (PATH 등)
+		// Truncate long values (e.g. PATH)
 		if len(value) > 500 {
 			value = value[:497] + "..."
 		}
@@ -117,18 +117,18 @@ Sensitive values (passwords, tokens, keys) are automatically masked for security
 	}, Handle)
 }
 
-// isSensitive는 변수 이름이 민감한 키워드를 포함하는지 확인한다.
+// isSensitive checks whether a variable name contains sensitive keywords.
 func isSensitive(name string) bool {
 	upper := strings.ToUpper(name)
 
-	// 안전한 접미사면 마스킹 제외
+	// Exclude from masking if it has a safe suffix
 	for _, suffix := range safeSuffixes {
 		if strings.HasSuffix(upper, suffix) {
 			return false
 		}
 	}
 
-	// 먼저 키워드 매칭 확인
+	// Check keyword matching first
 	matched := false
 	for _, kw := range sensitiveKeywords {
 		if strings.Contains(upper, kw) {
@@ -140,10 +140,10 @@ func isSensitive(name string) bool {
 		return false
 	}
 
-	// PUBLIC이 포함되어도 SECRET/TOKEN 등도 함께 포함되면 민감으로 판단
-	// 예: PUBLIC_SECRET_KEY → 민감, PUBLIC_KEY → 비민감
+	// Even if PUBLIC is present, treat as sensitive if SECRET/TOKEN etc. are also present
+	// e.g. PUBLIC_SECRET_KEY → sensitive, PUBLIC_KEY → not sensitive
 	if strings.Contains(upper, "PUBLIC") {
-		// SECRET, TOKEN, PASSWORD 등 강한 키워드가 같이 있으면 민감
+		// Sensitive if a strong keyword like SECRET, TOKEN, PASSWORD is also present
 		strongKeywords := []string{"SECRET", "PASSWORD", "PASSWD", "TOKEN", "CREDENTIAL", "PRIVATE"}
 		for _, sk := range strongKeywords {
 			if strings.Contains(upper, sk) {
@@ -156,8 +156,8 @@ func isSensitive(name string) bool {
 	return true
 }
 
-// maskValue는 값을 부분 마스킹한다.
-// 짧은 값(8자 이하)은 전부 마스킹, 그 외는 앞 4자만 노출.
+// maskValue partially masks a value.
+// Short values (8 chars or less) are fully masked; otherwise only the first 4 chars are shown.
 func maskValue(val string) string {
 	if len(val) <= 8 {
 		return "***"

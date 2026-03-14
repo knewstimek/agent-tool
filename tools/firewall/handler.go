@@ -17,7 +17,7 @@ type FirewallOutput struct {
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input FirewallInput) (*mcp.CallToolResult, FirewallOutput, error) {
-	// 개행/제어문자 제거 (출력 인젝션 방지)
+	// Remove newlines/control characters (prevent output injection)
 	filter := strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' {
 			return -1

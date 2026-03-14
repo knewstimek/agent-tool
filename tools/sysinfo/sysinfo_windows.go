@@ -43,7 +43,7 @@ func getMemoryInfo() (total, available uint64, err error) {
 
 func getDiskInfo() ([]DiskInfo, error) {
 	var disks []DiskInfo
-	// 일반적인 드라이브 문자 확인
+	// Check common drive letters
 	for _, letter := range "CDEFGH" {
 		path := string(letter) + ":\\"
 		pathPtr, _ := syscall.BytePtrFromString(path)
@@ -66,7 +66,7 @@ func getDiskInfo() ([]DiskInfo, error) {
 	return disks, nil
 }
 
-// systemProcessorPerformanceInformation의 구조체
+// Struct for systemProcessorPerformanceInformation
 type sppi struct {
 	IdleTime   int64 // 100ns units
 	KernelTime int64
@@ -137,13 +137,13 @@ func getHostnameOS() (string, error) {
 }
 
 func getLocale() string {
-	// Windows: 환경변수 또는 시스템 로캘
+	// Windows: environment variable or system locale
 	for _, key := range []string{"LANG", "LC_ALL", "LANGUAGE"} {
 		if v := os.Getenv(key); v != "" {
 			return v
 		}
 	}
-	// PowerShell 없이 직접 레지스트리는 복잡하므로 GetUserDefaultLCID 사용
+	// Direct registry access without PowerShell is complex, so use GetUserDefaultLocaleName
 	proc := kernel32.NewProc("GetUserDefaultLocaleName")
 	buf := make([]uint16, 85)
 	ret, _, _ := proc.Call(uintptr(unsafe.Pointer(&buf[0])), 85)

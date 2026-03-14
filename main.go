@@ -42,7 +42,7 @@ import (
 func main() {
 	args := os.Args[1:]
 
-	// install / uninstall / reinstall 서브커맨드
+	// install / uninstall / reinstall subcommands
 	if len(args) > 0 && (args[0] == "install" || args[0] == "uninstall" || args[0] == "reinstall") {
 		target := ""
 		if len(args) > 1 {
@@ -55,7 +55,7 @@ func main() {
 		case "uninstall":
 			err = install.Uninstall(target)
 		case "reinstall":
-			// uninstall 에러는 무시 (아직 설치 안 된 경우)
+			// ignore uninstall errors (may not be installed yet)
 			install.Uninstall(target)
 			err = install.Run(target)
 		}
@@ -66,8 +66,8 @@ func main() {
 		return
 	}
 
-	// fallback-encoding 설정 (우선순위: CLI > 환경변수 > 기본값)
-	// 1. 환경변수에서 읽기
+	// fallback-encoding configuration (priority: CLI > env var > default)
+	// 1. Read from environment variable
 	if envEnc := os.Getenv("AGENT_TOOL_FALLBACK_ENCODING"); envEnc != "" {
 		if normalized := config.NormalizeAndValidate(envEnc); normalized != "" {
 			common.SetFallbackEncoding(normalized)
@@ -75,7 +75,7 @@ func main() {
 			common.SetFallbackEncoding(strings.ToUpper(strings.TrimSpace(envEnc)))
 		}
 	}
-	// 2. CLI 옵션 (환경변수보다 우선)
+	// 2. CLI option (takes priority over env var)
 	for i, arg := range args {
 		if arg == "--fallback-encoding" && i+1 < len(args) {
 			enc := args[i+1]
@@ -89,7 +89,7 @@ func main() {
 		}
 	}
 
-	// MCP 서버 실행
+	// Start MCP server
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "agent-tool",

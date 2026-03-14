@@ -24,11 +24,11 @@ type ConfigOutput struct {
 	Result string `json:"result"`
 }
 
-// Handle은 런타임에 agent-tool 설정을 변경한다.
+// Handle changes agent-tool configuration at runtime.
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConfigInput) (*mcp.CallToolResult, ConfigOutput, error) {
 	changes := []string{}
 
-	// fallback_encoding 처리
+	// Handle fallback_encoding
 	if input.FallbackEncoding != "" {
 		normalized := NormalizeAndValidate(input.FallbackEncoding)
 		if normalized == "" {
@@ -43,14 +43,14 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConfigInput) (*
 		changes = append(changes, fmt.Sprintf("fallback_encoding: %s → %s", old, normalized))
 	}
 
-	// encoding_warnings 처리
+	// Handle encoding_warnings
 	if input.EncodingWarnings != nil {
 		old := common.GetEncodingWarnings()
 		common.SetEncodingWarnings(*input.EncodingWarnings)
 		changes = append(changes, fmt.Sprintf("encoding_warnings: %v → %v", old, *input.EncodingWarnings))
 	}
 
-	// max_file_size_mb 처리
+	// Handle max_file_size_mb
 	if input.MaxFileSizeMB != nil {
 		mb := *input.MaxFileSizeMB
 		if mb < 1 {
@@ -61,7 +61,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConfigInput) (*
 		changes = append(changes, fmt.Sprintf("max_file_size_mb: %d → %d", oldMB, mb))
 	}
 
-	// allow_symlinks 처리
+	// Handle allow_symlinks
 	if input.AllowSymlinks != nil {
 		old := common.GetAllowSymlinks()
 		common.SetAllowSymlinks(*input.AllowSymlinks)
@@ -72,7 +72,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConfigInput) (*
 		changes = append(changes, note)
 	}
 
-	// workspace 처리
+	// Handle workspace
 	if input.Workspace != "" {
 		ws := filepath.Clean(strings.TrimSpace(input.Workspace))
 		if !filepath.IsAbs(ws) {
@@ -98,7 +98,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConfigInput) (*
 		changes = append(changes, fmt.Sprintf("workspace: %s → %s", old, ws))
 	}
 
-	// 변경 사항 없으면 현재 설정 표시
+	// If no changes were made, display current configuration
 	if len(changes) == 0 {
 		wsDisplay := common.GetWorkspace()
 		if wsDisplay == "" {
@@ -127,8 +127,8 @@ Example: set fallback_encoding to "EUC-KR" for Korean legacy projects.`,
 	}, Handle)
 }
 
-// NormalizeAndValidate는 인코딩 이름을 정규화하고 지원 여부를 확인한다.
-// 지원하지 않는 이름은 빈 문자열을 반환한다.
+// NormalizeAndValidate normalizes the encoding name and checks if it is supported.
+// Returns an empty string for unsupported names.
 func NormalizeAndValidate(name string) string {
 	lower := strings.ToLower(strings.TrimSpace(name))
 	switch lower {

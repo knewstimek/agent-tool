@@ -51,7 +51,7 @@ func getDiskInfo() ([]DiskInfo, error) {
 	var disks []DiskInfo
 	paths := []string{"/"}
 
-	// 일반적인 마운트 포인트 확인
+	// Check common mount points
 	for _, p := range []string{"/home", "/tmp", "/var"} {
 		if _, err := os.Stat(p); err == nil {
 			paths = append(paths, p)
@@ -64,7 +64,7 @@ func getDiskInfo() ([]DiskInfo, error) {
 		if err := syscall.Statfs(p, &stat); err != nil {
 			continue
 		}
-		// 같은 파일시스템 중복 방지 (Blocks+Bsize 조합 — Fsid 필드명이 OS마다 다름)
+		// Prevent duplicate filesystems (Blocks+Bsize combination — Fsid field name varies by OS)
 		fsid := uint64(stat.Blocks)<<32 | uint64(stat.Bsize)
 		if seen[fsid] {
 			continue

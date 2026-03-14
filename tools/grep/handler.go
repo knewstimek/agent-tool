@@ -16,8 +16,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// errMaxResults는 filepath.Walk를 조기 종료하기 위한 센티넬 에러이다.
-// 호출자에서 errors.Is로 실제 오류와 구분한다.
+// errMaxResults is a sentinel error to terminate filepath.Walk early.
+// Callers use errors.Is to distinguish it from real errors.
 var errMaxResults = errors.New("max results reached")
 
 type GrepInput struct {
@@ -96,7 +96,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GrepInput) (*mc
 		text = "No matches found"
 	}
 
-	// 인코딩 감지 신뢰도 낮은 파일이 있으면 경고 추가
+	// Add warning if any files had low encoding detection confidence
 	if hasLowConfidence {
 		text += "\n⚠ Some files had low encoding detection confidence. " +
 			"Results may be incomplete. Consider setting fallback_encoding via set_config tool " +
@@ -108,17 +108,17 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GrepInput) (*mc
 	}, GrepOutput{Matches: matches, Count: len(matches)}, nil
 }
 
-// searchFileResult는 searchFile의 반환값이다.
+// searchFileResult is the return value of searchFile.
 type searchFileResult struct {
 	matches    []string
-	lowConfidence bool // 인코딩 감지 신뢰도가 낮은 파일
+	lowConfidence bool // file with low encoding detection confidence
 }
 
 func searchFile(path string, re *regexp.Regexp, maxResults int) (searchFileResult, error) {
 	hintCharset := edit.FindEditorConfigCharset(path)
 	content, encInfo, err := common.ReadFileWithEncoding(path, hintCharset)
 	if err != nil {
-		// 대용량 파일 등 읽기 실패 시 스킵 (에러 대신 빈 결과)
+		// Skip files that fail to read (e.g. too large) — return empty result instead of error
 		return searchFileResult{}, nil
 	}
 
@@ -141,10 +141,10 @@ func searchFile(path string, re *regexp.Regexp, maxResults int) (searchFileResul
 	return result, nil
 }
 
-// searchDirResult는 searchDir의 반환값이다.
+// searchDirResult is the return value of searchDir.
 type searchDirResult struct {
 	matches          []string
-	lowConfidenceCount int // 인코딩 감지 신뢰도가 낮았던 파일 수
+	lowConfidenceCount int // number of files with low encoding detection confidence
 }
 
 func searchDir(dir, globPattern string, re *regexp.Regexp, maxResults int) (searchDirResult, error) {
@@ -152,17 +152,17 @@ func searchDir(dir, globPattern string, re *regexp.Regexp, maxResults int) (sear
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // 접근 불가 파일은 스킵
+			return nil // skip inaccessible files
 		}
 		if info.IsDir() {
-			// .git 등 숨김 디렉토리 스킵
+			// skip hidden directories (.git, etc.)
 			if strings.HasPrefix(info.Name(), ".") && info.Name() != "." {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		// glob 필터
+		// glob filter
 		if globPattern != "" {
 			matched, _ := filepath.Match(globPattern, info.Name())
 			if !matched {
@@ -170,15 +170,15 @@ func searchDir(dir, globPattern string, re *regexp.Regexp, maxResults int) (sear
 			}
 		}
 
-		// 바이너리 파일 스킵 (간단한 휴리스틱)
+		// skip binary files (simple heuristic)
 		if isBinaryExt(info.Name()) {
 			return nil
 		}
 
-		// 전체 maxResults에서 이미 수집한 수를 빼서 파일별 검색 한도를 제한
+		// limit per-file search by subtracting already collected results from total maxResults
 		fileResult, err := searchFile(path, re, maxResults-len(result.matches))
 		if err != nil {
-			return nil // 읽기 실패한 파일은 스킵
+			return nil // skip files that fail to read
 		}
 		result.matches = append(result.matches, fileResult.matches...)
 		if fileResult.lowConfidence {

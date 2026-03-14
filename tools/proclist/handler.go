@@ -23,12 +23,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ProcListInput) 
 		return errorResult(fmt.Sprintf("failed to list processes: %v", err))
 	}
 
-	// 포트 범위 검증
+	// Validate port range
 	if input.Port > 65535 {
 		return errorResult("invalid port number: must be between 1 and 65535")
 	}
 
-	// 포트 필터링
+	// Port filtering
 	var portEntries []PortEntry
 	portPIDSet := map[int]PortEntry{}
 	if input.Port > 0 {
@@ -43,7 +43,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ProcListInput) 
 		}
 	}
 
-	// 필터링
+	// Filtering
 	filter := strings.ToLower(strings.TrimSpace(strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' {
 			return -1
@@ -55,28 +55,28 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ProcListInput) 
 
 	for i := range procs {
 		p := &procs[i]
-		// 포트 필터
+		// Port filter
 		if input.Port > 0 {
 			if _, ok := portPIDSet[p.PID]; !ok {
 				continue
 			}
 		}
-		// 이름 필터
+		// Name filter
 		if filter != "" && !strings.Contains(strings.ToLower(p.Name), filter) {
 			continue
 		}
 		filtered = append(filtered, *p)
 	}
 
-	// 필터된 결과에만 커맨드라인 조회 (Windows에서 wmic 호출, 느리므로 필터 후에만)
+	// Fetch command lines only for filtered results (wmic is slow on Windows, so only after filtering)
 	enrichCommandLines(filtered)
 
-	// 커맨드라인 민감정보 마스킹
+	// Mask sensitive information in command lines
 	for i := range filtered {
 		filtered[i].CmdLine = SanitizeCommandLine(filtered[i].CmdLine)
 	}
 
-	// 출력 포맷팅
+	// Output formatting
 	var sb strings.Builder
 
 	if input.Port > 0 {
@@ -94,14 +94,14 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ProcListInput) 
 		if cmdline == "" {
 			cmdline = "[" + p.Name + "]"
 		}
-		// 긴 커맨드라인 자르기
+		// Truncate long command lines
 		if len(cmdline) > 200 {
 			cmdline = cmdline[:197] + "..."
 		}
 		sb.WriteString(fmt.Sprintf("  %-8d %-24s %-12s %s\n", p.PID, truncate(p.Name, 24), mem, cmdline))
 	}
 
-	// 포트 정보 추가
+	// Append port information
 	if input.Port > 0 && len(portEntries) > 0 {
 		sb.WriteString(fmt.Sprintf("\nProtocol: %s", portEntries[0].Protocol))
 		if portEntries[0].State != "" {

@@ -9,13 +9,13 @@ import (
 	"strings"
 )
 
-// discoverMSVC는 cl.exe (MSVC 컴파일러)를 탐색한다.
-// 1. vswhere.exe → VS 설치 경로 → cl.exe
-// 2. 직접 glob 폴백
+// discoverMSVC searches for cl.exe (MSVC compiler).
+// 1. vswhere.exe → VS install path → cl.exe
+// 2. Direct glob fallback
 func discoverMSVC() ToolInfo {
 	info := ToolInfo{Name: "cl (MSVC)"}
 
-	// 1. vswhere.exe 시도
+	// 1. Try vswhere.exe
 	vswhere := vswhereExe()
 	if fileExists(vswhere) {
 		ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
@@ -29,7 +29,7 @@ func discoverMSVC() ToolInfo {
 		if err == nil {
 			vsPath := strings.TrimSpace(string(out))
 			if vsPath != "" {
-				// cl.exe 경로 glob
+				// Glob for cl.exe path
 				pattern := filepath.Join(vsPath, "VC", "Tools", "MSVC", "*", "bin", "Hostx64", "x64", "cl.exe")
 				matches, _ := filepath.Glob(pattern)
 				if len(matches) > 0 {
@@ -43,7 +43,7 @@ func discoverMSVC() ToolInfo {
 		}
 	}
 
-	// 2. 직접 glob 폴백
+	// 2. Direct glob fallback
 	for _, base := range vsBasePaths() {
 		// {2022,2019,2017}\{Community,Professional,Enterprise}\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe
 		for _, year := range []string{"2022", "2019", "2017"} {
@@ -64,10 +64,10 @@ func discoverMSVC() ToolInfo {
 	return info
 }
 
-// getMSVCVersion은 cl.exe 경로에서 MSVC 버전을 추출한다.
-// 경로 예: .../MSVC/14.38.33130/bin/... → "14.38.33130"
+// getMSVCVersion extracts the MSVC version from the cl.exe path.
+// Example path: .../MSVC/14.38.33130/bin/... → "14.38.33130"
 func getMSVCVersion(clPath string) string {
-	// 경로에서 MSVC 다음 디렉토리명이 버전
+	// The directory name after "MSVC" in the path is the version
 	parts := strings.Split(filepath.ToSlash(clPath), "/")
 	for i, p := range parts {
 		if p == "MSVC" && i+1 < len(parts) {
@@ -77,13 +77,13 @@ func getMSVCVersion(clPath string) string {
 	return ""
 }
 
-// discoverPyLauncher는 Windows Python Launcher(py.exe)를 탐색한다.
+// discoverPyLauncher searches for Windows Python Launcher (py.exe).
 func discoverPyLauncher() ToolInfo {
 	info := ToolInfo{Name: "py (launcher)"}
 
 	path := lookupPath("py")
 	if path == "" {
-		// 알려진 위치
+		// Known locations
 		candidates := []string{
 			`C:\Windows\py.exe`,
 			filepath.Join(`C:\Program Files`, "Python Launcher", "py.exe"),
@@ -103,13 +103,13 @@ func discoverPyLauncher() ToolInfo {
 	info.Path = path
 	info.Source = "path"
 
-	// py -0p로 설치된 버전 목록 가져오기
+	// Get installed version list with py -0p
 	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
 	defer cancel()
 
 	out, err := exec.CommandContext(ctx, path, "-0p").CombinedOutput()
 	if err == nil {
-		// 첫 줄을 기본 버전으로 사용
+		// Use the first line as the default version
 		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 		if len(lines) > 0 {
 			info.Version = strings.TrimSpace(lines[0])

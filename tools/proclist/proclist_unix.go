@@ -11,15 +11,15 @@ import (
 	"strings"
 )
 
-// ProcessInfo는 프로세스 정보이다.
+// ProcessInfo represents process information.
 type ProcessInfo struct {
 	PID     int
 	Name    string
 	CmdLine string
-	MemKB   uint64 // KB 단위
+	MemKB   uint64 // in KB
 }
 
-// PortEntry는 포트-PID 매핑이다.
+// PortEntry represents a port-to-PID mapping.
 type PortEntry struct {
 	PID      int
 	Port     int
@@ -27,7 +27,7 @@ type PortEntry struct {
 	State    string
 }
 
-// listProcesses는 Linux에서 /proc을 읽어 프로세스 목록을 반환한다.
+// listProcesses reads /proc on Linux and returns a list of processes.
 func listProcesses() ([]ProcessInfo, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -46,12 +46,12 @@ func listProcesses() ([]ProcessInfo, error) {
 
 		info := ProcessInfo{PID: pid}
 
-		// 프로세스 이름 (comm)
+		// Process name (comm)
 		if data, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "comm")); err == nil {
 			info.Name = strings.TrimSpace(string(data))
 		}
 
-		// 커맨드라인 (4KB로 제한 — ARG_MAX가 수 MB일 수 있어 메모리 절약)
+		// Command line (limited to 4KB — ARG_MAX can be several MB, so limit to save memory)
 		if f, err := os.Open(filepath.Join("/proc", entry.Name(), "cmdline")); err == nil {
 			buf := make([]byte, 4096)
 			n, _ := f.Read(buf)
@@ -61,7 +61,7 @@ func listProcesses() ([]ProcessInfo, error) {
 			}
 		}
 
-		// 메모리 (VmRSS from status)
+		// Memory (VmRSS from status)
 		if f, err := os.Open(filepath.Join("/proc", entry.Name(), "status")); err == nil {
 			scanner := bufio.NewScanner(f)
 			for scanner.Scan() {
@@ -83,9 +83,9 @@ func listProcesses() ([]ProcessInfo, error) {
 	return procs, nil
 }
 
-// listPortPIDs는 Linux에서 /proc/net/tcp{,6}를 읽어 포트-PID 매핑을 반환한다.
+// ListPortPIDs reads /proc/net/tcp{,6} on Linux and returns port-to-PID mappings.
 func ListPortPIDs() ([]PortEntry, error) {
-	// inode → PortEntry 매핑 구축
+	// Build inode → PortEntry mapping
 	inodeMap := make(map[uint64]PortEntry)
 
 	for _, proto := range []struct {
@@ -102,7 +102,7 @@ func ListPortPIDs() ([]PortEntry, error) {
 			continue
 		}
 		scanner := bufio.NewScanner(f)
-		if !scanner.Scan() { // 헤더 스킵
+		if !scanner.Scan() { // skip header
 			f.Close()
 			continue
 		}
@@ -144,7 +144,7 @@ func ListPortPIDs() ([]PortEntry, error) {
 		return nil, nil
 	}
 
-	// /proc/[pid]/fd/ 순회하여 inode → PID 매핑
+	// Traverse /proc/[pid]/fd/ to map inode → PID
 	procEntries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
@@ -183,7 +183,7 @@ func ListPortPIDs() ([]PortEntry, error) {
 			if pe, ok := inodeMap[inode]; ok {
 				pe.PID = pid
 				result = append(result, pe)
-				delete(inodeMap, inode) // 한 번만
+				delete(inodeMap, inode) // match only once
 			}
 		}
 	}
@@ -191,7 +191,7 @@ func ListPortPIDs() ([]PortEntry, error) {
 	return result, nil
 }
 
-// enrichCommandLines는 Linux에서는 no-op이다 (/proc에서 이미 cmdline을 읽음).
+// enrichCommandLines is a no-op on Linux (cmdline is already read from /proc).
 func enrichCommandLines(_ []ProcessInfo) {}
 
 func tcpStateStr(state int) string {

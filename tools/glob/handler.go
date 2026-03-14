@@ -56,9 +56,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GlobInput) (*mc
 		return errorResult(fmt.Sprintf("glob error: %v", err))
 	}
 
-	// 수정 시간 기준 정렬 (최신 먼저).
-	// sort.Slice 내에서 매 비교마다 os.Stat를 호출하면 O(N log N) syscall이 발생하므로,
-	// 미리 한 번 순회하며 modTime을 캐싱하여 O(N) syscall로 제한한다.
+	// Sort by modification time (newest first).
+	// Cache modTime in a single pass to avoid O(N log N) syscalls from calling os.Stat
+	// in every sort comparison — this limits it to O(N) syscalls.
 	type fileWithTime struct {
 		path    string
 		modTime time.Time
@@ -75,7 +75,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GlobInput) (*mc
 	}
 	sort.Slice(filesWithTime, func(i, j int) bool {
 		if !filesWithTime[i].valid {
-			return false // stat 실패 파일은 뒤로
+			return false // files that failed stat go to the end
 		}
 		if !filesWithTime[j].valid {
 			return true
@@ -83,8 +83,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GlobInput) (*mc
 		return filesWithTime[i].modTime.After(filesWithTime[j].modTime)
 	})
 
-	// stat 실패 파일(삭제됨, 권한 없음 등)은 결과에서 제외한다.
-	// 500개 제한은 유효한 파일만 카운트하여 사용자가 요청한 만큼 결과를 받을 수 있게 한다.
+	// Exclude files that failed stat (deleted, no permission, etc.) from results.
+	// The 500-file limit counts only valid files so the user gets as many results as possible.
 	matches = matches[:0]
 	for _, ft := range filesWithTime {
 		if !ft.valid {
@@ -125,17 +125,17 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GlobInput) (*mc
 	}, GlobOutput{Files: displayPaths, Count: len(matches)}, nil
 }
 
-// findMatches는 baseDir에서 pattern에 매칭되는 파일 경로를 반환한다.
-// "**" 패턴은 재귀 디렉토리 탐색으로 처리하며, 숨김 디렉토리(.git 등)와
-// node_modules, vendor는 자동 스킵한다.
-// 예: "**/*.go" → baseDir 하위 모든 .go 파일
-//     "src/**/*.ts" → baseDir/src/ 하위 모든 .ts 파일
+// findMatches returns file paths in baseDir matching the given pattern.
+// The "**" pattern is handled via recursive directory traversal, automatically
+// skipping hidden directories (.git, etc.), node_modules, and vendor.
+// Examples: "**/*.go" → all .go files under baseDir
+//           "src/**/*.ts" → all .ts files under baseDir/src/
 func findMatches(baseDir, pattern string) ([]string, error) {
 	var matches []string
 
-	// ** 패턴 지원: 재귀 탐색
-	// 단순 구현: **는 한 번만 처리하며, ** 뒤 suffix는 파일명 glob으로 매칭한다.
-	// 예: "src/**/*.ts" → prefix="src/", suffix="*.ts"
+	// Support ** pattern: recursive traversal.
+	// Simple implementation: ** is handled once, and the suffix after ** is matched as a filename glob.
+	// Example: "src/**/*.ts" → prefix="src/", suffix="*.ts"
 	if strings.Contains(pattern, "**") {
 		parts := strings.SplitN(pattern, "**", 2)
 		prefix := parts[0]
@@ -178,7 +178,7 @@ func findMatches(baseDir, pattern string) ([]string, error) {
 		return matches, err
 	}
 
-	// 일반 glob 패턴
+	// Standard glob pattern
 	fullPattern := filepath.Join(baseDir, filepath.FromSlash(pattern))
 	return filepath.Glob(fullPattern)
 }

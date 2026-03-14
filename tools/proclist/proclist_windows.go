@@ -18,15 +18,15 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// ProcessInfo는 프로세스 정보이다.
+// ProcessInfo represents process information.
 type ProcessInfo struct {
 	PID     int
 	Name    string
 	CmdLine string
-	MemKB   uint64 // KB 단위
+	MemKB   uint64 // in KB
 }
 
-// PortEntry는 포트-PID 매핑이다.
+// PortEntry represents a port-to-PID mapping.
 type PortEntry struct {
 	PID      int
 	Port     int
@@ -34,9 +34,9 @@ type PortEntry struct {
 	State    string
 }
 
-// listProcesses는 Windows에서 실행 중인 프로세스 목록을 반환한다.
+// listProcesses returns a list of running processes on Windows.
 func listProcesses() ([]ProcessInfo, error) {
-	// CreateToolhelp32Snapshot으로 PID+이름 수집 (매우 빠름)
+	// Collect PID+name via CreateToolhelp32Snapshot (very fast)
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return nil, fmt.Errorf("CreateToolhelp32Snapshot: %w", err)
@@ -65,13 +65,13 @@ func listProcesses() ([]ProcessInfo, error) {
 		}
 	}
 
-	// tasklist /FO CSV로 메모리 정보 보강 (빠름, ~1초)
+	// Enrich with memory info via tasklist /FO CSV (fast, ~1 second)
 	enrichWithTasklist(procs)
 
 	return procs, nil
 }
 
-// enrichWithTasklist는 tasklist로 메모리 정보를 보강한다.
+// enrichWithTasklist enriches process info with memory data from tasklist.
 func enrichWithTasklist(procs []ProcessInfo) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -108,7 +108,7 @@ func enrichWithTasklist(procs []ProcessInfo) {
 		if !ok {
 			continue
 		}
-		// 메모리: "123,456 K" 형식
+		// Memory: "123,456 K" format
 		memStr := strings.ReplaceAll(record[4], ",", "")
 		memStr = strings.ReplaceAll(memStr, " K", "")
 		memStr = strings.TrimSpace(memStr)
@@ -117,14 +117,14 @@ func enrichWithTasklist(procs []ProcessInfo) {
 	}
 }
 
-// enrichCommandLines는 필터된 프로세스에 대해서만 wmic로 커맨드라인을 조회한다.
-// 전체 프로세스에 대해 wmic를 호출하면 너무 느리므로, 필터된 결과에만 적용.
+// enrichCommandLines queries command lines via wmic only for filtered processes.
+// Calling wmic for all processes is too slow, so it is applied only to filtered results.
 func enrichCommandLines(procs []ProcessInfo) {
 	if len(procs) == 0 || len(procs) > 50 {
-		return // 50개 초과면 skip (너무 많으면 wmic 자체가 느림)
+		return // skip if more than 50 (wmic itself is slow with too many)
 	}
 
-	// PID 목록으로 wmic 호출
+	// Call wmic with PID list
 	var pidConds []string
 	for _, p := range procs {
 		pidConds = append(pidConds, fmt.Sprintf("ProcessId=%d", p.PID))
@@ -154,7 +154,7 @@ func enrichCommandLines(procs []ProcessInfo) {
 		return
 	}
 
-	// 헤더 찾기
+	// Find header
 	var cmdIdx, pidIdx int = -1, -1
 	for i, rec := range records {
 		if len(rec) < 2 {
@@ -186,7 +186,7 @@ func enrichCommandLines(procs []ProcessInfo) {
 	}
 }
 
-// listPortPIDs는 Windows에서 netstat -ano로 포트-PID 매핑을 반환한다.
+// ListPortPIDs returns port-to-PID mappings using netstat -ano on Windows.
 func ListPortPIDs() ([]PortEntry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -211,7 +211,7 @@ func ListPortPIDs() ([]PortEntry, error) {
 			continue
 		}
 
-		// 로컬 주소에서 포트 추출
+		// Extract port from local address
 		localAddr := fields[1]
 		lastColon := strings.LastIndex(localAddr, ":")
 		if lastColon < 0 {

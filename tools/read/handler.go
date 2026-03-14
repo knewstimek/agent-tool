@@ -14,8 +14,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// readHashThreshold은 해시를 자동 포함할 최대 파일 크기이다.
-// 이보다 큰 파일은 checksum 도구를 별도로 호출해야 한다.
+// readHashThreshold is the maximum file size for automatically including a hash.
+// Files larger than this require a separate call to the checksum tool.
 const readHashThreshold = 10 * 1024 * 1024 // 10MB
 
 type ReadInput struct {
@@ -50,22 +50,22 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 		return errorResult(fmt.Sprintf("path is a directory, not a file: %s", input.FilePath))
 	}
 
-	// .editorconfig charset 힌트
+	// .editorconfig charset hint
 	hintCharset := edit.FindEditorConfigCharset(input.FilePath)
 
-	// 인코딩 감지하여 읽기
+	// Read with encoding detection
 	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
 	}
 
-	// 총 줄 수 카운트 (할당 없는 O(N))
+	// Count total lines (allocation-free O(N))
 	totalLines := strings.Count(content, "\n") + 1
 
 	var startIdx, endIdx int
 
 	if input.Offset < 0 {
-		// 음수 인덱스: 끝에서부터 계산
+		// Negative index: calculate from the end
 		startIdx = totalLines + input.Offset
 		if startIdx < 0 {
 			startIdx = 0
@@ -86,7 +86,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 		endIdx = startIdx + input.Limit
 	}
 
-	// Scanner로 필요한 범위만 처리 (전체 Split 대비 메모리 절약)
+	// Process only the needed range with Scanner (saves memory vs full Split)
 	var sb strings.Builder
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	lineNum := 0
@@ -102,12 +102,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 
 	result := sb.String()
 
-	// 인코딩 감지 신뢰도가 낮으면 경고 추가
+	// Add warning if encoding detection confidence is low
 	if warning := common.EncodingWarning(encInfo); warning != "" {
 		result += warning
 	}
 
-	// 파일 해시 추가 (10MB 이하 파일만 — 큰 파일은 checksum 도구 사용)
+	// Add file hash (only for files <= 10MB — use checksum tool for larger files)
 	var fileHash string
 	if fi.Size() <= readHashThreshold {
 		if h, err := common.ComputeFileHash(input.FilePath); err == nil {

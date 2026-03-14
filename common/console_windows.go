@@ -20,54 +20,54 @@ var (
 	procGetACP  = kernel32DLL.NewProc("GetACP")
 )
 
-// getSystemCodePage는 Windows 시스템 코드페이지를 반환한다.
+// getSystemCodePage returns the Windows system code page.
 func getSystemCodePage() uint32 {
 	ret, _, _ := procGetACP.Call()
 	return uint32(ret)
 }
 
-// codePageToEncoding은 Windows 코드페이지 번호를 Go 인코딩으로 매핑한다.
+// codePageToEncoding maps a Windows code page number to a Go encoding.
 func codePageToEncoding(cp uint32) encoding.Encoding {
 	switch cp {
 	case 949:
-		return korean.EUCKR // CP949 (한국어)
+		return korean.EUCKR // CP949 (Korean)
 	case 932:
-		return japanese.ShiftJIS // CP932 (일본어)
+		return japanese.ShiftJIS // CP932 (Japanese)
 	case 936:
-		return simplifiedchinese.GBK // CP936 (중국어 간체)
+		return simplifiedchinese.GBK // CP936 (Simplified Chinese)
 	case 950:
-		return traditionalchinese.Big5 // CP950 (중국어 번체)
+		return traditionalchinese.Big5 // CP950 (Traditional Chinese)
 	case 874:
-		return charmap.Windows874 // 태국어
+		return charmap.Windows874 // Thai
 	case 1250:
-		return charmap.Windows1250 // 중유럽
+		return charmap.Windows1250 // Central European
 	case 1251:
-		return charmap.Windows1251 // 키릴 문자
+		return charmap.Windows1251 // Cyrillic
 	case 1252:
-		return charmap.Windows1252 // 서유럽
+		return charmap.Windows1252 // Western European
 	case 1253:
-		return charmap.Windows1253 // 그리스어
+		return charmap.Windows1253 // Greek
 	case 1254:
-		return charmap.Windows1254 // 터키어
+		return charmap.Windows1254 // Turkish
 	case 1255:
-		return charmap.Windows1255 // 히브리어
+		return charmap.Windows1255 // Hebrew
 	case 1256:
-		return charmap.Windows1256 // 아랍어
+		return charmap.Windows1256 // Arabic
 	case 1257:
-		return charmap.Windows1257 // 발트어
+		return charmap.Windows1257 // Baltic
 	case 1258:
-		return charmap.Windows1258 // 베트남어
+		return charmap.Windows1258 // Vietnamese
 	case 65001:
-		return nil // UTF-8 — 변환 불필요
+		return nil // UTF-8 — no conversion needed
 	default:
 		return nil
 	}
 }
 
-// DecodeConsoleOutput은 Windows 콘솔 출력(시스템 코드페이지)을 UTF-8로 변환한다.
-// GetACP()로 시스템 코드페이지를 동적으로 감지하여 올바른 인코딩으로 디코딩한다.
+// DecodeConsoleOutput converts Windows console output (system code page) to UTF-8.
+// Dynamically detects the system code page via GetACP() and decodes with the correct encoding.
 func DecodeConsoleOutput(data []byte) string {
-	// high byte가 없으면 순수 ASCII — 변환 불필요
+	// No high bytes means pure ASCII — no conversion needed
 	hasHighByte := false
 	for _, b := range data {
 		if b >= 0x80 {
@@ -82,7 +82,7 @@ func DecodeConsoleOutput(data []byte) string {
 	cp := getSystemCodePage()
 	enc := codePageToEncoding(cp)
 	if enc == nil {
-		return string(data) // UTF-8이거나 알 수 없는 코드페이지
+		return string(data) // UTF-8 or unknown code page
 	}
 
 	decoded, _, err := transform.Bytes(enc.NewDecoder(), data)
@@ -92,7 +92,7 @@ func DecodeConsoleOutput(data []byte) string {
 	return string(data)
 }
 
-// SystemCodePageInfo는 현재 시스템 코드페이지 정보를 반환한다 (디버깅/로그용).
+// SystemCodePageInfo returns current system code page information (for debugging/logging).
 func SystemCodePageInfo() string {
 	cp := getSystemCodePage()
 	enc := codePageToEncoding(cp)

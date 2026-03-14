@@ -17,79 +17,79 @@ import (
 	"golang.org/x/text/transform"
 )
 
-// DefaultMaxFileSize는 기본 최대 파일 크기이다 (50MB).
+// DefaultMaxFileSize is the default maximum file size (50MB).
 const DefaultMaxFileSize int64 = 50 * 1024 * 1024
 
-// chardetSampleSize는 인코딩 감지에 사용할 최대 바이트 수이다.
-// chardet은 전체 파일이 필요하지 않으며, 앞부분 샘플만으로 충분히 판정 가능하다.
+// chardetSampleSize is the maximum number of bytes used for encoding detection.
+// chardet does not need the entire file; a sample from the beginning is sufficient.
 const chardetSampleSize = 64 * 1024 // 64KB
 
-// EncodingInfo는 파일의 인코딩 정보를 담는다.
+// EncodingInfo holds encoding information for a file.
 type EncodingInfo struct {
-	Charset    string // IANA 이름: "UTF-8", "EUC-KR", "Shift_JIS" 등
-	HasBOM     bool   // UTF-8 BOM 존재 여부
-	Confidence int    // chardet 감지 신뢰도 (0-100). 힌트/BOM/폴백 사용 시 100.
-	UsedSource string // 인코딩 결정 출처: "bom", "hint", "chardet", "fallback"
+	Charset    string // IANA name: "UTF-8", "EUC-KR", "Shift_JIS", etc.
+	HasBOM     bool   // whether UTF-8 BOM is present
+	Confidence int    // chardet detection confidence (0-100). 100 when hint/BOM/fallback is used.
+	UsedSource string // encoding decision source: "bom", "hint", "chardet", "fallback"
 }
 
 var (
-	// fallbackEncoding은 chardet 감지 실패 시 사용할 폴백 인코딩이다.
+	// fallbackEncoding is the fallback encoding used when chardet detection fails.
 	fallbackEncoding   = "UTF-8"
 	fallbackMu         sync.RWMutex
-	// encodingWarnings는 인코딩 감지 경고 메시지 출력 여부이다.
+	// encodingWarnings controls whether encoding detection warning messages are shown.
 	encodingWarnings   = true
 	encodingWarningsMu sync.RWMutex
-	// maxFileSize는 ReadFileWithEncoding이 허용하는 최대 파일 크기이다.
-	// set_config의 max_file_size로 런타임에 변경 가능하다.
+	// maxFileSize is the maximum file size allowed by ReadFileWithEncoding.
+	// Can be changed at runtime via set_config max_file_size.
 	maxFileSize   = DefaultMaxFileSize
 	maxFileSizeMu sync.RWMutex
-	// allowSymlinks는 압축 해제 시 symlink 생성 허용 여부이다.
-	// 기본값 false (보안상 스킵). set_config의 allow_symlinks로 변경 가능.
+	// allowSymlinks controls whether symlink creation is allowed during archive extraction.
+	// Default false (skipped for security). Can be changed via set_config allow_symlinks.
 	allowSymlinks   = false
 	allowSymlinksMu sync.RWMutex
-	// workspace는 기본 작업 디렉토리이다.
-	// glob 등에서 path가 미지정일 때 os.Getwd() 대신 사용된다.
-	// set_config의 workspace로 런타임에 변경 가능.
+	// workspace is the default working directory.
+	// Used instead of os.Getwd() when path is not specified in glob, etc.
+	// Can be changed at runtime via set_config workspace.
 	workspace   string
 	workspaceMu sync.RWMutex
 )
 
-// GetFallbackEncoding은 현재 폴백 인코딩을 스레드 안전하게 반환한다.
+// GetFallbackEncoding returns the current fallback encoding in a thread-safe manner.
 func GetFallbackEncoding() string {
 	fallbackMu.RLock()
 	defer fallbackMu.RUnlock()
 	return fallbackEncoding
 }
 
-// SetFallbackEncoding은 폴백 인코딩을 스레드 안전하게 변경한다.
+// SetFallbackEncoding sets the fallback encoding in a thread-safe manner.
 func SetFallbackEncoding(enc string) {
 	fallbackMu.Lock()
 	defer fallbackMu.Unlock()
 	fallbackEncoding = enc
 }
 
-// GetEncodingWarnings는 인코딩 경고 활성화 여부를 반환한다.
+// GetEncodingWarnings returns whether encoding warnings are enabled.
 func GetEncodingWarnings() bool {
 	encodingWarningsMu.RLock()
 	defer encodingWarningsMu.RUnlock()
 	return encodingWarnings
 }
 
-// SetEncodingWarnings는 인코딩 경고 활성화 여부를 설정한다.
+// SetEncodingWarnings sets whether encoding warnings are enabled.
 func SetEncodingWarnings(enabled bool) {
 	encodingWarningsMu.Lock()
 	defer encodingWarningsMu.Unlock()
 	encodingWarnings = enabled
 }
 
-// GetMaxFileSize는 현재 최대 파일 크기 제한을 반환한다.
+// GetMaxFileSize returns the current maximum file size limit.
 func GetMaxFileSize() int64 {
 	maxFileSizeMu.RLock()
 	defer maxFileSizeMu.RUnlock()
 	return maxFileSize
 }
 
-// SetMaxFileSize는 최대 파일 크기 제한을 변경한다. 최소 1MB.
+// SetMaxFileSize changes the maximum file size limit. Minimum 1MB.
 func SetMaxFileSize(size int64) {
 	if size < 1*1024*1024 {
 		size = 1 * 1024 * 1024
@@ -99,29 +99,29 @@ func SetMaxFileSize(size int64) {
 	maxFileSize = size
 }
 
-// GetAllowSymlinks는 symlink 허용 여부를 반환한다.
+// GetAllowSymlinks returns whether symlinks are allowed.
 func GetAllowSymlinks() bool {
 	allowSymlinksMu.RLock()
 	defer allowSymlinksMu.RUnlock()
 	return allowSymlinks
 }
 
-// SetAllowSymlinks는 symlink 허용 여부를 설정한다.
+// SetAllowSymlinks sets whether symlinks are allowed.
 func SetAllowSymlinks(allow bool) {
 	allowSymlinksMu.Lock()
 	defer allowSymlinksMu.Unlock()
 	allowSymlinks = allow
 }
 
-// GetWorkspace는 현재 워크스페이스 경로를 반환한다.
-// 빈 문자열이면 설정되지 않은 것이다.
+// GetWorkspace returns the current workspace path.
+// An empty string means it is not set.
 func GetWorkspace() string {
 	workspaceMu.RLock()
 	defer workspaceMu.RUnlock()
 	return workspace
 }
 
-// SetWorkspace는 워크스페이스 경로를 설정한다.
+// SetWorkspace sets the workspace path.
 func SetWorkspace(path string) {
 	workspaceMu.Lock()
 	defer workspaceMu.Unlock()
@@ -130,61 +130,61 @@ func SetWorkspace(path string) {
 
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
-// ReadFileWithEncoding은 파일을 읽고 UTF-8 텍스트와 인코딩 정보를 반환한다.
-// hintCharset이 비어있지 않으면 (.editorconfig 등에서 온 힌트) 최우선으로 사용한다.
+// ReadFileWithEncoding reads a file and returns UTF-8 text along with encoding info.
+// If hintCharset is non-empty (e.g. from .editorconfig), it takes highest priority.
 func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo, error) {
-	// symlink 검사: allow_symlinks가 false이면 symlink 차단
+	// symlink check: block symlinks if allow_symlinks is false
 	if !GetAllowSymlinks() {
 		if lfi, err := os.Lstat(path); err == nil && lfi.Mode()&os.ModeSymlink != 0 {
 			return "", EncodingInfo{}, fmt.Errorf("symlink not allowed: %s (enable via set_config allow_symlinks=true)", path)
 		}
 	}
 
-	// OOM 방지: 파일 크기 사전 체크
+	// OOM prevention: pre-check file size
 	limit := GetMaxFileSize()
 	fi, err := os.Stat(path)
 	if err != nil {
-		return "", EncodingInfo{}, fmt.Errorf("파일 접근 실패: %w", err)
+		return "", EncodingInfo{}, fmt.Errorf("failed to access file: %w", err)
 	}
 	if fi.Size() > limit {
-		return "", EncodingInfo{}, fmt.Errorf("파일이 너무 큼 (%d bytes, 최대 %d bytes). set_config의 max_file_size로 상한 변경 가능", fi.Size(), limit)
+		return "", EncodingInfo{}, fmt.Errorf("file too large (%d bytes, max %d bytes). Use set_config max_file_size_mb to adjust the limit", fi.Size(), limit)
 	}
 
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return "", EncodingInfo{}, fmt.Errorf("파일 읽기 실패: %w", err)
+		return "", EncodingInfo{}, fmt.Errorf("failed to read file: %w", err)
 	}
 
 	info := EncodingInfo{Charset: "UTF-8", Confidence: 100, UsedSource: "bom"}
 
-	// UTF-8 BOM 확인 (BOM은 항상 최우선)
+	// Check for UTF-8 BOM (BOM always takes highest priority)
 	if bytes.HasPrefix(raw, utf8BOM) {
 		info.HasBOM = true
 		raw = raw[len(utf8BOM):]
 		return string(raw), info, nil
 	}
 
-	// 빈 파일
+	// Empty file
 	if len(raw) == 0 {
 		info.UsedSource = "fallback"
 		return "", info, nil
 	}
 
-	// 인코딩 결정 우선순위:
-	// 1. .editorconfig charset 힌트 (hintCharset)
-	// 2. chardet 자동 감지 (Confidence >= 50)
-	// 3. FallbackEncoding (기본 UTF-8, CLI로 변경 가능)
+	// Encoding decision priority:
+	// 1. .editorconfig charset hint (hintCharset)
+	// 2. chardet auto-detection (Confidence >= 50)
+	// 3. FallbackEncoding (default UTF-8, changeable via CLI)
 
 	charset := ""
 
-	// 1. 힌트 charset
+	// 1. Hint charset
 	if hintCharset != "" {
 		charset = normalizeCharsetName(hintCharset)
 		info.Confidence = 100
 		info.UsedSource = "hint"
 	}
 
-	// 2. chardet 감지 (앞부분 샘플만 사용 — 전체 파일 불필요)
+	// 2. chardet detection (uses only a front sample — full file not needed)
 	if charset == "" {
 		sample := raw
 		if len(sample) > chardetSampleSize {
@@ -199,7 +199,7 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 		}
 	}
 
-	// 3. 폴백
+	// 3. Fallback
 	if charset == "" {
 		charset = normalizeCharsetName(GetFallbackEncoding())
 		info.Confidence = 0
@@ -208,12 +208,12 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 
 	info.Charset = charset
 
-	// UTF-8이면 그대로 반환
+	// Return as-is if UTF-8
 	if info.Charset == "UTF-8" {
 		return string(raw), info, nil
 	}
 
-	// 다른 인코딩이면 UTF-8로 디코딩
+	// Decode to UTF-8 if a different encoding
 	enc, err := ianaindex.IANA.Encoding(info.Charset)
 	if err != nil || enc == nil {
 		info.Charset = "UTF-8"
@@ -229,9 +229,9 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 	return decoded, info, nil
 }
 
-// WriteFileWithEncoding은 UTF-8 텍스트를 원래 인코딩으로 변환하여 저장한다.
+// WriteFileWithEncoding converts UTF-8 text back to the original encoding and saves it.
 func WriteFileWithEncoding(path string, content string, info EncodingInfo) error {
-	// 원본 파일의 퍼미션 유지
+	// Preserve original file permissions
 	perm := os.FileMode(0644)
 	if fi, err := os.Stat(path); err == nil {
 		perm = fi.Mode().Perm()
@@ -250,17 +250,17 @@ func WriteFileWithEncoding(path string, content string, info EncodingInfo) error
 		} else {
 			encoded, err := encodeString(content, enc)
 			if err != nil {
-				return fmt.Errorf("인코딩 변환 실패 (%s): %w", info.Charset, err)
+				return fmt.Errorf("encoding conversion failed (%s): %w", info.Charset, err)
 			}
 			data = encoded
 		}
 	}
 
-	// 원자적 쓰기: 임시 파일에 먼저 쓰고 rename
+	// Atomic write: write to temp file first, then rename
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".agent-tool-*.tmp")
 	if err != nil {
-		// 임시 파일 생성 실패 시 직접 쓰기로 폴백
+		// Fall back to direct write if temp file creation fails
 		return os.WriteFile(path, data, perm)
 	}
 	tmpName := tmp.Name()
@@ -268,26 +268,26 @@ func WriteFileWithEncoding(path string, content string, info EncodingInfo) error
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
-		return fmt.Errorf("임시 파일 쓰기 실패: %w", err)
+		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
-		return fmt.Errorf("임시 파일 닫기 실패: %w", err)
+		return fmt.Errorf("failed to close temp file: %w", err)
 	}
 
-	// 퍼미션 설정
+	// Set permissions
 	os.Chmod(tmpName, perm)
 
-	// 원자적 rename (같은 파일시스템이면 원자적)
+	// Atomic rename (atomic if on the same filesystem)
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
-		// rename 실패 시 직접 쓰기로 폴백 (크로스 드라이브 등)
+		// Fall back to direct write if rename fails (e.g. cross-drive)
 		return os.WriteFile(path, data, perm)
 	}
 	return nil
 }
 
-// DetectLineEnding은 텍스트의 줄바꿈 문자를 감지한다.
+// DetectLineEnding detects the line ending character in text.
 func DetectLineEnding(content string) string {
 	if bytes.Contains([]byte(content), []byte("\r\n")) {
 		return "\r\n"
@@ -295,14 +295,14 @@ func DetectLineEnding(content string) string {
 	return "\n"
 }
 
-// normalizeCharsetName은 .editorconfig의 charset 값을 IANA 이름으로 정규화한다.
+// normalizeCharsetName normalizes .editorconfig charset values to IANA names.
 func normalizeCharsetName(name string) string {
 	lower := strings.ToLower(strings.TrimSpace(name))
 	switch lower {
 	case "utf-8", "utf8":
 		return "UTF-8"
 	case "utf-8-bom":
-		return "UTF-8" // BOM은 별도 처리
+		return "UTF-8" // BOM is handled separately
 	case "euc-kr", "euckr":
 		return "EUC-KR"
 	case "shift_jis", "shift-jis", "shiftjis", "sjis":
@@ -318,8 +318,8 @@ func normalizeCharsetName(name string) string {
 	}
 }
 
-// EncodingWarning은 인코딩 감지 신뢰도가 낮을 때 경고 메시지를 반환한다.
-// 경고가 없으면 빈 문자열을 반환한다.
+// EncodingWarning returns a warning message when encoding detection confidence is low.
+// Returns an empty string if there is no warning.
 func EncodingWarning(info EncodingInfo) string {
 	if !GetEncodingWarnings() {
 		return ""
@@ -337,7 +337,7 @@ func EncodingWarning(info EncodingInfo) string {
 	return ""
 }
 
-// decodeBytes는 enc 인코딩의 바이트를 UTF-8 문자열로 디코딩한다.
+// decodeBytes decodes bytes in the given encoding to a UTF-8 string.
 func decodeBytes(raw []byte, enc encoding.Encoding) (string, error) {
 	reader := transform.NewReader(bytes.NewReader(raw), enc.NewDecoder())
 	decoded, err := io.ReadAll(reader)
@@ -347,9 +347,9 @@ func decodeBytes(raw []byte, enc encoding.Encoding) (string, error) {
 	return string(decoded), nil
 }
 
-// encodeString은 UTF-8 문자열을 enc 인코딩 바이트로 변환한다.
+// encodeString converts a UTF-8 string to bytes in the given encoding.
 func encodeString(s string, enc encoding.Encoding) ([]byte, error) {
-	// UTF-8 계열은 변환 불필요. BOM 접두사는 WriteFileWithEncoding에서 별도 처리한다.
+	// No conversion needed for UTF-8 family. BOM prefix is handled separately in WriteFileWithEncoding.
 	if enc == unicode.UTF8 || enc == unicode.UTF8BOM {
 		return []byte(s), nil
 	}
@@ -365,8 +365,8 @@ func encodeString(s string, enc encoding.Encoding) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// ComputeFileHash는 파일의 원본 바이트에 대한 SHA-256 해시를 16진수 문자열로 반환한다.
-// 인코딩 변환 없이 raw bytes를 해싱하므로 checksum 도구와 동일한 결과를 낸다.
+// ComputeFileHash returns the SHA-256 hash of the file's raw bytes as a hex string.
+// Hashes raw bytes without encoding conversion, producing the same result as the checksum tool.
 func ComputeFileHash(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

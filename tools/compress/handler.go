@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	// maxSingleFileSize는 압축 해제 시 단일 파일의 최대 크기이다 (1GB).
+	// maxSingleFileSize is the maximum size of a single file during extraction (1GB).
 	maxSingleFileSize int64 = 1 << 30
-	// maxTotalExtractSize는 압축 해제 시 전체 추출 크기 상한이다 (5GB).
+	// maxTotalExtractSize is the upper limit for total extracted size (5GB).
 	maxTotalExtractSize int64 = 5 << 30
 )
 
@@ -54,7 +54,7 @@ func HandleCompress(ctx context.Context, req *mcp.CallToolRequest, input Compres
 		return compressError("output must be an absolute path")
 	}
 
-	// 소스 경로 검증
+	// Validate source paths
 	for _, src := range input.Sources {
 		if !filepath.IsAbs(src) {
 			return compressError(fmt.Sprintf("source path must be absolute: %s", src))
@@ -67,7 +67,7 @@ func HandleCompress(ctx context.Context, req *mcp.CallToolRequest, input Compres
 		}
 	}
 
-	// 출력 디렉토리 생성
+	// Create output directory
 	if err := os.MkdirAll(filepath.Dir(input.Output), 0755); err != nil {
 		return compressError(fmt.Sprintf("failed to create output directory: %v", err))
 	}
@@ -237,17 +237,17 @@ func extractZip(archive, outputDir string) (int, int, error) {
 	for _, f := range r.File {
 		target := filepath.Join(outputDir, filepath.FromSlash(f.Name))
 
-		// Zip Slip 방지: filepath.Join이 "../"를 해소한 뒤, 최종 경로가 outputDir 안에
-		// 있는지 확인한다. outputDir 자체(디렉토리 엔트리)도 허용.
-		// 예: "../../etc/passwd" → Join+Clean → "/etc/passwd" → outputDir 밖 → 스킵
+		// Zip Slip prevention: after filepath.Join resolves "../", verify the final path
+		// is inside outputDir. The outputDir itself (directory entries) is also allowed.
+		// Example: "../../etc/passwd" -> Join+Clean -> "/etc/passwd" -> outside outputDir -> skip
 		if !strings.HasPrefix(filepath.Clean(target)+string(os.PathSeparator), cleanOutputDir) &&
 			filepath.Clean(target) != filepath.Clean(outputDir) {
 			continue
 		}
 
-		// ZIP symlink: Go의 archive/zip은 symlink target 읽기를 표준 지원하지 않으므로
-		// allow_symlinks 설정과 무관하게 항상 스킵한다.
-		// (tar와 달리 zip에서 symlink target은 파일 내용으로 저장되어 안전한 검증이 어려움)
+		// ZIP symlink: Go's archive/zip does not natively support reading symlink targets,
+		// so they are always skipped regardless of allow_symlinks setting.
+		// (Unlike tar, zip stores symlink targets as file content, making safe verification difficult)
 		if f.FileInfo().Mode()&os.ModeSymlink != 0 {
 			skippedSymlinks++
 			continue
@@ -258,7 +258,7 @@ func extractZip(archive, outputDir string) (int, int, error) {
 			continue
 		}
 
-		// Zip Bomb 방지: 총 추출 크기 사전 체크
+		// Zip Bomb prevention: pre-check total extracted size
 		totalSize += int64(f.UncompressedSize64)
 		if totalSize > maxTotalExtractSize {
 			return count, skippedSymlinks, fmt.Errorf("total extracted size exceeds limit (%d bytes)", maxTotalExtractSize)
@@ -276,8 +276,8 @@ func extractZip(archive, outputDir string) (int, int, error) {
 	return count, skippedSymlinks, nil
 }
 
-// extractZipFile은 단일 zip 엔트리를 target 경로에 추출한다.
-// Zip Bomb 방지로 maxSingleFileSize를 초과하면 에러를 반환한다.
+// extractZipFile extracts a single zip entry to the target path.
+// Returns an error if maxSingleFileSize is exceeded (Zip Bomb prevention).
 func extractZipFile(f *zip.File, target string) error {
 	rc, err := f.Open()
 	if err != nil {
@@ -291,7 +291,7 @@ func extractZipFile(f *zip.File, target string) error {
 	}
 	defer out.Close()
 
-	// Zip Bomb 방지: 단일 파일 크기 제한. +1 바이트로 초과 감지.
+	// Zip Bomb prevention: single file size limit. Detect overflow with +1 byte.
 	n, err := io.Copy(out, io.LimitReader(rc, maxSingleFileSize+1))
 	if err != nil {
 		return err
@@ -374,7 +374,7 @@ func addFileToTar(tw *tar.Writer, filePath, archivePath string, info os.FileInfo
 	return nil
 }
 
-// extractTarGz는 tar.gz 아카이브를 추출한다. (파일 수, 스킵된 symlink 수, 에러) 반환.
+// extractTarGz extracts a tar.gz archive. Returns (file count, skipped symlink count, error).
 func extractTarGz(archive, outputDir string) (int, int, error) {
 	f, err := os.Open(archive)
 	if err != nil {
@@ -405,8 +405,8 @@ func extractTarGz(archive, outputDir string) (int, int, error) {
 
 		target := filepath.Join(outputDir, filepath.FromSlash(header.Name))
 
-		// Zip Slip 방지: filepath.Join이 "../"를 해소한 뒤, 최종 경로가 outputDir 안에
-		// 있는지 확인한다. outputDir 자체(디렉토리 엔트리)도 허용.
+		// Zip Slip prevention: after filepath.Join resolves "../", verify the final path
+		// is inside outputDir. The outputDir itself (directory entries) is also allowed.
 		if !strings.HasPrefix(filepath.Clean(target)+string(os.PathSeparator), cleanOutputDir) &&
 			filepath.Clean(target) != filepath.Clean(outputDir) {
 			continue
@@ -416,7 +416,7 @@ func extractTarGz(archive, outputDir string) (int, int, error) {
 		case tar.TypeDir:
 			os.MkdirAll(target, 0755)
 		case tar.TypeReg:
-			// Zip Bomb 방지: 총 추출 크기를 사전 체크하여 디스크 고갈 공격을 막는다.
+			// Zip Bomb prevention: pre-check total extracted size to prevent disk exhaustion attacks.
 			totalSize += header.Size
 			if totalSize > maxTotalExtractSize {
 				return count, skippedSymlinks, fmt.Errorf("total extracted size exceeds limit (%d bytes)", maxTotalExtractSize)
@@ -429,8 +429,8 @@ func extractTarGz(archive, outputDir string) (int, int, error) {
 			if err != nil {
 				return count, skippedSymlinks, err
 			}
-			// Zip Bomb 방지: maxSize+1 바이트를 읽어서 초과 여부를 감지한다.
-			// 정확히 maxSize면 정상, maxSize+1이면 초과 → 에러.
+			// Zip Bomb prevention: read maxSize+1 bytes to detect overflow.
+			// Exactly maxSize is OK; maxSize+1 means overflow -> error.
 			n, copyErr := io.Copy(out, io.LimitReader(tr, maxSingleFileSize+1))
 			out.Close()
 			if copyErr != nil {
@@ -441,15 +441,15 @@ func extractTarGz(archive, outputDir string) (int, int, error) {
 			}
 			count++
 		case tar.TypeSymlink, tar.TypeLink:
-			// 기본값(allow_symlinks=false): 보안상 symlink/hardlink를 생성하지 않고 스킵.
-			// set_config allow_symlinks=true로 활성화 가능하나, 활성화해도
-			// 대상 경로가 outputDir 밖이면 Path Traversal 방지를 위해 스킵한다.
+			// Default (allow_symlinks=false): skip symlink/hardlink creation for security.
+			// Can be enabled via set_config allow_symlinks=true, but even when enabled,
+			// links targeting outside outputDir are skipped to prevent path traversal.
 			if !common.GetAllowSymlinks() {
 				skippedSymlinks++
 				break
 			}
-			// symlink target을 절대 경로로 해소하여 outputDir 내부인지 검증.
-			// 상대 경로(예: "../sibling/file")는 symlink 파일 위치 기준으로 해소.
+			// Resolve symlink target to absolute path and verify it is inside outputDir.
+			// Relative paths (e.g. "../sibling/file") are resolved relative to the symlink location.
 			linkTarget := header.Linkname
 			if !filepath.IsAbs(linkTarget) {
 				linkTarget = filepath.Join(filepath.Dir(target), linkTarget)
@@ -457,22 +457,22 @@ func extractTarGz(archive, outputDir string) (int, int, error) {
 			linkTarget = filepath.Clean(linkTarget)
 			if !strings.HasPrefix(linkTarget+string(os.PathSeparator), cleanOutputDir) &&
 				linkTarget != filepath.Clean(outputDir) {
-				skippedSymlinks++ // 예: "../../etc/passwd" → outputDir 밖 → 스킵
+				skippedSymlinks++ // e.g. "../../etc/passwd" -> outside outputDir -> skip
 				break
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return count, skippedSymlinks, err
 			}
-			os.Remove(target) // 기존 파일 충돌 방지
+			os.Remove(target) // prevent conflict with existing file
 			if header.Typeflag == tar.TypeSymlink {
-				// symlink: 원본 상대/절대 경로를 그대로 사용 (해소된 경로는 검증 전용).
-				// 이미 위에서 해소된 경로가 outputDir 안인지 확인했으므로 안전하다.
+				// symlink: use the original relative/absolute path as-is (resolved path is for validation only).
+				// Safety is guaranteed since the resolved path was already verified to be inside outputDir.
 				if err := os.Symlink(header.Linkname, target); err != nil {
-					skippedSymlinks++ // Windows 등에서 권한 부족 시 graceful 스킵
+					skippedSymlinks++ // graceful skip on insufficient permissions (e.g. Windows)
 					break
 				}
 			} else {
-				// hardlink: 해소된 절대 경로로 생성 (outputDir 내부 보장됨).
+				// hardlink: create with the resolved absolute path (guaranteed to be inside outputDir).
 				if err := os.Link(linkTarget, target); err != nil {
 					skippedSymlinks++
 					break

@@ -28,30 +28,30 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*
 		return errorResult("file_path must be an absolute path")
 	}
 
-	// 경로 정규화
+	// Normalize path
 	cleaned := filepath.Clean(input.FilePath)
 
-	// [FIX #4] 경로 구성요소 단위로 ".." 검사 (파일명 내 연속 점 오탐 방지)
+	// [FIX #4] Check for ".." per path component (avoid false positives from consecutive dots in filenames)
 	for _, part := range strings.Split(filepath.ToSlash(cleaned), "/") {
 		if part == ".." {
 			return errorResult("path traversal (..) is not allowed")
 		}
 	}
 
-	// [FIX #2] Windows 예약 장치 이름 차단
+	// [FIX #2] Block Windows reserved device names
 	if runtime.GOOS == "windows" {
 		if err := checkWindowsReserved(cleaned); err != nil {
 			return errorResult(err.Error())
 		}
 	}
 
-	// [FIX #3] 시스템 중요 경로 차단
+	// [FIX #3] Block critical system paths
 	if err := checkDangerousPath(cleaned); err != nil {
 		return errorResult(err.Error())
 	}
 
-	// 파일 정보 확인
-	info, err := os.Lstat(cleaned) // Lstat: 심볼릭 링크를 따라가지 않음
+	// Check file info
+	info, err := os.Lstat(cleaned) // Lstat: does not follow symlinks
 	if err != nil {
 		if os.IsNotExist(err) {
 			return errorResult(fmt.Sprintf("file not found: %s", cleaned))
@@ -59,17 +59,17 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*
 		return errorResult(fmt.Sprintf("cannot access file: %v", err))
 	}
 
-	// 디렉토리 삭제 금지
+	// Directory deletion is not allowed
 	if info.IsDir() {
 		return errorResult("directory deletion is not allowed. Only individual files can be deleted")
 	}
 
-	// 심볼릭 링크 삭제 금지
+	// Symlink deletion is not allowed
 	if info.Mode()&os.ModeSymlink != 0 {
 		return errorResult("symlink deletion is not allowed for safety")
 	}
 
-	// dry_run 모드
+	// dry_run mode
 	if input.DryRun {
 		msg := fmt.Sprintf("[DRY RUN] would delete: %s (%d bytes)", cleaned, info.Size())
 		return &mcp.CallToolResult{
@@ -77,7 +77,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*
 		}, DeleteOutput{Result: msg}, nil
 	}
 
-	// [FIX #1] TOCTOU 완화: 삭제 직전 파일 상태 재확인
+	// [FIX #1] TOCTOU mitigation: re-check file state right before deletion
 	info2, err := os.Lstat(cleaned)
 	if err != nil {
 		return errorResult(fmt.Sprintf("pre-delete check failed: %v", err))
@@ -86,7 +86,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*
 		return errorResult("file type changed before deletion (possible race condition)")
 	}
 
-	// 실제 삭제
+	// Perform actual deletion
 	if err := os.Remove(cleaned); err != nil {
 		return errorResult(fmt.Sprintf("delete failed: %v", err))
 	}
@@ -97,16 +97,16 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*
 	}, DeleteOutput{Result: msg}, nil
 }
 
-// checkWindowsReserved는 Windows 예약 장치 이름과 ADS 경로를 차단한다.
+// checkWindowsReserved blocks Windows reserved device names and ADS paths.
 func checkWindowsReserved(cleaned string) error {
-	// ADS (Alternate Data Stream) 차단: 드라이브 문자의 콜론 이후에 또 콜론이 있으면 ADS
+	// Block ADS (Alternate Data Stream): another colon after the drive letter colon indicates ADS
 	drive := filepath.VolumeName(cleaned)
 	rest := cleaned[len(drive):]
 	if strings.Contains(rest, ":") {
 		return fmt.Errorf("alternate data stream (ADS) paths are not allowed")
 	}
 
-	// 예약 장치 이름 차단
+	// Block reserved device names
 	base := filepath.Base(cleaned)
 	upperBase := strings.ToUpper(strings.TrimSuffix(base, filepath.Ext(base)))
 	reserved := []string{
@@ -122,7 +122,7 @@ func checkWindowsReserved(cleaned string) error {
 	return nil
 }
 
-// checkDangerousPath는 시스템 중요 경로의 파일 삭제를 차단한다.
+// checkDangerousPath blocks file deletion in critical system paths.
 func checkDangerousPath(cleaned string) error {
 	normalized := strings.ToLower(filepath.ToSlash(cleaned))
 
@@ -139,13 +139,13 @@ func checkDangerousPath(cleaned string) error {
 		blocked = []string{
 			"/etc/", "/boot/", "/sbin/", "/usr/sbin/",
 			"/proc/", "/sys/", "/dev/",
-			"/var/run/", "/run/",           // 런타임 소켓/PID
-			"/usr/lib/systemd/",            // systemd 유닛
+			"/var/run/", "/run/",           // runtime sockets/PIDs
+			"/usr/lib/systemd/",            // systemd units
 			"/lib/systemd/",                // CentOS/RHEL systemd
-			"/usr/lib64/",                  // RHEL/CentOS 라이브러리
-			"/lib64/",                      // RHEL/CentOS 라이브러리
-			"/lib/", "/usr/lib/",           // 시스템 라이브러리
-			"/root/",                       // root 홈
+			"/usr/lib64/",                  // RHEL/CentOS libraries
+			"/lib64/",                      // RHEL/CentOS libraries
+			"/lib/", "/usr/lib/",           // system libraries
+			"/root/",                       // root home
 		}
 	}
 

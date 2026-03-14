@@ -31,7 +31,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RenameInput) (*
 	oldCleaned := filepath.Clean(input.OldPath)
 	newCleaned := filepath.Clean(input.NewPath)
 
-	// ".." 트래버설 차단
+	// Block ".." traversal
 	for _, p := range []string{oldCleaned, newCleaned} {
 		for _, part := range strings.Split(filepath.ToSlash(p), "/") {
 			if part == ".." {
@@ -40,12 +40,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RenameInput) (*
 		}
 	}
 
-	// 같은 경로인지 확인
+	// Check if paths are the same
 	if oldCleaned == newCleaned {
 		return errorResult("old_path and new_path are the same")
 	}
 
-	// 원본 존재 확인
+	// Check if source exists
 	oldInfo, err := os.Stat(oldCleaned)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -54,12 +54,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RenameInput) (*
 		return errorResult(fmt.Sprintf("cannot access source: %v", err))
 	}
 
-	// 대상 경로에 이미 파일이 있는지 확인
+	// Check if destination already exists
 	if _, err := os.Stat(newCleaned); err == nil {
 		return errorResult(fmt.Sprintf("destination already exists: %s", newCleaned))
 	}
 
-	// 대상 디렉토리 존재 확인
+	// Check if destination directory exists
 	newDir := filepath.Dir(newCleaned)
 	if _, err := os.Stat(newDir); os.IsNotExist(err) {
 		return errorResult(fmt.Sprintf("destination directory does not exist: %s", newDir))
@@ -78,7 +78,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RenameInput) (*
 		}, RenameOutput{Result: msg}, nil
 	}
 
-	// 실제 이름 변경 (os.Rename은 원자적)
+	// Perform actual rename (os.Rename is atomic)
 	if err := os.Rename(oldCleaned, newCleaned); err != nil {
 		return errorResult(fmt.Sprintf("rename failed: %v", err))
 	}

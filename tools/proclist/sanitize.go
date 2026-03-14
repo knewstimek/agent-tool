@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// sensitiveArgFlags는 다음 인자를 마스킹해야 하는 플래그 목록이다.
-// 주의: "-p"는 ssh -p 22 등 오탐이 많아 제외.
+// sensitiveArgFlags lists flags whose next argument should be masked.
+// Note: "-p" is excluded due to frequent false positives (e.g. ssh -p 22).
 var sensitiveArgFlags = map[string]bool{
 	"--password":      true,
 	"--passwd":        true,
@@ -22,7 +22,7 @@ var sensitiveArgFlags = map[string]bool{
 	"--client-secret": true,
 }
 
-// sensitiveEqualPrefixes는 "=" 형태로 값이 오는 플래그이다.
+// sensitiveEqualPrefixes lists flags that take values in "=" form.
 var sensitiveEqualPrefixes = []string{
 	"--password=",
 	"--passwd=",
@@ -38,30 +38,30 @@ var sensitiveEqualPrefixes = []string{
 	"--client-secret=",
 }
 
-// inlineEnvPattern은 커맨드라인의 KEY=value 형태 민감 환경변수를 매칭한다.
+// inlineEnvPattern matches sensitive environment variables in KEY=value form in command lines.
 var inlineEnvPattern = regexp.MustCompile(`(?i)\b(PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|CREDENTIAL|ACCESS_KEY|SIGNING_KEY)=(\S+)`)
 
-// quotedArgPatterns는 따옴표로 감싼 민감 인자값을 매칭한다.
-// Go RE2는 백레퍼런스 미지원이므로 큰따옴표/작은따옴표 각각 패턴 정의.
+// quotedArgPatterns match sensitive argument values enclosed in quotes.
+// Go RE2 does not support backreferences, so separate patterns for double and single quotes.
 var quotedArgPatternDQ = regexp.MustCompile(`(?i)(--(?:password|passwd|pass|token|secret|key|api-key|apikey|auth|credential|access-token|client-secret))\s+"[^"]*"`)
 var quotedArgPatternSQ = regexp.MustCompile(`(?i)(--(?:password|passwd|pass|token|secret|key|api-key|apikey|auth|credential|access-token|client-secret))\s+'[^']*'`)
 
-// urlCredentialPattern은 URL 안의 user:password@ 패턴을 매칭한다.
+// urlCredentialPattern matches user:password@ patterns inside URLs.
 var urlCredentialPattern = regexp.MustCompile(`://([^:@/]+):([^@]+)@`)
 
-// bearerPattern은 Bearer/Basic 토큰을 매칭한다.
+// bearerPattern matches Bearer/Basic tokens.
 var bearerPattern = regexp.MustCompile(`(?i)(Bearer|Basic)\s+\S+`)
 
-// SanitizeCommandLine은 커맨드라인에서 민감한 인자를 마스킹한다.
+// SanitizeCommandLine masks sensitive arguments in a command line string.
 func SanitizeCommandLine(cmdline string) string {
 	if cmdline == "" {
 		return cmdline
 	}
 
-	// URL 안의 credential 마스킹: user:pass@ → user:***@
+	// Mask credentials in URLs: user:pass@ → user:***@
 	result := urlCredentialPattern.ReplaceAllString(cmdline, "://$1:***@")
 
-	// Bearer/Basic 토큰 마스킹
+	// Mask Bearer/Basic tokens
 	result = bearerPattern.ReplaceAllStringFunc(result, func(match string) string {
 		parts := strings.SplitN(match, " ", 2)
 		if len(parts) == 2 {
@@ -70,14 +70,14 @@ func SanitizeCommandLine(cmdline string) string {
 		return match
 	})
 
-	// 따옴표로 감싼 민감 인자 마스킹: --password "secret" → --password ***
+	// Mask quoted sensitive arguments: --password "secret" → --password ***
 	result = quotedArgPatternDQ.ReplaceAllString(result, "$1 ***")
 	result = quotedArgPatternSQ.ReplaceAllString(result, "$1 ***")
 
-	// 인라인 환경변수 마스킹: PASSWORD=secret → PASSWORD=***
+	// Mask inline environment variables: PASSWORD=secret → PASSWORD=***
 	result = inlineEnvPattern.ReplaceAllString(result, "${1}=***")
 
-	// --flag=value 형태 마스킹
+	// Mask --flag=value form
 	for _, prefix := range sensitiveEqualPrefixes {
 		lowerResult := strings.ToLower(result)
 		idx := 0
@@ -88,7 +88,7 @@ func SanitizeCommandLine(cmdline string) string {
 			}
 			absPos := idx + pos
 			eqPos := absPos + len(prefix)
-			// 값의 끝 찾기 (공백 또는 문자열 끝)
+			// Find end of value (space or end of string)
 			endPos := strings.IndexByte(result[eqPos:], ' ')
 			if endPos < 0 {
 				result = result[:eqPos] + "***"
@@ -104,7 +104,7 @@ func SanitizeCommandLine(cmdline string) string {
 		}
 	}
 
-	// -p, --password 다음 인자 마스킹
+	// Mask the argument following -p, --password, etc.
 	parts := strings.Fields(result)
 	for i := 0; i < len(parts)-1; i++ {
 		if sensitiveArgFlags[strings.ToLower(parts[i])] {

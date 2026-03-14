@@ -10,10 +10,10 @@ import (
 func pythonCommands() []string { return []string{"python", "py"} }
 func pipCommands() []string   { return []string{"pip", "pip3"} }
 
-// lookupCmd는 Windows에서 where 명령이다.
+// lookupCmd is the 'where' command on Windows.
 const lookupCmd = "where"
 
-// injectKnownPaths는 Windows 전용 알려진 설치 경로를 주입한다.
+// injectKnownPaths injects Windows-specific known installation paths.
 func injectKnownPaths(defs []ToolDef) {
 	home := os.Getenv("USERPROFILE")
 	pf := os.Getenv("ProgramFiles")
@@ -21,7 +21,7 @@ func injectKnownPaths(defs []ToolDef) {
 	appdata := os.Getenv("APPDATA")
 	localAppdata := os.Getenv("LOCALAPPDATA")
 
-	// 사용자 로컬 도구 경로
+	// User local tool paths
 	userBin := filepath.Join(home, "bin")                   // ~/bin (manual installs)
 	scoopShims := filepath.Join(home, "scoop", "shims")     // scoop package manager
 	npmGlobal := filepath.Join(appdata, "npm")              // npm -g installs
@@ -141,7 +141,7 @@ func injectKnownPaths(defs []ToolDef) {
 
 	for i := range defs {
 		if paths, ok := known[defs[i].Name]; ok {
-			// 빈 prefix 경로 필터 (환경변수가 설정되지 않은 경우 상대경로 방지)
+			// Filter out empty prefix paths (prevent relative paths when env vars are not set)
 			var valid []string
 			for _, p := range paths {
 				if !filepath.IsAbs(p) {
@@ -154,13 +154,13 @@ func injectKnownPaths(defs []ToolDef) {
 	}
 }
 
-// vswhereExe는 vswhere.exe의 표준 위치를 반환한다.
+// vswhereExe returns the standard location of vswhere.exe.
 func vswhereExe() string {
 	pfx86 := os.Getenv("ProgramFiles(x86)")
 	return filepath.Join(pfx86, "Microsoft Visual Studio", "Installer", "vswhere.exe")
 }
 
-// vsBasePaths는 Visual Studio 표준 설치 경로 후보이다 (glob용).
+// vsBasePaths returns Visual Studio standard installation path candidates (for glob).
 func vsBasePaths() []string {
 	pf := os.Getenv("ProgramFiles")
 	pfx86 := os.Getenv("ProgramFiles(x86)")

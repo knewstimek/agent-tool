@@ -15,12 +15,12 @@ import (
 
 const execTimeout = 3 * time.Second
 
-// DiscoverAll은 카탈로그의 모든 도구를 병렬로 탐색한다.
-// category가 비어있거나 "all"이면 전체 탐색.
+// DiscoverAll discovers all tools from the catalog in parallel.
+// If category is empty or "all", discovers everything.
 func DiscoverAll(category string) []ToolInfo {
 	catalog := Catalog()
 
-	// 탐색 대상 필터링
+	// Filter discovery targets
 	var targets []ToolDef
 	for _, def := range catalog {
 		if category != "" && category != "all" && def.Category != category {
@@ -29,7 +29,7 @@ func DiscoverAll(category string) []ToolInfo {
 		targets = append(targets, def)
 	}
 
-	// 병렬 탐색
+	// Parallel discovery
 	results := make([]ToolInfo, len(targets))
 	var wg sync.WaitGroup
 	for i, def := range targets {
@@ -41,7 +41,7 @@ func DiscoverAll(category string) []ToolInfo {
 	}
 	wg.Wait()
 
-	// 특수 도구 (병렬)
+	// Special tools (parallel)
 	var clInfo, pyInfo ToolInfo
 	var wg2 sync.WaitGroup
 	if category == "" || category == "all" || category == "c_cpp" {
@@ -70,11 +70,11 @@ func DiscoverAll(category string) []ToolInfo {
 	return results
 }
 
-// discoverTool은 단일 도구를 탐색한다.
+// discoverTool discovers a single tool.
 func discoverTool(def ToolDef) ToolInfo {
 	info := ToolInfo{Name: def.Name}
 
-	// 1. 환경변수 탐색
+	// 1. Environment variable lookup
 	for _, env := range def.EnvVars {
 		val := os.Getenv(env)
 		if val == "" {
@@ -86,7 +86,7 @@ func discoverTool(def ToolDef) ToolInfo {
 		} else {
 			candidate = val
 		}
-		// Windows: .exe 자동 추가
+		// Windows: auto-append .exe
 		candidate = withExeSuffix(candidate)
 		if fileExists(candidate) {
 			info.Path = candidate
@@ -96,7 +96,7 @@ func discoverTool(def ToolDef) ToolInfo {
 		}
 	}
 
-	// 2. where/which 탐색
+	// 2. where/which lookup
 	for _, cmd := range def.Commands {
 		if path := lookupPath(cmd); path != "" {
 			info.Path = path
@@ -106,14 +106,14 @@ func discoverTool(def ToolDef) ToolInfo {
 		}
 	}
 
-	// 3. 알려진 경로 탐색
+	// 3. Known path lookup
 	for _, p := range def.KnownPaths {
 		p = withExeSuffix(p)
-		// glob 패턴 지원 (* 포함)
+		// Support glob patterns (containing *)
 		if strings.Contains(p, "*") {
 			matches, err := filepath.Glob(p)
 			if err == nil && len(matches) > 0 {
-				// 가장 최신 (마지막) 항목 사용
+				// Use the latest (last) entry
 				candidate := matches[len(matches)-1]
 				if fileExists(candidate) {
 					info.Path = candidate
@@ -135,7 +135,7 @@ func discoverTool(def ToolDef) ToolInfo {
 	return info // not found
 }
 
-// lookupPath는 where(Windows) 또는 which(Linux)로 명령을 찾는다.
+// lookupPath finds a command using where (Windows) or which (Linux).
 func lookupPath(cmd string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
 	defer cancel()
@@ -145,14 +145,14 @@ func lookupPath(cmd string) string {
 		return ""
 	}
 
-	// where는 여러 줄 반환 가능 → 첫 줄만 사용
+	// where may return multiple lines -> use the first line
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(lines) == 0 {
 		return ""
 	}
 	path := strings.TrimSpace(lines[0])
 
-	// Windows의 where는 Microsoft Store 앱 링크를 반환할 수 있음 → 필터
+	// Windows 'where' may return Microsoft Store app links -> filter them out
 	if runtime.GOOS == "windows" {
 		for _, line := range lines {
 			p := strings.TrimSpace(line)
@@ -163,7 +163,7 @@ func lookupPath(cmd string) string {
 				return p
 			}
 		}
-		// WindowsApps 아닌 경로가 없으면 첫 번째 유효 경로라도 반환
+		// If no non-WindowsApps path found, fall through to return the first valid path
 	}
 
 	if path != "" && fileExists(path) {
@@ -172,7 +172,7 @@ func lookupPath(cmd string) string {
 	return ""
 }
 
-// getVersion은 도구의 버전 문자열을 반환한다.
+// getVersion returns the version string of a tool.
 func getVersion(path, versionArg string) string {
 	if versionArg == "" {
 		return ""
@@ -182,8 +182,8 @@ func getVersion(path, versionArg string) string {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, path, versionArg)
-	// java -version은 stderr에 출력. 출력 크기를 4KB로 제한 (악성 바이너리 방어).
-	// stdout/stderr가 동일 limitWriter를 공유해야 limit이 정확하게 적용됨.
+	// java -version outputs to stderr. Limit output to 4KB (defense against malicious binaries).
+	// stdout/stderr must share the same limitWriter for accurate limit enforcement.
 	var buf bytes.Buffer
 	lw := &limitWriter{w: &buf, limit: 4096}
 	cmd.Stdout = lw
@@ -198,14 +198,14 @@ func getVersion(path, versionArg string) string {
 		return ""
 	}
 
-	// 첫 줄만 취하고 정리
+	// Take only the first line and clean up
 	firstLine := strings.Split(raw, "\n")[0]
 	firstLine = strings.TrimSpace(firstLine)
 
 	return cleanVersion(firstLine)
 }
 
-// cleanVersion은 버전 출력에서 불필요한 부분을 제거한다.
+// cleanVersion removes unnecessary parts from version output.
 func cleanVersion(s string) string {
 	// "go version go1.22.1 windows/amd64" → "go1.22.1"
 	if strings.HasPrefix(s, "go version ") {
@@ -269,7 +269,7 @@ func cleanVersion(s string) string {
 			return parts[1]
 		}
 	}
-	// "gcc (Ubuntu 13.2.0-4ubuntu3) 13.2.0" → 마지막 버전 번호
+	// "gcc (Ubuntu 13.2.0-4ubuntu3) 13.2.0" -> last version number
 	if strings.Contains(s, "gcc") || strings.Contains(s, "g++") {
 		parts := strings.Fields(s)
 		if len(parts) > 0 {
@@ -313,37 +313,37 @@ func cleanVersion(s string) string {
 		}
 	}
 
-	// 그 외: 그대로 반환 (최대 80자 truncate)
+	// Otherwise: return as-is (truncate to 80 chars max)
 	if len(s) > 80 {
 		s = s[:80]
 	}
 	return s
 }
 
-// fileExists는 경로에 파일이 존재하는지 확인한다 (디렉토리 제외).
+// fileExists checks if a file exists at the path (excluding directories).
 func fileExists(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && !fi.IsDir()
 }
 
-// withExeSuffix는 Windows에서 .exe 확장자가 없으면 추가한다.
+// withExeSuffix appends .exe suffix on Windows if not already present.
 func withExeSuffix(path string) string {
 	if runtime.GOOS != "windows" {
 		return path
 	}
-	// 이미 확장자가 있으면 (.exe, .cmd, .bat) 그대로
+	// If already has an extension (.exe, .cmd, .bat), keep as-is
 	ext := strings.ToLower(filepath.Ext(path))
 	if ext == ".exe" || ext == ".cmd" || ext == ".bat" {
 		return path
 	}
-	// glob 패턴은 건드리지 않음
+	// Do not modify glob patterns
 	if strings.Contains(path, "*") {
 		return path
 	}
 	return path + ".exe"
 }
 
-// limitWriter는 최대 limit 바이트까지만 쓰는 io.Writer이다.
+// limitWriter is an io.Writer that writes at most 'limit' bytes.
 type limitWriter struct {
 	w       io.Writer
 	limit   int
@@ -353,7 +353,7 @@ type limitWriter struct {
 func (lw *limitWriter) Write(p []byte) (int, error) {
 	remaining := lw.limit - lw.written
 	if remaining <= 0 {
-		return len(p), nil // 초과분은 버림 (에러 아님)
+		return len(p), nil // discard excess (not an error)
 	}
 	if len(p) > remaining {
 		p = p[:remaining]

@@ -22,7 +22,7 @@ type ConvertOutput struct {
 	Result string `json:"result"`
 }
 
-// Handle은 파일의 인코딩을 변환한다.
+// Handle converts a file's encoding.
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConvertInput) (*mcp.CallToolResult, ConvertOutput, error) {
 	if input.FilePath == "" {
 		return errorResult("file_path is required")
@@ -34,13 +34,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConvertInput) (
 		return errorResult("to_encoding is required")
 	}
 
-	// 대상 인코딩 파싱
+	// Parse target encoding
 	targetCharset, targetBOM := parseTargetEncoding(input.ToEncoding)
 	if targetCharset == "" {
 		return errorResult(fmt.Sprintf("unsupported encoding: %s\nSupported: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1, UTF-16BE, UTF-16LE, ASCII, Windows-1252, Big5, GB18030", input.ToEncoding))
 	}
 
-	// 파일 존재 확인
+	// Check file existence
 	fi, err := os.Stat(input.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -52,14 +52,14 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConvertInput) (
 		return errorResult("path is a directory, not a file")
 	}
 
-	// 원본 파일 읽기 (현재 인코딩 자동 감지)
+	// Read source file (auto-detect current encoding)
 	hintCharset := edit.FindEditorConfigCharset(input.FilePath)
 	content, srcInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
 	}
 
-	// 이미 같은 인코딩이면 스킵
+	// Skip if already the same encoding
 	if srcInfo.Charset == targetCharset && srcInfo.HasBOM == targetBOM {
 		msg := fmt.Sprintf("File is already %s, no conversion needed", formatEncName(targetCharset, targetBOM))
 		return &mcp.CallToolResult{
@@ -67,7 +67,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConvertInput) (
 		}, ConvertOutput{Result: msg}, nil
 	}
 
-	// 대상 인코딩으로 쓰기
+	// Write with target encoding
 	dstInfo := common.EncodingInfo{
 		Charset: targetCharset,
 		HasBOM:  targetBOM,
@@ -100,7 +100,7 @@ Example: convert EUC-KR file to UTF-8, or add/remove UTF-8 BOM.`,
 	}, Handle)
 }
 
-// parseTargetEncoding은 사용자 입력을 (charset, hasBOM) 쌍으로 파싱한다.
+// parseTargetEncoding parses user input into a (charset, hasBOM) pair.
 func parseTargetEncoding(s string) (string, bool) {
 	lower := strings.ToLower(strings.TrimSpace(s))
 	switch lower {

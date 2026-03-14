@@ -33,7 +33,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SysInfoInput) (
 	sb.WriteString(fmt.Sprintf("OS: %s/%s\n", runtime.GOOS, runtime.GOARCH))
 	sb.WriteString(fmt.Sprintf("CPU cores: %d (logical)\n", runtime.NumCPU()))
 
-	// 메모리 정보
+	// Memory info
 	memTotal, memAvail, err := getMemoryInfo()
 	if err == nil {
 		sb.WriteString(fmt.Sprintf("RAM total: %s\n", formatBytes(memTotal)))
@@ -41,7 +41,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SysInfoInput) (
 			formatBytes(memAvail), float64(memAvail)/float64(memTotal)*100))
 	}
 
-	// 디스크 정보
+	// Disk info
 	disks, err := getDiskInfo()
 	if err == nil && len(disks) > 0 {
 		sb.WriteString("\nDisk:\n")
@@ -52,7 +52,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SysInfoInput) (
 		}
 	}
 
-	// CPU 사용률 측정 (duration_sec > 0일 때)
+	// Measure CPU usage (when duration_sec > 0)
 	if input.DurationSec >= 1 {
 		duration := time.Duration(input.DurationSec) * time.Second
 		cpuPercent, err := measureCPU(duration)
@@ -61,32 +61,32 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SysInfoInput) (
 		}
 	}
 
-	// 호스트명
+	// Hostname
 	hostname := getHostname()
 	if hostname != "" {
 		sb.WriteString(fmt.Sprintf("\nHostname: %s\n", hostname))
 	}
 
-	// 업타임
+	// Uptime
 	uptime, err := getUptime()
 	if err == nil {
 		sb.WriteString(fmt.Sprintf("Uptime: %s\n", formatDuration(uptime)))
-		// 부팅 시각 계산
+		// Calculate boot time
 		bootTime := time.Now().Add(-uptime)
 		sb.WriteString(fmt.Sprintf("Boot time: %s\n", bootTime.Format("2006-01-02 15:04:05")))
 	}
 
-	// 시간대
+	// Timezone
 	zone, offset := time.Now().Zone()
 	sb.WriteString(fmt.Sprintf("\nTimezone: %s (UTC%+d)\n", zone, offset/3600))
 
-	// 시스템 로캘/언어
+	// System locale/language
 	locale := getLocale()
 	if locale != "" {
 		sb.WriteString(fmt.Sprintf("Locale: %s\n", locale))
 	}
 
-	// Go 런타임 버전
+	// Go runtime version
 	sb.WriteString(fmt.Sprintf("Go runtime: %s\n", runtime.Version()))
 
 	result := sb.String()
@@ -102,7 +102,7 @@ func Register(server *mcp.Server) {
 	}, Handle)
 }
 
-// DiskInfo는 디스크 사용 정보이다.
+// DiskInfo represents disk usage information.
 type DiskInfo struct {
 	Path  string
 	Total uint64

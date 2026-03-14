@@ -22,7 +22,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input FindToolsInput)
 		cat = "all"
 	}
 
-	// 카테고리 유효성 검사
+	// Validate category
 	if cat != "all" {
 		valid := false
 		for _, c := range AllCategories() {
@@ -58,7 +58,7 @@ func formatResults(results []ToolInfo, category string) string {
 	var sb strings.Builder
 	sb.WriteString("=== Development Tools ===\n")
 
-	// 카테고리별 그룹화
+	// Group by category
 	grouped := make(map[string][]ToolInfo)
 	for _, r := range results {
 		cat := categoryOf(r.Name)
@@ -95,7 +95,7 @@ func formatResults(results []ToolInfo, category string) string {
 		}
 	}
 
-	// 카테고리에 속하지 않는 특수 도구 (cl, py launcher)
+	// Special tools not belonging to any category (cl, py launcher)
 	var uncategorized []ToolInfo
 	for _, r := range results {
 		if categoryOf(r.Name) == "" {
@@ -118,14 +118,14 @@ func formatResults(results []ToolInfo, category string) string {
 	return sb.String()
 }
 
-// categoryOf는 도구 이름의 카테고리를 반환한다.
+// categoryOf returns the category for a tool name.
 func categoryOf(name string) string {
 	for _, def := range Catalog() {
 		if def.Name == name {
 			return def.Category
 		}
 	}
-	// 특수 도구
+	// Special tools
 	switch {
 	case strings.Contains(name, "MSVC"):
 		return "c_cpp"

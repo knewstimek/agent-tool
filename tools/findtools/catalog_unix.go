@@ -10,14 +10,14 @@ import (
 func pythonCommands() []string { return []string{"python3", "python"} }
 func pipCommands() []string   { return []string{"pip3", "pip"} }
 
-// lookupCmd는 Unix에서 which 명령이다.
+// lookupCmd is the 'which' command on Unix.
 const lookupCmd = "which"
 
-// injectKnownPaths는 Linux/macOS 전용 알려진 설치 경로를 주입한다.
+// injectKnownPaths injects Linux/macOS-specific known installation paths.
 func injectKnownPaths(defs []ToolDef) {
 	home := os.Getenv("HOME")
 
-	// 사용자 로컬 도구 경로
+	// User local tool paths
 	userBin := filepath.Join(home, "bin")          // ~/bin (manual installs)
 	localBin := filepath.Join(home, ".local", "bin") // ~/.local/bin (pip, pipx, etc.)
 	brewPrefix := "/opt/homebrew/bin"                // Homebrew (Apple Silicon)
@@ -150,7 +150,7 @@ func injectKnownPaths(defs []ToolDef) {
 
 	for i := range defs {
 		if paths, ok := known[defs[i].Name]; ok {
-			// 빈 prefix 경로 필터 (HOME이 비어있을 때 상대경로 방지)
+			// Filter out empty prefix paths (prevent relative paths when HOME is empty)
 			var valid []string
 			for _, p := range paths {
 				if !filepath.IsAbs(p) {

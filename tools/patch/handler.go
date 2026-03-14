@@ -14,7 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// maxPatchSize는 패치 텍스트의 최대 크기이다 (OOM 방지).
+// maxPatchSize is the maximum size of patch text (to prevent OOM).
 const maxPatchSize = 10 * 1024 * 1024 // 10MB
 
 type PatchInput struct {
@@ -53,12 +53,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PatchInput) (*m
 		return errorResult("patch is required")
 	}
 
-	// 패치 텍스트 크기 제한 (OOM 방지)
+	// Limit patch text size (to prevent OOM)
 	if len(input.Patch) > maxPatchSize {
 		return errorResult(fmt.Sprintf("patch too large (%d bytes, max %d bytes)", len(input.Patch), maxPatchSize))
 	}
 
-	// 패치 파싱
+	// Parse the patch
 	hunks, err := parseUnifiedDiff(input.Patch)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to parse patch: %v", err))
@@ -67,33 +67,33 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PatchInput) (*m
 		return errorResult("no hunks found in patch")
 	}
 
-	// 파일 읽기 (인코딩 인식)
+	// Read file (encoding-aware)
 	hintCharset := edit.FindEditorConfigCharset(input.FilePath)
 	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
 	}
 
-	// CRLF → LF 정규화
+	// Normalize CRLF to LF
 	lineEnding := "\n"
 	if strings.Contains(content, "\r\n") {
 		lineEnding = "\r\n"
 		content = strings.ReplaceAll(content, "\r\n", "\n")
 	}
 
-	// 줄 분할
+	// Split into lines
 	lines := strings.Split(content, "\n")
-	// trailing empty line 처리
+	// Handle trailing empty line
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 
-	// hunk 적용 (역순 — 뒤에서부터 적용해야 줄번호가 밀리지 않음)
+	// Apply hunks in reverse order — applying from the end prevents line number shifts
 	for i := len(hunks) - 1; i >= 0; i-- {
 		h := hunks[i]
 		startIdx := h.srcStart - 1 // 0-based
 
-		// startIdx 유효성 검증
+		// Validate startIdx
 		if startIdx < 0 {
 			return errorResult(fmt.Sprintf("hunk %d: invalid source start line %d", i+1, h.srcStart))
 		}
@@ -101,7 +101,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PatchInput) (*m
 			return errorResult(fmt.Sprintf("hunk %d: source start line %d exceeds file length %d", i+1, h.srcStart, len(lines)))
 		}
 
-		// context line 검증 + 실제 소스 라인 수 카운트
+		// Verify context lines + count actual source lines consumed
 		srcIdx := startIdx
 		srcConsumed := 0
 		for _, hl := range h.lines {
@@ -117,7 +117,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PatchInput) (*m
 			}
 		}
 
-		// 치환 적용
+		// Apply substitution
 		var newLines []string
 		srcIdx = startIdx
 		for _, hl := range h.lines {
@@ -132,13 +132,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PatchInput) (*m
 				if srcIdx >= len(lines) {
 					return errorResult(fmt.Sprintf("hunk %d: index out of range at line %d during apply", i+1, srcIdx+1))
 				}
-				srcIdx++ // 삭제 — 건너뜀
+				srcIdx++ // delete — skip
 			case '+':
 				newLines = append(newLines, hl.text)
 			}
 		}
 
-		// lines 교체 (실제 소비한 줄 수 사용 — 헤더의 srcCount가 아닌 실측값)
+		// Replace lines (using actual consumed line count, not the header's srcCount)
 		result := make([]string, 0, len(lines)-srcConsumed+len(newLines))
 		result = append(result, lines[:startIdx]...)
 		result = append(result, newLines...)
@@ -146,19 +146,19 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PatchInput) (*m
 		lines = result
 	}
 
-	// 결과 조합
+	// Combine result
 	output := strings.Join(lines, "\n")
 	if output != "" {
-		output += "\n" // trailing newline 복원
+		output += "\n" // restore trailing newline
 	}
 
-	// 원래 줄바꿈 복원
+	// Restore original line endings
 	if lineEnding == "\r\n" {
 		output = strings.ReplaceAll(output, "\n", "\r\n")
 	}
 
 	if input.DryRun {
-		// 줄 수 변화 계산
+		// Calculate line count change
 		origLineCount := len(strings.Split(content, "\n"))
 		newLineCount := len(lines)
 		delta := newLineCount - origLineCount
@@ -173,7 +173,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PatchInput) (*m
 		}, PatchOutput{Result: msg}, nil
 	}
 
-	// 파일 쓰기 (인코딩 보존)
+	// Write file (preserving encoding)
 	if err := common.WriteFileWithEncoding(input.FilePath, output, encInfo); err != nil {
 		return errorResult(fmt.Sprintf("failed to write file: %v", err))
 	}
@@ -194,11 +194,11 @@ Use dry_run=true to preview without modifying the file.`,
 	}, Handle)
 }
 
-// parseUnifiedDiff는 unified diff 문자열에서 hunk들을 추출한다.
+// parseUnifiedDiff extracts hunks from a unified diff string.
 func parseUnifiedDiff(patch string) ([]hunk, error) {
-	// CRLF 정규화
+	// Normalize CRLF
 	patch = strings.ReplaceAll(patch, "\r\n", "\n")
-	// trailing newlines 제거
+	// Remove trailing newlines
 	patch = strings.TrimRight(patch, "\n")
 	lines := strings.Split(patch, "\n")
 
@@ -206,7 +206,7 @@ func parseUnifiedDiff(patch string) ([]hunk, error) {
 	var current *hunk
 
 	for _, line := range lines {
-		// --- / +++ 헤더 스킵
+		// Skip --- / +++ headers
 		if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
 			continue
 		}
@@ -250,7 +250,7 @@ func parseUnifiedDiff(patch string) ([]hunk, error) {
 		}
 
 		if len(line) == 0 {
-			// 빈 줄은 context 줄로 처리 (실제 diff에서 빈 context line = " " 접두사 없는 빈 줄)
+			// Treat empty lines as context lines (in real diffs, empty context lines have no " " prefix)
 			current.lines = append(current.lines, hunkLine{op: ' ', text: ""})
 			continue
 		}
@@ -265,9 +265,9 @@ func parseUnifiedDiff(patch string) ([]hunk, error) {
 		case '+':
 			current.lines = append(current.lines, hunkLine{op: '+', text: text})
 		case '\\':
-			// "\ No newline at end of file" — 무시
+			// "\ No newline at end of file" — ignore
 		default:
-			// hunk 밖의 일반 텍스트 — 무시
+			// Plain text outside a hunk — ignore
 		}
 	}
 

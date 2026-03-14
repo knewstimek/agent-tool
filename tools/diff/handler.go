@@ -36,7 +36,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DiffInput) (*mc
 		ctxLines = 3
 	}
 
-	// 인코딩 인식 읽기
+	// Encoding-aware reading
 	hintA := edit.FindEditorConfigCharset(input.FileA)
 	contentA, _, err := common.ReadFileWithEncoding(input.FileA, hintA)
 	if err != nil {
@@ -79,35 +79,35 @@ Max 50,000 lines per file.`,
 	}, Handle)
 }
 
-// splitLines는 줄 단위로 분할한다. 빈 문자열이면 빈 슬라이스를 반환한다.
+// splitLines splits a string into lines. Returns nil for empty strings.
 func splitLines(s string) []string {
 	if s == "" {
 		return nil
 	}
-	// CRLF → LF 정규화
+	// Normalize CRLF to LF
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	lines := strings.Split(s, "\n")
-	// 마지막 빈 줄 제거 (trailing newline)
+	// Remove trailing empty line (from trailing newline)
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
 }
 
-// --- LCS 기반 unified diff ---
+// --- LCS-based unified diff ---
 
-// lcs는 Myers 알고리즘 대신 간단한 DP 기반 LCS를 사용한다.
-// O(nm) 메모리이지만, maxDiffLines(5만줄) 제한으로 실용적이다.
-// 5만줄 × 5만줄은 너무 크므로, 작은 파일에만 full LCS를 사용하고
-// 큰 파일은 라인 해시 기반 근사 diff를 사용한다.
+// Uses a simple DP-based LCS instead of Myers algorithm.
+// O(nm) memory, but practical with the maxDiffLines (50K lines) limit.
+// Since 50K x 50K is too large, full LCS is only used for small files;
+// large files use a line-hash based approximate diff.
 func unifiedDiff(nameA, nameB string, a, b []string, ctxLines int) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("--- %s\n+++ %s\n", nameA, nameB))
 
-	// 편집 스크립트 계산
+	// Compute edit script
 	edits := computeEdits(a, b)
 
-	// hunk 그룹화
+	// Group into hunks
 	hunks := groupHunks(edits, len(a), len(b), ctxLines)
 
 	for _, hunk := range hunks {
@@ -130,7 +130,7 @@ type editEntry struct {
 	line string
 }
 
-// computeEdits는 a→b 변환에 필요한 편집 스크립트를 반환한다.
+// computeEdits returns the edit script needed to transform a into b.
 func computeEdits(a, b []string) []editEntry {
 	return computeEditsWithDepth(a, b, 0)
 }
@@ -140,17 +140,17 @@ const maxRecursionDepth = 5
 func computeEditsWithDepth(a, b []string, depth int) []editEntry {
 	n, m := len(a), len(b)
 
-	// 재귀 깊이 초과 시 전부 삭제+삽입으로 처리
+	// When recursion depth is exceeded, fall back to delete-all + insert-all
 	if depth >= maxRecursionDepth {
 		return bruteForceEdits(a, b)
 	}
 
-	// 큰 파일: 라인 해시 기반 간소화
+	// Large files: use line-hash based simplification
 	if int64(n)*int64(m) > 10_000_000 {
 		return computeEditsHashed(a, b, depth)
 	}
 
-	// 작은 파일: 표준 LCS DP
+	// Small files: standard LCS DP
 	// dp[i][j] = LCS length of a[:i], b[:j]
 	dp := make([][]int, n+1)
 	for i := range dp {
@@ -168,7 +168,7 @@ func computeEditsWithDepth(a, b []string, depth int) []editEntry {
 		}
 	}
 
-	// 역추적
+	// Backtrack
 	var edits []editEntry
 	i, j := n, m
 	for i > 0 || j > 0 {
@@ -185,7 +185,7 @@ func computeEditsWithDepth(a, b []string, depth int) []editEntry {
 		}
 	}
 
-	// 역순 → 순서 정렬
+	// Reverse to get correct order
 	for left, right := 0, len(edits)-1; left < right; left, right = left+1, right-1 {
 		edits[left], edits[right] = edits[right], edits[left]
 	}
@@ -193,7 +193,7 @@ func computeEditsWithDepth(a, b []string, depth int) []editEntry {
 	return edits
 }
 
-// bruteForceEdits는 전부 삭제+삽입으로 처리한다 (재귀 깊이 초과 시 사용).
+// bruteForceEdits treats everything as delete + insert (used when recursion depth is exceeded).
 func bruteForceEdits(a, b []string) []editEntry {
 	var edits []editEntry
 	for _, line := range a {
@@ -205,11 +205,11 @@ func bruteForceEdits(a, b []string) []editEntry {
 	return edits
 }
 
-// computeEditsHashed는 큰 파일용 patience-like diff.
-// 라인을 해시하여 고유 라인 매칭 후 나머지를 삽입/삭제로 처리한다.
+// computeEditsHashed is a patience-like diff for large files.
+// Hashes lines to match unique lines, then treats the rest as insert/delete.
 func computeEditsHashed(a, b []string, depth int) []editEntry {
-	// 간단한 접근: 양쪽 끝의 공통 접두사/접미사를 제거한 뒤
-	// 중간 부분을 전부 삭제+삽입으로 처리한다.
+	// Simple approach: strip common prefix/suffix from both ends,
+	// then treat the middle portion as delete-all + insert-all.
 	prefixLen := 0
 	minLen := len(a)
 	if len(b) < minLen {
@@ -226,21 +226,21 @@ func computeEditsHashed(a, b []string, depth int) []editEntry {
 
 	var edits []editEntry
 
-	// 공통 접두사
+	// Common prefix
 	for i := 0; i < prefixLen; i++ {
 		edits = append(edits, editEntry{opEqual, a[i]})
 	}
 
-	// suffixLen 범위 방어
+	// Guard suffixLen range
 	if len(a)-suffixLen < prefixLen || len(b)-suffixLen < prefixLen {
 		suffixLen = 0
 	}
 
-	// 중간 차이 부분
+	// Middle differing portion
 	midA := a[prefixLen : len(a)-suffixLen]
 	midB := b[prefixLen : len(b)-suffixLen]
 
-	// 중간 부분이 작으면 LCS 재시도 (depth 전달)
+	// If the middle portion is small enough, retry with LCS (passing depth)
 	if int64(len(midA))*int64(len(midB)) <= 10_000_000 {
 		midEdits := computeEditsWithDepth(midA, midB, depth+1)
 		edits = append(edits, midEdits...)
@@ -248,7 +248,7 @@ func computeEditsHashed(a, b []string, depth int) []editEntry {
 		edits = append(edits, bruteForceEdits(midA, midB)...)
 	}
 
-	// 공통 접미사
+	// Common suffix
 	for i := len(a) - suffixLen; i < len(a); i++ {
 		edits = append(edits, editEntry{opEqual, a[i]})
 	}
@@ -256,9 +256,9 @@ func computeEditsHashed(a, b []string, depth int) []editEntry {
 	return edits
 }
 
-// groupHunks는 편집 스크립트를 unified diff hunk로 그룹화한다.
+// groupHunks groups the edit script into unified diff hunks.
 func groupHunks(edits []editEntry, lenA, lenB, ctxLines int) []string {
-	// 변경점 인덱스 수집
+	// Collect change indices
 	type change struct{ idx int }
 	var changes []change
 	for i, e := range edits {
@@ -271,11 +271,11 @@ func groupHunks(edits []editEntry, lenA, lenB, ctxLines int) []string {
 		return nil
 	}
 
-	// 변경점을 context로 그룹화
+	// Group changes with context
 	var hunks []string
 	i := 0
 	for i < len(changes) {
-		// 그룹의 시작/끝
+		// Start/end of group
 		start := changes[i].idx - ctxLines
 		if start < 0 {
 			start = 0
@@ -286,7 +286,7 @@ func groupHunks(edits []editEntry, lenA, lenB, ctxLines int) []string {
 			end = len(edits)
 		}
 
-		// 인접 변경점 병합
+		// Merge adjacent changes
 		for i+1 < len(changes) && changes[i+1].idx-ctxLines <= end {
 			i++
 			end = changes[i].idx + ctxLines + 1
@@ -295,7 +295,7 @@ func groupHunks(edits []editEntry, lenA, lenB, ctxLines int) []string {
 			}
 		}
 
-		// hunk 헤더 계산
+		// Compute hunk header
 		aLine := 1 // 1-based
 		bLine := 1
 		for k := 0; k < start; k++ {

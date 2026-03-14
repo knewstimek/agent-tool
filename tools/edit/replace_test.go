@@ -19,9 +19,9 @@ func TestReplace_DirectMatch(t *testing.T) {
 }
 
 func TestReplace_SpacesToTabsConversion(t *testing.T) {
-	// 파일은 탭 들여쓰기
+	// File uses tab indentation
 	content := "func main() {\n\tfmt.Println(\"hello\")\n}"
-	// LLM이 공백으로 보냄
+	// LLM sends with spaces
 	oldStr := "    fmt.Println(\"hello\")"
 	newStr := "    fmt.Println(\"world\")"
 
@@ -71,7 +71,7 @@ func TestReplace_MultipleMatches_ReplaceAll(t *testing.T) {
 }
 
 func TestReplace_LineEndingPreservation(t *testing.T) {
-	// CRLF 파일
+	// CRLF file
 	content := "line1\r\nline2\r\nline3"
 	result := Replace(content, "line2", "replaced", false, IndentStyle{UseTabs: false, IndentSize: 4}, false)
 
