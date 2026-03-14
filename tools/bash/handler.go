@@ -93,7 +93,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BashInput) (*mc
 	// Format output
 	var sb strings.Builder
 	if isNew {
-		sb.WriteString(fmt.Sprintf("[New session: %s]\n", input.SessionID))
+		sb.WriteString(fmt.Sprintf("[New session: %s (%s)]\n", input.SessionID, sess.shellKind))
 	}
 	sb.WriteString(fmt.Sprintf("$ %s\n", input.Command))
 	if result.Output != "" {
@@ -117,7 +117,7 @@ func Register(server *mcp.Server) {
 Sessions maintain working directory, environment variables, and shell state across calls.
 Use session_id to manage multiple independent shell sessions.
 Use disconnect=true to close a session.
-Platform: bash/sh on Unix, cmd.exe on Windows.`,
+Platform: bash/sh on Unix, PowerShell/git-bash/cmd on Windows (auto-detected, best available).`,
 	}, Handle)
 }
 

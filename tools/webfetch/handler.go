@@ -79,7 +79,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WebFetchInput) 
 		return errorResult(fmt.Sprintf("request creation failed: %v", err))
 	}
 
-	// Set default User-Agent
+	// Mimic a real browser to avoid bot-detection blocks; some CDNs and
+	// sites return 403 for non-browser User-Agents or missing Accept headers.
 	httpReq.Header.Set("User-Agent", defaultUserAgent)
 	httpReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")

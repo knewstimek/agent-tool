@@ -40,14 +40,15 @@ func executeCommand(ctx context.Context, sess *shellSession, command string, tim
 	// Update lastUsed at start to prevent reaper from killing during long commands
 	sess.lastUsed = time.Now()
 
-	// Generate unique sentinel
+	// Generate a random sentinel so command output cannot accidentally match it.
+	// 8 bytes = 64-bit entropy, making collisions practically impossible.
 	b := make([]byte, 8)
 	rand.Read(b)
 	id := hex.EncodeToString(b)
 	sentinel := sentinelPrefix + id + "_EC_"
 
 	// Build the command with sentinel
-	fullCmd := buildSentinelCommand(command, sentinel)
+	fullCmd := buildSentinelCmd(sess.shellKind, command, sentinel)
 
 	// Write command to stdin
 	_, err := fmt.Fprintln(sess.stdin, fullCmd)
@@ -61,6 +62,8 @@ func executeCommand(ctx context.Context, sess *shellSession, command string, tim
 	deadline := time.After(time.Duration(timeoutSec) * time.Second)
 	exitCode := 0
 
+	// Buffer of 1 lets the reader goroutine send its result without blocking
+	// even if the select loop is processing the previous line.
 	lineCh := make(chan readResult, 1)
 
 	// Background reader goroutine
@@ -95,6 +98,12 @@ func executeCommand(ctx context.Context, sess *shellSession, command string, tim
 				goto done
 			}
 
+			// Skip echoed command lines (PowerShell echoes input including sentinel markers)
+			if strings.Contains(trimmed, sentinel) {
+				go readNext()
+				continue
+			}
+
 			// Accumulate output (with size limit)
 			if outputSize < maxOutputSize {
 				remaining := maxOutputSize - outputSize
@@ -118,14 +127,7 @@ done:
 	raw = strings.TrimRight(raw, "\r\n")
 
 	return &execResult{
-		Output:   decodeOutput(raw),
+		Output:   decodeOutput(sess.shellKind, raw),
 		ExitCode: exitCode,
 	}, nil
-}
-
-// buildSentinelCommand wraps a command with sentinel markers.
-// Platform-specific implementations in shell_*.go would be cleaner,
-// but the logic is simple enough to handle with runtime.GOOS.
-func buildSentinelCommand(command string, sentinel string) string {
-	return buildSentinelCmd(command, sentinel)
 }

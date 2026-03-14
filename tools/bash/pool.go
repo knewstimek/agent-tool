@@ -14,11 +14,35 @@ const (
 	reaperInterval     = 60 * time.Second
 )
 
+// shellKind identifies the type of shell used for a session.
+type shellKind int
+
+const (
+	kindDefault    shellKind = 0 // bash/sh on Unix
+	kindPowerShell shellKind = 1
+	kindGitBash    shellKind = 2
+	kindCmd        shellKind = 3
+)
+
+func (k shellKind) String() string {
+	switch k {
+	case kindPowerShell:
+		return "powershell"
+	case kindGitBash:
+		return "git-bash"
+	case kindCmd:
+		return "cmd"
+	default:
+		return "bash"
+	}
+}
+
 type shellSession struct {
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
 	stdoutR   *bufio.Reader
 	key       string
+	shellKind shellKind
 	createdAt time.Time
 	lastUsed  time.Time
 	mu        sync.Mutex    // prevents concurrent command execution on same session
@@ -68,7 +92,7 @@ func (p *shellPool) getOrCreate(key string, cwd string) (*shellSession, bool, er
 	// Check existing session
 	if entry, ok := p.sessions[key]; ok {
 		if entry.alive() {
-			entry.lastUsed = time.Now()
+			// lastUsed is updated by executeCommand under entry.mu; skip here to avoid data race
 			p.mu.Unlock()
 			return entry, false, nil
 		}
@@ -84,7 +108,9 @@ func (p *shellPool) getOrCreate(key string, cwd string) (*shellSession, bool, er
 
 	p.mu.Unlock()
 
-	// Start shell WITHOUT holding the lock
+	// Start shell WITHOUT holding the lock — startShellSession blocks during
+	// process spawn, and holding the lock would prevent other goroutines
+	// (including the reaper) from accessing the pool for the duration.
 	sess, err := startShellSession(key, cwd)
 	if err != nil {
 		return nil, false, err
@@ -94,10 +120,10 @@ func (p *shellPool) getOrCreate(key string, cwd string) (*shellSession, bool, er
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// Double-check: another goroutine may have created the same session
+	// while we were spawning ours. Use theirs and discard ours.
 	if entry, ok := p.sessions[key]; ok {
-		// Another goroutine won the race
 		sess.close()
-		entry.lastUsed = time.Now()
 		return entry, false, nil
 	}
 
@@ -149,23 +175,34 @@ func (p *shellPool) reaper() {
 	}
 }
 
-// evictOldestLocked removes the least recently used session.
-// Must be called with p.mu held.
+// evictOldestLocked removes the least recently used idle session.
+// Must be called with p.mu held. Skips sessions with active commands.
 func (p *shellPool) evictOldestLocked() {
-	var oldestKey string
-	var oldestTime time.Time
-
+	// Collect candidates sorted by lastUsed (oldest first)
+	type candidate struct {
+		key   string
+		entry *shellSession
+	}
+	var candidates []candidate
 	for key, entry := range p.sessions {
-		if oldestKey == "" || entry.lastUsed.Before(oldestTime) {
-			oldestKey = key
-			oldestTime = entry.lastUsed
+		candidates = append(candidates, candidate{key, entry})
+	}
+	// Sort: oldest lastUsed first
+	for i := 0; i < len(candidates); i++ {
+		for j := i + 1; j < len(candidates); j++ {
+			if candidates[j].entry.lastUsed.Before(candidates[i].entry.lastUsed) {
+				candidates[i], candidates[j] = candidates[j], candidates[i]
+			}
 		}
 	}
 
-	if oldestKey != "" {
-		if entry, ok := p.sessions[oldestKey]; ok {
-			entry.close()
+	for _, c := range candidates {
+		if c.entry.mu.TryLock() {
+			c.entry.close()
+			c.entry.mu.Unlock()
+			delete(p.sessions, c.key)
+			return
 		}
-		delete(p.sessions, oldestKey)
+		// Session is busy, try next oldest
 	}
 }

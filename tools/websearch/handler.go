@@ -171,8 +171,8 @@ func searchBrave(ctx context.Context, client *http.Client, query string, maxResu
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("Brave API returned %d: %s", resp.StatusCode, string(body))
+		// Do not include response body in error — it may echo API keys or tokens
+		return nil, fmt.Errorf("Brave API returned HTTP %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
@@ -222,8 +222,8 @@ func searchNaver(ctx context.Context, client *http.Client, query string, maxResu
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("Naver API returned %d: %s", resp.StatusCode, string(body))
+		// Do not include response body in error — it may echo API keys or tokens
+		return nil, fmt.Errorf("Naver API returned HTTP %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))

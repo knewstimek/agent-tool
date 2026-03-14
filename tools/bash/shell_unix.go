@@ -61,11 +61,11 @@ func startShellSession(key string, cwd string) (*shellSession, error) {
 }
 
 // decodeOutput returns the output as-is on Unix (UTF-8).
-func decodeOutput(raw string) string {
+func decodeOutput(_ shellKind, raw string) string {
 	return raw
 }
 
 // buildSentinelCmd wraps a command with exit code capture and sentinel marker.
-func buildSentinelCmd(command string, sentinel string) string {
-	return fmt.Sprintf("%s; EXIT_CODE=$?; echo \"\"; echo \"%s${EXIT_CODE}___\"", command, sentinel)
+func buildSentinelCmd(_ shellKind, command string, sentinel string) string {
+	return fmt.Sprintf("%s; EXIT_CODE=$?; echo \"\"; echo \"%s${EXIT_CODE}%s\"", command, sentinel, sentinelSuffix)
 }
