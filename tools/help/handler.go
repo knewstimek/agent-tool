@@ -94,6 +94,10 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - webfetch: Fetch web content as text/Markdown with ECH, DoH, proxy, and SSRF protection
 - websearch: Web search via Brave Search or Naver API (requires API key env vars)
 - download: Download files from URLs with ECH, DoH, proxy, and SSRF protection
+- httpreq: Execute HTTP requests with any method (POST, PUT, DELETE, etc.) for API testing
+- jsonquery: Query JSON files with dot-notation paths to extract specific values (saves tokens)
+- portcheck: Check if a TCP port is open on a host (connectivity test)
+- externalip: Get your external (public) IP address
 - set_config: Change runtime settings (fallback encoding, encoding warnings, max file size)
 - agent_tool_help: This help tool
 
@@ -324,7 +328,7 @@ Parameters: host, port, user, password, key_file, passphrase, use_agent, host_ke
 ## bash
 Persistent shell sessions that maintain working directory, environment variables, and state across calls.
 Sessions are pooled (max 5, idle timeout 30 min). Uses sentinel markers for output delimitation.
-Unix: /bin/bash (fallback /bin/sh). Windows: cmd.exe.
+Platform: bash/sh on Unix, PowerShell/git-bash/cmd on Windows (auto-detected, best available).
 Use disconnect=true to close a session.
 Parameters: command, cwd (initial directory for new sessions), session_id (default: "default"), timeout_sec (default 120, max 600), disconnect
 
@@ -349,6 +353,32 @@ Download a file from a URL and save it to disk. Supports binary and text files.
 ECH and DoH enabled by default. SSRF protection. HTTP and SOCKS5 proxy support.
 Atomic file write (temp file + rename). Auto-creates parent directories.
 Parameters: url, output_path, headers, overwrite, timeout_sec (default 60, max 600), max_size_mb (default 100, max 2048), proxy_url, no_doh, no_ech
+
+## httpreq
+Execute HTTP requests with any method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS).
+Ideal for testing APIs, webhooks, and web services during development.
+ECH and DoH enabled by default. SSRF protection. HTTP and SOCKS5 proxy support.
+Response body is truncated at max_response_kb. Binary responses show Content-Type and size only.
+Parameters: url, method, body, headers, content_type (default application/json), timeout_sec (default 30, max 120), max_response_kb (default 512, max 2048), proxy_url, no_doh, no_ech
+
+## jsonquery
+Query a JSON file using dot-notation paths without loading the entire file into context.
+Supports nested keys (a.b.c), array indices ([0], [-1] for last), and wildcards ([*] for all elements).
+Examples: "dependencies.react", "scripts.build", "items[0].name", "users[*].email".
+Returns the matched value with its type. Objects and arrays are pretty-printed.
+Parameters: file_path, query
+
+## portcheck
+Check if a TCP port is open on a host. Tests connectivity with configurable timeout.
+Returns OPEN/CLOSED status with response time or error details (refused, timeout, DNS failure).
+Supports hostnames, IPv4, and IPv6 addresses.
+Parameters: host, port (1-65535), timeout_sec (default 5, max 30)
+
+## externalip
+Returns your external (public) IP address.
+Queries multiple IP detection services (ipify, ifconfig.me, icanhazip) with automatic fallback.
+Useful for SSH configuration, firewall rules, or verifying VPN/proxy status.
+No parameters required.
 
 ## set_config
 Change agent-tool runtime configuration.

@@ -55,6 +55,10 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **WebFetch** | Fetch web content as text/Markdown. ECH (Encrypted Client Hello) + DoH (DNS over HTTPS) by default. HTML→Markdown auto-conversion. SSRF protection. HTTP/SOCKS5 proxy. Chrome User-Agent | ✅ |
 | **WebSearch** | Web search via Brave Search or Naver API. Requires API key env vars (`BRAVE_SEARCH_API_KEY` or `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`). Auto-selects engine, Brave preferred | ✅ |
 | **Download** | Download files from URLs to disk. ECH + DoH by default. SSRF protection. HTTP/SOCKS5 proxy. Atomic write. Max 2 GB | ✅ |
+| **HTTPReq** | Execute HTTP requests with any method (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS). API testing with custom headers, body, proxy. SSRF protection | ✅ |
+| **JSONQuery** | Query JSON files with dot-notation paths (e.g. `dependencies.react`, `items[*].id`). Extract specific values without loading entire file into context | ✅ |
+| **PortCheck** | Check if a TCP port is open on a host. Returns OPEN/CLOSED with response time. Supports hostname, IPv4, IPv6 | ✅ |
+| **ExternalIP** | Get your external (public) IP address. Multiple providers with automatic fallback (ipify, ifconfig.me, icanhazip) | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 

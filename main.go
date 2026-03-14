@@ -20,14 +20,18 @@ import (
 	"agent-tool/tools/diff"
 	edit "agent-tool/tools/edit"
 	"agent-tool/tools/envvar"
+	"agent-tool/tools/externalip"
 	"agent-tool/tools/fileinfo"
 	"agent-tool/tools/findtools"
 	"agent-tool/tools/firewall"
 	"agent-tool/tools/glob"
 	"agent-tool/tools/grep"
 	"agent-tool/tools/help"
+	"agent-tool/tools/httpreq"
+	"agent-tool/tools/jsonquery"
 	"agent-tool/tools/listdir"
 	"agent-tool/tools/patch"
+	"agent-tool/tools/portcheck"
 	"agent-tool/tools/procexec"
 	"agent-tool/tools/prockill"
 	"agent-tool/tools/proclist"
@@ -132,6 +136,10 @@ func main() {
 	webfetch.Register(server)
 	websearch.Register(server)
 	download.Register(server)
+	httpreq.Register(server)
+	jsonquery.Register(server)
+	portcheck.Register(server)
+	externalip.Register(server)
 	help.Register(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
