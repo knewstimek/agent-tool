@@ -2,12 +2,12 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.knewstimek/agent-tool",
   "title": "agent-tool",
-  "description": "Encoding-aware, indentation-smart file tools for AI coding agents with SSH, SFTP, and 20+ tools.",
+  "description": "Encoding-aware, indentation-smart MCP tool server for AI coding agents. 30+ tools: file ops, shell, SSH/SFTP, web, process management, and more.",
   "repository": {
     "url": "https://github.com/knewstimek/agent-tool",
     "source": "github"
   },
-  "version": "0.4.2",
+  "version": "0.5.2",
   "packages": [
     {
       "registryType": "mcpb",
