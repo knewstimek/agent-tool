@@ -15,12 +15,13 @@ import (
 
 // EditInput은 Edit 도구의 입력 파라미터이다.
 type EditInput struct {
-	FilePath    string `json:"file_path" jsonschema:"Absolute path to the file to edit"`
-	OldString   string `json:"old_string" jsonschema:"Exact text to find in the file"`
-	NewString   string `json:"new_string" jsonschema:"Replacement text (must differ from old_string)"`
-	ReplaceAll  bool   `json:"replace_all,omitempty" jsonschema:"Replace all occurrences instead of just the first (default false)"`
-	DryRun      bool   `json:"dry_run,omitempty" jsonschema:"Preview changes without modifying the file (default false)"`
-	IndentStyle string `json:"indent_style,omitempty" jsonschema:"Override indentation style. Values: tabs or spaces-N (e.g. spaces-4). Empty = auto-detect (default)"`
+	FilePath     string `json:"file_path" jsonschema:"Absolute path to the file to edit"`
+	OldString    string `json:"old_string" jsonschema:"Exact text to find in the file"`
+	NewString    string `json:"new_string" jsonschema:"Replacement text (must differ from old_string)"`
+	ReplaceAll   bool   `json:"replace_all,omitempty" jsonschema:"Replace all occurrences instead of just the first (default false)"`
+	DryRun       bool   `json:"dry_run,omitempty" jsonschema:"Preview changes without modifying the file (default false)"`
+	IndentStyle  string `json:"indent_style,omitempty" jsonschema:"Override indentation style. Values: tabs or spaces-N (e.g. spaces-4). Empty = auto-detect (default)"`
+	ExpectedHash string `json:"expected_hash,omitempty" jsonschema:"Optional SHA-256 hash of the file. If provided and mismatched, edit is rejected (optimistic concurrency)."`
 }
 
 // EditOutput은 Edit 도구의 출력이다.
@@ -54,6 +55,17 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 
 	// .editorconfig에서 charset 힌트 가져오기
 	hintCharset := FindEditorConfigCharset(input.FilePath)
+
+	// expected_hash가 지정되었으면 파일 원본 바이트의 SHA-256과 비교
+	if input.ExpectedHash != "" {
+		actualHash, err := common.ComputeFileHash(input.FilePath)
+		if err != nil {
+			return errorResult(fmt.Sprintf("failed to compute file hash: %v", err))
+		}
+		if !strings.EqualFold(input.ExpectedHash, actualHash) {
+			return errorResult(fmt.Sprintf("hash mismatch: expected %s, got %s. File may have been modified by another process.", input.ExpectedHash, actualHash))
+		}
+	}
 
 	// 파일 읽기 (인코딩 감지 포함)
 	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)

@@ -14,6 +14,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// readHashThreshold은 해시를 자동 포함할 최대 파일 크기이다.
+// 이보다 큰 파일은 checksum 도구를 별도로 호출해야 한다.
+const readHashThreshold = 10 * 1024 * 1024 // 10MB
+
 type ReadInput struct {
 	FilePath string `json:"file_path" jsonschema:"Absolute path to the file to read"`
 	Offset   int    `json:"offset,omitempty" jsonschema:"Line number to start reading from (1-based). Negative = from end (e.g. -5 = last 5 lines). Default: 1"`
@@ -24,6 +28,7 @@ type ReadOutput struct {
 	Content    string `json:"content"`
 	Encoding   string `json:"encoding"`
 	TotalLines int    `json:"total_lines"`
+	Hash       string `json:"hash,omitempty"`
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mcp.CallToolResult, ReadOutput, error) {
@@ -102,10 +107,20 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 		result += warning
 	}
 
+	// 파일 해시 추가 (10MB 이하 파일만 — 큰 파일은 checksum 도구 사용)
+	var fileHash string
+	if fi.Size() <= readHashThreshold {
+		if h, err := common.ComputeFileHash(input.FilePath); err == nil {
+			fileHash = h
+			result += fmt.Sprintf("\n[sha256: %s]", h)
+		}
+	}
+
 	out := ReadOutput{
 		Content:    result,
 		Encoding:   encInfo.Charset,
 		TotalLines: totalLines,
+		Hash:       fileHash,
 	}
 
 	return &mcp.CallToolResult{

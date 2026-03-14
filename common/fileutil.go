@@ -2,6 +2,7 @@ package common
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -342,4 +343,20 @@ func encodeString(s string, enc encoding.Encoding) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// ComputeFileHash는 파일의 원본 바이트에 대한 SHA-256 해시를 16진수 문자열로 반환한다.
+// 인코딩 변환 없이 raw bytes를 해싱하므로 checksum 도구와 동일한 결과를 낸다.
+func ComputeFileHash(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }

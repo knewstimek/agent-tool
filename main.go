@@ -17,13 +17,16 @@ import (
 	"agent-tool/tools/delete"
 	"agent-tool/tools/diff"
 	edit "agent-tool/tools/edit"
+	"agent-tool/tools/envvar"
 	"agent-tool/tools/fileinfo"
 	"agent-tool/tools/findtools"
+	"agent-tool/tools/firewall"
 	"agent-tool/tools/glob"
 	"agent-tool/tools/grep"
 	"agent-tool/tools/help"
 	"agent-tool/tools/listdir"
 	"agent-tool/tools/patch"
+	"agent-tool/tools/proclist"
 	"agent-tool/tools/read"
 	"agent-tool/tools/rename"
 	"agent-tool/tools/sysinfo"
@@ -110,6 +113,9 @@ func main() {
 	rename.Register(server)
 	sysinfo.Register(server)
 	findtools.Register(server)
+	proclist.Register(server)
+	envvar.Register(server)
+	firewall.Register(server)
 	help.Register(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

@@ -83,6 +83,9 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - rename: Rename or move a file/directory (atomic, supports dry_run)
 - sysinfo: System information (OS, CPU, RAM, disk, uptime, CPU usage measurement)
 - find_tools: Discover installed dev tools (compilers, runtimes, build systems)
+- proclist: List running processes with PID, name, command line, memory (sensitive args masked)
+- envvar: Read environment variables (sensitive values masked)
+- firewall: Read firewall rules (iptables/nftables/netsh, read-only)
 - set_config: Change runtime settings (fallback encoding, encoding warnings, max file size)
 - agent_tool_help: This help tool
 
@@ -255,7 +258,23 @@ Parameters: duration_sec
 Discover installed development tools on the system.
 Returns paths and versions for compilers, build systems, and runtimes.
 Searches env vars, PATH, and known installation directories.
+Windows: also checks ~/bin, scoop shims, npm global. Unix: also checks ~/bin, ~/.local/bin, Homebrew.
 Parameters: category (go, dotnet, node, python, java, rust, c_cpp, build, vcs, container, js_runtime, or all)
+
+## proclist
+List running processes with PID, name, command line arguments, and memory usage.
+Sensitive data in command lines (passwords, tokens, Bearer) is automatically masked.
+Parameters: filter (name search), port (find process using specific port)
+
+## envvar
+Read environment variables. Get a specific one by name, or list all with filter.
+Sensitive values (PASSWORD, TOKEN, SECRET, KEY, etc.) are automatically masked.
+Parameters: name (exact name), filter (partial name match)
+
+## firewall
+Read firewall rules (read-only). Supports iptables, nftables, firewalld on Linux; netsh on Windows.
+May require elevated privileges (sudo) on Linux.
+Parameters: filter (rule name or port)
 
 ## set_config
 Change agent-tool runtime configuration.

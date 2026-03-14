@@ -21,10 +21,16 @@ func injectKnownPaths(defs []ToolDef) {
 	appdata := os.Getenv("APPDATA")
 	localAppdata := os.Getenv("LOCALAPPDATA")
 
+	// 사용자 로컬 도구 경로
+	userBin := filepath.Join(home, "bin")                   // ~/bin (manual installs)
+	scoopShims := filepath.Join(home, "scoop", "shims")     // scoop package manager
+	npmGlobal := filepath.Join(appdata, "npm")              // npm -g installs
+
 	known := map[string][]string{
 		"go": {
 			filepath.Join(pf, "Go", "bin", "go.exe"),
 			`C:\Go\bin\go.exe`,
+			filepath.Join(userBin, "go.exe"),
 		},
 		"dotnet": {
 			filepath.Join(pf, "dotnet", "dotnet.exe"),
@@ -32,12 +38,15 @@ func injectKnownPaths(defs []ToolDef) {
 		"node": {
 			filepath.Join(pf, "nodejs", "node.exe"),
 			filepath.Join(appdata, "nvm", "*", "node.exe"), // nvm-windows
+			filepath.Join(scoopShims, "node.exe"),
 		},
 		"npm": {
 			filepath.Join(pf, "nodejs", "npm.cmd"),
+			filepath.Join(npmGlobal, "npm.cmd"),
 		},
 		"npx": {
 			filepath.Join(pf, "nodejs", "npx.cmd"),
+			filepath.Join(npmGlobal, "npx.cmd"),
 		},
 		"python3": {
 			filepath.Join(pf, "Python312", "python.exe"),
@@ -63,12 +72,15 @@ func injectKnownPaths(defs []ToolDef) {
 		},
 		"cargo": {
 			filepath.Join(home, ".cargo", "bin", "cargo.exe"),
+			filepath.Join(scoopShims, "cargo.exe"),
 		},
 		"rustc": {
 			filepath.Join(home, ".cargo", "bin", "rustc.exe"),
+			filepath.Join(scoopShims, "rustc.exe"),
 		},
 		"rustup": {
 			filepath.Join(home, ".cargo", "bin", "rustup.exe"),
+			filepath.Join(scoopShims, "rustup.exe"),
 		},
 		"gcc": {
 			`C:\msys64\mingw64\bin\gcc.exe`,
@@ -89,36 +101,55 @@ func injectKnownPaths(defs []ToolDef) {
 		},
 		"cmake": {
 			filepath.Join(pf, "CMake", "bin", "cmake.exe"),
+			filepath.Join(scoopShims, "cmake.exe"),
 		},
 		"make": {
 			`C:\msys64\usr\bin\make.exe`,
 			filepath.Join(pfx86, "GnuWin32", "bin", "make.exe"),
+			filepath.Join(scoopShims, "make.exe"),
 		},
 		"ninja": {
 			filepath.Join(pf, "Ninja", "ninja.exe"),
+			filepath.Join(scoopShims, "ninja.exe"),
 		},
 		"git": {
 			filepath.Join(pf, "Git", "cmd", "git.exe"),
 			filepath.Join(pf, "Git", "bin", "git.exe"),
+			filepath.Join(scoopShims, "git.exe"),
 		},
 		"gh": {
 			filepath.Join(pf, "GitHub CLI", "gh.exe"),
 			filepath.Join(localAppdata, "GitHub CLI", "gh.exe"),
+			filepath.Join(userBin, "gh.exe"),
+			filepath.Join(scoopShims, "gh.exe"),
 		},
 		"docker": {
 			filepath.Join(pf, "Docker", "Docker", "resources", "bin", "docker.exe"),
+			filepath.Join(scoopShims, "docker.exe"),
 		},
 		"bun": {
 			filepath.Join(home, ".bun", "bin", "bun.exe"),
+			filepath.Join(scoopShims, "bun.exe"),
+			filepath.Join(userBin, "bun.exe"),
 		},
 		"deno": {
 			filepath.Join(home, ".deno", "bin", "deno.exe"),
+			filepath.Join(scoopShims, "deno.exe"),
+			filepath.Join(userBin, "deno.exe"),
 		},
 	}
 
 	for i := range defs {
 		if paths, ok := known[defs[i].Name]; ok {
-			defs[i].KnownPaths = paths
+			// 빈 prefix 경로 필터 (환경변수가 설정되지 않은 경우 상대경로 방지)
+			var valid []string
+			for _, p := range paths {
+				if !filepath.IsAbs(p) {
+					continue
+				}
+				valid = append(valid, p)
+			}
+			defs[i].KnownPaths = valid
 		}
 	}
 }

@@ -17,21 +17,31 @@ const lookupCmd = "which"
 func injectKnownPaths(defs []ToolDef) {
 	home := os.Getenv("HOME")
 
+	// 사용자 로컬 도구 경로
+	userBin := filepath.Join(home, "bin")          // ~/bin (manual installs)
+	localBin := filepath.Join(home, ".local", "bin") // ~/.local/bin (pip, pipx, etc.)
+	brewPrefix := "/opt/homebrew/bin"                // Homebrew (Apple Silicon)
+
 	known := map[string][]string{
 		"go": {
 			"/usr/local/go/bin/go",
 			"/usr/bin/go",
 			"/snap/bin/go",
+			filepath.Join(userBin, "go"),
+			filepath.Join(brewPrefix, "go"),
 		},
 		"dotnet": {
 			"/usr/share/dotnet/dotnet",
 			"/usr/lib/dotnet/dotnet",
 			filepath.Join(home, ".dotnet", "dotnet"),
+			"/snap/bin/dotnet",
 		},
 		"node": {
 			"/usr/local/bin/node",
 			"/usr/bin/node",
+			"/snap/bin/node",
 			filepath.Join(home, ".nvm", "versions", "node", "*", "bin", "node"), // glob
+			filepath.Join(home, ".fnm", "node-versions", "*", "installation", "bin", "node"), // fnm
 		},
 		"npm": {
 			"/usr/local/bin/npm",
@@ -53,11 +63,14 @@ func injectKnownPaths(defs []ToolDef) {
 		},
 		"java": {
 			"/usr/bin/java",
-			"/usr/lib/jvm/java-*/bin/java", // glob
+			"/usr/lib/jvm/java-*/bin/java",                                           // glob — Debian/Ubuntu
+			"/usr/lib/jvm/jre-*/bin/java",                                             // glob — RHEL/Fedora
+			filepath.Join(home, ".sdkman", "candidates", "java", "current", "bin", "java"), // SDKMAN
 		},
 		"javac": {
 			"/usr/bin/javac",
 			"/usr/lib/jvm/java-*/bin/javac",
+			"/usr/lib/jvm/jre-*/bin/javac",
 		},
 		"cargo": {
 			filepath.Join(home, ".cargo", "bin", "cargo"),
@@ -89,14 +102,19 @@ func injectKnownPaths(defs []ToolDef) {
 		"cmake": {
 			"/usr/bin/cmake",
 			"/usr/local/bin/cmake",
+			"/snap/bin/cmake",
+			filepath.Join(brewPrefix, "cmake"),
 		},
 		"make": {
 			"/usr/bin/make",
 			"/usr/bin/gmake",
+			filepath.Join(brewPrefix, "make"),
 		},
 		"ninja": {
 			"/usr/bin/ninja",
 			"/usr/local/bin/ninja",
+			"/usr/bin/ninja-build", // RHEL/Fedora package name
+			filepath.Join(brewPrefix, "ninja"),
 		},
 		"git": {
 			"/usr/bin/git",
@@ -105,25 +123,42 @@ func injectKnownPaths(defs []ToolDef) {
 		"gh": {
 			"/usr/bin/gh",
 			"/usr/local/bin/gh",
-			filepath.Join(home, ".local", "bin", "gh"),
+			"/snap/bin/gh",
+			filepath.Join(localBin, "gh"),
+			filepath.Join(userBin, "gh"),
+			filepath.Join(brewPrefix, "gh"),
 		},
 		"docker": {
 			"/usr/bin/docker",
 			"/usr/local/bin/docker",
+			"/snap/bin/docker",
+			filepath.Join(brewPrefix, "docker"),
 		},
 		"bun": {
 			filepath.Join(home, ".bun", "bin", "bun"),
 			"/usr/local/bin/bun",
+			filepath.Join(userBin, "bun"),
+			filepath.Join(brewPrefix, "bun"),
 		},
 		"deno": {
 			filepath.Join(home, ".deno", "bin", "deno"),
 			"/usr/local/bin/deno",
+			filepath.Join(userBin, "deno"),
+			filepath.Join(brewPrefix, "deno"),
 		},
 	}
 
 	for i := range defs {
 		if paths, ok := known[defs[i].Name]; ok {
-			defs[i].KnownPaths = paths
+			// 빈 prefix 경로 필터 (HOME이 비어있을 때 상대경로 방지)
+			var valid []string
+			for _, p := range paths {
+				if !filepath.IsAbs(p) {
+					continue
+				}
+				valid = append(valid, p)
+			}
+			defs[i].KnownPaths = valid
 		}
 	}
 }

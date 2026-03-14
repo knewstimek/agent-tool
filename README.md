@@ -39,7 +39,10 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **Delete** | Safe single-file deletion (no directories, no symlinks, system path protection, dry_run) | ✅ |
 | **Rename** | Atomic file/directory rename or move (dry_run) | ✅ |
 | **SysInfo** | System information — OS, CPU, RAM, disk, uptime, CPU usage measurement | ✅ |
-| **FindTools** | Discover installed dev tools — compilers, runtimes, build systems (Go, .NET, Node, Python, Java, Rust, C/C++, etc.) | ✅ |
+| **FindTools** | Discover installed dev tools — compilers, runtimes, build systems (Go, .NET, Node, Python, Java, Rust, C/C++, etc.). Searches PATH, env vars, and known locations (~/bin, snap, scoop, Homebrew, SDKMAN, nvm, fnm, pyenv) | ✅ |
+| **ProcList** | List running processes — PID, name, command line, memory. Sensitive args auto-masked. Filter by name or port | ✅ |
+| **EnvVar** | Read environment variables. Sensitive values (passwords, tokens) auto-masked | ✅ |
+| **Firewall** | Read firewall rules — iptables/nftables/firewalld (Linux), netsh (Windows). Read-only | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 | SSH | Remote server connection and command execution | Planned |
@@ -192,7 +195,7 @@ Available topics: `overview`, `encoding`, `indentation`, `tools`, `troubleshooti
 - **Zip Slip protection**: Archive entries with `../` path traversal are blocked (both zip and tar)
 - **Zip Bomb protection**: Single file limit (1GB), total extraction limit (5GB)
 - **Symlinks**: Skipped by default. Enable via `set_config allow_symlinks=true` (tar only; zip symlinks always skipped). Even when enabled, symlinks targeting outside the output directory are blocked
-- **File size limit**: Configurable max file size (default 50MB) prevents OOM on large files
+- **File size limit**: Configurable max file size (default 50MB) prevents OOM on large files. Adjustable via `set_config max_file_size_mb=N`
 - **Encoding safety**: chardet uses 64KB sample (not full file) for memory efficiency
 
 ## Tech Stack

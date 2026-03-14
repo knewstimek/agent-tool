@@ -153,12 +153,17 @@ func lookupPath(cmd string) string {
 	path := strings.TrimSpace(lines[0])
 
 	// Windows의 where는 Microsoft Store 앱 링크를 반환할 수 있음 → 필터
-	if strings.Contains(path, "WindowsApps") && runtime.GOOS == "windows" {
-		// WindowsApps의 python.exe는 스토어 리다이렉터일 수 있음
-		// 실제 실행 가능한지 확인
-		if len(lines) > 1 {
-			path = strings.TrimSpace(lines[1])
+	if runtime.GOOS == "windows" {
+		for _, line := range lines {
+			p := strings.TrimSpace(line)
+			if p == "" || strings.Contains(p, "WindowsApps") {
+				continue
+			}
+			if fileExists(p) {
+				return p
+			}
 		}
+		// WindowsApps 아닌 경로가 없으면 첫 번째 유효 경로라도 반환
 	}
 
 	if path != "" && fileExists(path) {
@@ -178,9 +183,11 @@ func getVersion(path, versionArg string) string {
 
 	cmd := exec.CommandContext(ctx, path, versionArg)
 	// java -version은 stderr에 출력. 출력 크기를 4KB로 제한 (악성 바이너리 방어).
+	// stdout/stderr가 동일 limitWriter를 공유해야 limit이 정확하게 적용됨.
 	var buf bytes.Buffer
-	cmd.Stdout = &limitWriter{w: &buf, limit: 4096}
-	cmd.Stderr = &limitWriter{w: &buf, limit: 4096}
+	lw := &limitWriter{w: &buf, limit: 4096}
+	cmd.Stdout = lw
+	cmd.Stderr = lw
 	err := cmd.Run()
 	if err != nil {
 		return ""
