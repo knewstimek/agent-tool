@@ -70,7 +70,7 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - write: Encoding-aware file creation/overwrite
 - grep: Encoding-aware regex content search
 - glob: File pattern matching with ** recursive support
-- listdir: Tree-style directory listing
+- listdir: Directory listing (flat or tree)
 - compress: Create zip / tar.gz archives
 - decompress: Extract zip / tar.gz archives
 - backup: Timestamped zip backup with exclude patterns
@@ -223,9 +223,10 @@ Use relative_paths=true to return paths relative to search directory (saves toke
 Parameters: pattern, path, relative_paths
 
 ## listdir
-List directory in tree format.
+List directory contents. Default: flat listing (one path per line, token-efficient).
+Use flat=false for visual tree structure with connectors.
 Use relative_paths=true to show root as '.' instead of full absolute path (saves tokens).
-Parameters: path, max_depth, relative_paths
+Parameters: path, max_depth, relative_paths, flat
 
 ## compress
 Create zip or tar.gz archive.

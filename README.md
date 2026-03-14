@@ -31,7 +31,7 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **Write** | Encoding-aware file creation/overwrite | ✅ |
 | **Grep** | Encoding-aware regex content search | ✅ |
 | **Glob** | File pattern matching with `**` recursive support | ✅ |
-| **ListDir** | Tree-style directory listing | ✅ |
+| **ListDir** | Directory listing (flat or tree) | ✅ |
 | **Diff** | Compare two files with unified diff output (encoding-aware) | ✅ |
 | **Patch** | Apply unified diff patch to a file (supports dry_run) | ✅ |
 | **Checksum** | Compute file hash (md5, sha1, sha256) | ✅ |

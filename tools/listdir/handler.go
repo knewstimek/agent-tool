@@ -14,6 +14,7 @@ type ListDirInput struct {
 	Path          string `json:"path" jsonschema:"Absolute path to the directory to list"`
 	MaxDepth      int    `json:"max_depth,omitempty" jsonschema:"Maximum depth for tree traversal. Default: 3"`
 	RelativePaths bool   `json:"relative_paths,omitempty" jsonschema:"Show the root as '.' instead of the full absolute path. Saves tokens in output. Default: false"`
+	Flat          *bool  `json:"flat,omitempty" jsonschema:"Flat listing without tree connectors (one path per line). Default: true"`
 }
 
 type ListDirOutput struct {
@@ -21,6 +22,8 @@ type ListDirOutput struct {
 	TotalFiles int    `json:"total_files"`
 	TotalDirs  int    `json:"total_dirs"`
 }
+
+const maxEntries = 10000
 
 // Directories to skip
 var skipDirs = map[string]bool{
@@ -43,14 +46,21 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ListDirInput) (
 		return errorResult("path must be an absolute path")
 	}
 
-	fi, err := os.Stat(input.Path)
+	// Use Lstat to detect symlinks (consistent with delete/rename/mkdir)
+	fi, err := os.Lstat(input.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return errorResult(fmt.Sprintf("directory not found: %s", input.Path))
 		}
 		return errorResult(fmt.Sprintf("cannot access path: %v", err))
 	}
-	if !fi.IsDir() {
+	if fi.Mode()&os.ModeSymlink != 0 {
+		// Resolve symlink target to check if it's a directory
+		target, err := os.Stat(input.Path)
+		if err != nil || !target.IsDir() {
+			return errorResult(fmt.Sprintf("path is not a directory: %s", input.Path))
+		}
+	} else if !fi.IsDir() {
 		return errorResult(fmt.Sprintf("path is not a directory: %s", input.Path))
 	}
 
@@ -59,19 +69,31 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ListDirInput) (
 		maxDepth = 3
 	}
 
+	// Default flat=true (token-efficient for AI agents)
+	flat := true
+	if input.Flat != nil {
+		flat = *input.Flat
+	}
+
 	var sb strings.Builder
 	totalFiles := 0
 	totalDirs := 0
 
-	if input.RelativePaths {
-		sb.WriteString(".\n")
+	if flat {
+		buildFlat(&sb, input.Path, input.Path, 0, maxDepth, input.RelativePaths, &totalFiles, &totalDirs)
 	} else {
-		sb.WriteString(input.Path)
-		sb.WriteString("\n")
+		if input.RelativePaths {
+			sb.WriteString(".\n")
+		} else {
+			sb.WriteString(input.Path)
+			sb.WriteString("\n")
+		}
+		buildTree(&sb, input.Path, "", 0, maxDepth, &totalFiles, &totalDirs)
 	}
 
-	buildTree(&sb, input.Path, "", 0, maxDepth, &totalFiles, &totalDirs)
-
+	if totalFiles+totalDirs >= maxEntries {
+		sb.WriteString(fmt.Sprintf("\n(truncated at %d entries)", maxEntries))
+	}
 	summary := fmt.Sprintf("\n(%d directories, %d files)", totalDirs, totalFiles)
 	sb.WriteString(summary)
 
@@ -81,8 +103,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ListDirInput) (
 	}, ListDirOutput{Tree: text, TotalFiles: totalFiles, TotalDirs: totalDirs}, nil
 }
 
-func buildTree(sb *strings.Builder, dir, prefix string, depth, maxDepth int, totalFiles, totalDirs *int) {
-	if depth >= maxDepth {
+func buildFlat(sb *strings.Builder, root, dir string, depth, maxDepth int, relative bool, totalFiles, totalDirs *int) {
+	if depth >= maxDepth || *totalFiles+*totalDirs >= maxEntries {
 		return
 	}
 
@@ -91,15 +113,68 @@ func buildTree(sb *strings.Builder, dir, prefix string, depth, maxDepth int, tot
 		return
 	}
 
-	// Filter out hidden files/directories (starting with .)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		// Skip symlinks to prevent traversal outside intended directory
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		if *totalFiles+*totalDirs >= maxEntries {
+			return
+		}
+
+		fullPath := filepath.Join(dir, entry.Name())
+
+		if entry.IsDir() {
+			*totalDirs++
+			if skipDirs[entry.Name()] {
+				continue
+			}
+			if relative {
+				rel, _ := filepath.Rel(root, fullPath)
+				sb.WriteString(filepath.ToSlash(rel))
+			} else {
+				sb.WriteString(filepath.ToSlash(fullPath))
+			}
+			sb.WriteString("/\n")
+			buildFlat(sb, root, fullPath, depth+1, maxDepth, relative, totalFiles, totalDirs)
+		} else {
+			*totalFiles++
+			if relative {
+				rel, _ := filepath.Rel(root, fullPath)
+				sb.WriteString(filepath.ToSlash(rel))
+			} else {
+				sb.WriteString(filepath.ToSlash(fullPath))
+			}
+			sb.WriteString("\n")
+		}
+	}
+}
+
+func buildTree(sb *strings.Builder, dir, prefix string, depth, maxDepth int, totalFiles, totalDirs *int) {
+	if depth >= maxDepth || *totalFiles+*totalDirs >= maxEntries {
+		return
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	// Filter out hidden files/directories and symlinks
 	var visible []os.DirEntry
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".") {
+		if !strings.HasPrefix(e.Name(), ".") && e.Type()&os.ModeSymlink == 0 {
 			visible = append(visible, e)
 		}
 	}
 
 	for i, entry := range visible {
+		if *totalFiles+*totalDirs >= maxEntries {
+			return
+		}
 		isLast := i == len(visible)-1
 
 		connector := "├── "
@@ -135,8 +210,9 @@ func buildTree(sb *strings.Builder, dir, prefix string, depth, maxDepth int, tot
 func Register(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "listdir",
-		Description: `Lists directory contents in a tree structure.
-Shows files and directories with visual tree connectors (├── └──).
+		Description: `Lists directory contents.
+Default: flat listing (one path per line, token-efficient for AI agents).
+Use flat=false for visual tree structure with connectors (├── └──).
 Skips hidden directories and common build/vendor directories.
 Use max_depth to control traversal depth (default: 3).
 Use relative_paths=true to show root as '.' instead of full path (saves tokens).`,
