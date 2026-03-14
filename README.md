@@ -10,7 +10,7 @@ Built-in Edit tools in AI coding agents (Claude Code, Cursor, Codex, etc.) have 
 
 - **Tab indentation breaks**: LLMs output spaces, but your project uses tabs. The built-in Edit tool writes spaces as-is, corrupting your indentation style.
 - **Encoding corruption**: Editing EUC-KR, Shift-JIS, or UTF-8 BOM files silently converts them to plain UTF-8, breaking legacy projects.
-- **No SSH/SFTP**: Can't manage remote servers directly from the agent.
+- **No SSH/SFTP**: Can't manage remote servers or transfer files directly from the agent.
 
 **agent-tool** solves these by providing drop-in replacement tools that respect your project's conventions.
 
@@ -34,19 +34,21 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **FileInfo** | File metadata (size, encoding, line ending, indentation, line count) | ✅ |
 | **Compress** | Create zip / tar.gz archives | ✅ |
 | **Decompress** | Extract zip / tar.gz archives (Zip Slip/Bomb protection) | ✅ |
-| **Backup** | Timestamped zip backup with exclude patterns | ✅ |
+| **Backup** | Timestamped zip backup with exclude patterns. dry_run preview with directory stats, pattern match counts, and largest files | ✅ |
 | **ConvertEncoding** | Convert file encoding (EUC-KR ↔ UTF-8, add/remove BOM, etc.) | ✅ |
 | **Delete** | Safe single-file deletion (no directories, no symlinks, system path protection, dry_run) | ✅ |
 | **Rename** | Atomic file/directory rename or move (dry_run) | ✅ |
 | **SysInfo** | System information — OS, CPU, RAM, disk, uptime, CPU usage measurement | ✅ |
 | **FindTools** | Discover installed dev tools — compilers, runtimes, build systems (Go, .NET, Node, Python, Java, Rust, C/C++, etc.). Searches PATH, env vars, and known locations (~/bin, snap, scoop, Homebrew, SDKMAN, nvm, fnm, pyenv) | ✅ |
 | **ProcList** | List running processes — PID, name, command line, memory. Sensitive args auto-masked. Filter by name or port | ✅ |
+| **ProcKill** | Kill, suspend, or resume processes by PID or port. Tree kill, signal selection (kill/term/hup/int/stop/cont), zombie handling (Linux), dry_run | ✅ |
+| **ProcExec** | Execute commands as new processes. Foreground/background/suspended start (Windows: CREATE_SUSPENDED, Linux: SIGSTOP). Timeout, env vars | ✅ |
 | **EnvVar** | Read environment variables. Sensitive values (passwords, tokens) auto-masked | ✅ |
 | **Firewall** | Read firewall rules — iptables/nftables/firewalld (Linux), netsh (Windows). Read-only | ✅ |
-| **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, etc.) | ✅ |
+| **SSH** | Execute commands on remote servers via SSH. Password & key auth, session pooling, host key verification (strict/tofu/none), ProxyJump (IPv4→IPv6 bastion), IPv6 support | ✅ |
+| **SFTP** | Transfer files and manage remote filesystems over SSH. Upload, download, ls, stat, mkdir, rm, chmod, rename. Reuses SSH session pool. Max 2 GB per transfer | ✅ |
+| **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
-| SSH | Remote server connection and command execution | Planned |
-| SFTP | File upload/download over SSH | Planned |
 
 ## Key Improvements
 
@@ -145,6 +147,7 @@ Agents can change settings at runtime via `set_config` without restarting:
 | `encoding_warnings` | Show encoding detection warnings | `true` |
 | `max_file_size_mb` | Max file size for read/edit/grep (MB) | `50` |
 | `allow_symlinks` | Allow symlink extraction from tar archives | `false` |
+| `workspace` | Default workspace/project root for tools like glob when no explicit path is given | _(cwd)_ |
 
 ## Build
 

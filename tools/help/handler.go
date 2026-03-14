@@ -84,8 +84,12 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - sysinfo: System information (OS, CPU, RAM, disk, uptime, CPU usage measurement)
 - find_tools: Discover installed dev tools (compilers, runtimes, build systems)
 - proclist: List running processes with PID, name, command line, memory (sensitive args masked)
+- prockill: Kill, suspend, or resume processes by PID or port (tree kill, signal selection, zombie handling, dry_run)
+- procexec: Execute commands as new processes (background, suspended start, timeout)
 - envvar: Read environment variables (sensitive values masked)
 - firewall: Read firewall rules (iptables/nftables/netsh, read-only)
+- ssh: Execute commands on remote servers via SSH (IPv4/IPv6, ProxyJump, session pooling)
+- sftp: Transfer files and manage remote filesystems over SSH (upload, download, ls, stat, mkdir, rm, chmod, rename, async transfers)
 - set_config: Change runtime settings (fallback encoding, encoding warnings, max file size)
 - agent_tool_help: This help tool
 
@@ -196,11 +200,13 @@ Parameters: pattern, path, glob, ignore_case, max_results
 
 ## glob
 Find files by pattern. Supports ** for recursive matching.
-Parameters: pattern, path
+Use relative_paths=true to return paths relative to search directory (saves tokens).
+Parameters: pattern, path, relative_paths
 
 ## listdir
 List directory in tree format.
-Parameters: path, max_depth
+Use relative_paths=true to show root as '.' instead of full absolute path (saves tokens).
+Parameters: path, max_depth, relative_paths
 
 ## compress
 Create zip or tar.gz archive.
@@ -214,7 +220,9 @@ Parameters: archive, output_dir
 
 ## backup
 Create timestamped zip backup with exclude patterns.
-Parameters: source, output_dir, excludes
+Use dry_run=true to preview: shows included/excluded file counts, directory stats,
+exclude pattern match counts, and largest files — without creating the archive.
+Parameters: source, output_dir, excludes, dry_run
 
 ## convert_encoding
 Convert a file's encoding to a different character set.
@@ -266,6 +274,21 @@ List running processes with PID, name, command line arguments, and memory usage.
 Sensitive data in command lines (passwords, tokens, Bearer) is automatically masked.
 Parameters: filter (name search), port (find process using specific port)
 
+## prockill
+Kill, suspend, or resume a process by PID or port number.
+Supports tree kill (process + all children), signal selection (kill/term/hup/int/stop/cont).
+Use signal=stop to suspend and signal=cont to resume a process.
+On Linux, can detect and handle zombie processes by signaling their parent.
+Use dry_run=true to preview. Safety: refuses PID 0/1 and self.
+Parameters: pid, port, signal, tree, include_zombies, dry_run
+
+## procexec
+Execute a command as a new process. Supports foreground, background, and suspended execution.
+WARNING: Executes arbitrary commands on the host system.
+Use suspended=true to start in suspended state (Windows: CREATE_SUSPENDED, Linux: SIGSTOP).
+Use prockill with signal=cont to resume a suspended process.
+Parameters: command, args, cwd, env, timeout_sec, background, suspended
+
 ## envvar
 Read environment variables. Get a specific one by name, or list all with filter.
 Sensitive values (PASSWORD, TOKEN, SECRET, KEY, etc.) are automatically masked.
@@ -276,11 +299,29 @@ Read firewall rules (read-only). Supports iptables, nftables, firewalld on Linux
 May require elevated privileges (sudo) on Linux.
 Parameters: filter (rule name or port)
 
+## ssh
+Execute commands on a remote server via SSH. Supports IPv4 and IPv6.
+Supports password and key-based authentication. SSH agent auto-used on Unix.
+Sessions are pooled and reused (idle timeout: 30 min, max: 20 sessions).
+Host key verification: strict (known_hosts required), tofu (trust on first use, default), none (insecure).
+ProxyJump: use jump_host to connect through a bastion (e.g. reach IPv6-only servers via IPv4 bastion).
+Parameters: host, port, user, password, key_file, passphrase, use_agent, command, disconnect, host_key_check, timeout_sec, jump_host, jump_port, jump_user, jump_password, jump_key_file, jump_passphrase
+
+## sftp
+Transfer files and manage remote filesystems over SSH (SFTP protocol).
+Reuses SSH session pool — same authentication, session reuse, and idle timeout (30 min) as ssh tool.
+Sync operations: upload (local→remote), download (remote→local), ls, stat, mkdir, rm, chmod, rename.
+Async operations: upload_async, download_async (returns transfer_id), status (check progress), cancel.
+Max transfer size: 2 GB. Recursive delete limited to 10,000 items. Dangerous paths (/, /home, /etc, etc.) protected.
+Parameters: host, port, user, password, key_file, passphrase, use_agent, host_key_check,
+  jump_host, jump_port, jump_user, jump_password, jump_key_file, jump_passphrase,
+  operation, local_path, remote_path, recursive, mode, new_path, overwrite, transfer_id
+
 ## set_config
 Change agent-tool runtime configuration.
-Supports: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks.
+Supports: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks, workspace.
 Call with no arguments to view current config.
-Parameters: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks`
+Parameters: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks, workspace`
 }
 
 func helpTroubleshooting() string {

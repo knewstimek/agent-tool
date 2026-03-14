@@ -26,9 +26,13 @@ import (
 	"agent-tool/tools/help"
 	"agent-tool/tools/listdir"
 	"agent-tool/tools/patch"
+	"agent-tool/tools/procexec"
+	"agent-tool/tools/prockill"
 	"agent-tool/tools/proclist"
 	"agent-tool/tools/read"
 	"agent-tool/tools/rename"
+	sftptool "agent-tool/tools/sftp"
+	"agent-tool/tools/ssh"
 	"agent-tool/tools/sysinfo"
 	"agent-tool/tools/write"
 
@@ -114,8 +118,12 @@ func main() {
 	sysinfo.Register(server)
 	findtools.Register(server)
 	proclist.Register(server)
+	prockill.Register(server)
+	procexec.Register(server)
 	envvar.Register(server)
 	firewall.Register(server)
+	ssh.Register(server)
+	sftptool.Register(server)
 	help.Register(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
