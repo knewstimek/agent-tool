@@ -80,12 +80,23 @@ Claude Code, Codex 등 AI 코딩 에이전트가 다운로드 → 설치 → 재
 
 ### 권장: CLAUDE.md / AGENTS.md에 추가
 
-설치 후 에이전트가 agent-tool을 사용할 수 있게 되지만, 기본 내장 도구(Read, Edit 등)를 계속 쓸 수 있습니다. 에이전트가 agent-tool을 **우선 사용**하게 하려면, 프로젝트의 `CLAUDE.md` 또는 `AGENTS.md`에 다음을 추가하세요:
+설치 후 에이전트가 agent-tool을 사용할 수 있게 되지만, 기본 내장 도구(Read, Edit 등)를 계속 쓸 수 있습니다. 에이전트가 agent-tool을 **우선 사용**하게 하려면, 프로젝트의 `CLAUDE.md` 또는 `AGENTS.md`에 다음 중 하나를 추가하세요:
+
+**Strict 모드** (비 UTF-8 파일이나 혼합 들여쓰기가 있는 프로젝트에 권장):
 
 ```markdown
-Use agent-tool MCP tools (mcp__agent-tool__*) instead of built-in file tools when available.
-agent-tool provides encoding-aware read/write/edit, smart indentation conversion,
-and additional tools like SSH, SFTP, process management, and system info.
+ALWAYS use agent-tool MCP tools (mcp__agent-tool__*) instead of built-in file tools.
+Do NOT use built-in Read, Edit, Write, Grep, or Glob — use mcp__agent-tool__read,
+mcp__agent-tool__edit, mcp__agent-tool__write, mcp__agent-tool__grep, mcp__agent-tool__glob instead.
+agent-tool preserves file encoding (UTF-8, EUC-KR, Shift_JIS, etc.) and respects
+.editorconfig indentation settings, which built-in tools do not.
+```
+
+**Soft 모드** (일반 프로젝트용):
+
+```markdown
+Prefer agent-tool MCP tools (mcp__agent-tool__*) over built-in file tools when available.
+agent-tool provides encoding-aware read/write/edit and smart indentation conversion.
 ```
 
 ## 설치

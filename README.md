@@ -80,12 +80,23 @@ Any capable AI coding agent (Claude Code, Codex, etc.) can handle the full downl
 
 ### Recommended: Add to your CLAUDE.md / AGENTS.md
 
-After installing, agents will have access to agent-tool but may still default to built-in tools (Read, Edit, etc.). To ensure agents **prefer** agent-tool's encoding-aware, indentation-smart tools, add this to your project's `CLAUDE.md` or `AGENTS.md`:
+After installing, agents will have access to agent-tool but may still default to built-in tools (Read, Edit, etc.). To ensure agents **prefer** agent-tool's encoding-aware, indentation-smart tools, add one of the following to your project's `CLAUDE.md` or `AGENTS.md`:
+
+**Strict mode** (recommended for projects with non-UTF-8 files or mixed indentation):
 
 ```markdown
-Use agent-tool MCP tools (mcp__agent-tool__*) instead of built-in file tools when available.
-agent-tool provides encoding-aware read/write/edit, smart indentation conversion,
-and additional tools like SSH, SFTP, process management, and system info.
+ALWAYS use agent-tool MCP tools (mcp__agent-tool__*) instead of built-in file tools.
+Do NOT use built-in Read, Edit, Write, Grep, or Glob — use mcp__agent-tool__read,
+mcp__agent-tool__edit, mcp__agent-tool__write, mcp__agent-tool__grep, mcp__agent-tool__glob instead.
+agent-tool preserves file encoding (UTF-8, EUC-KR, Shift_JIS, etc.) and respects
+.editorconfig indentation settings, which built-in tools do not.
+```
+
+**Soft mode** (gentle nudge for general projects):
+
+```markdown
+Prefer agent-tool MCP tools (mcp__agent-tool__*) over built-in file tools when available.
+agent-tool provides encoding-aware read/write/edit and smart indentation conversion.
 ```
 
 ## Installation
