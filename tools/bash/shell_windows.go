@@ -161,6 +161,15 @@ func delegateToCmdExe(command string) string {
 	return fmt.Sprintf("& cmd /c '%s'", escaped)
 }
 
+// delegateToExternalShell wraps a command for execution via git-bash or cmd.exe.
+// Prefer git-bash (handles Unix paths, UTF-8), fall back to cmd.exe.
+func delegateToExternalShell(command string) string {
+	if gb := findGitBash(); gb != "" {
+		return delegateToGitBash(command, gb)
+	}
+	return delegateToCmdExe(command)
+}
+
 // buildSentinelCmd wraps a command with exit code capture and sentinel marker.
 func buildSentinelCmd(kind shellKind, command string, sentinel string) string {
 	switch kind {
@@ -177,27 +186,16 @@ func buildSentinelCmd(kind shellKind, command string, sentinel string) string {
 		// handler.go also emits a warning so the agent learns to use ; instead.
 		userCmd := command
 		parsed := parseChainOps(command)
-		if parsed.HasChainOps() {
-			if parsed.HasGrouping() {
-				// Parenthesized chains like (cmd1 && cmd2) || cmd3 can't be
-				// correctly flattened — delegate to a shell that handles them.
-				// Prefer git-bash (Unix paths, UTF-8), fall back to cmd.exe.
-				if gb := findGitBash(); gb != "" {
-					userCmd = delegateToGitBash(command, gb)
-				} else {
-					userCmd = delegateToCmdExe(command)
-				}
-			} else if parsed.HasEmptySegment() {
-				// Empty segments like "&& cmd" or "cmd &&" are syntax errors,
-				// but we still can't pass them to PS 5.1 raw — the && would
-				// kill the entire line including the sentinel, causing a hang.
-				// Delegate to git-bash/cmd.exe so the error is reported normally.
-				if gb := findGitBash(); gb != "" {
-					userCmd = delegateToGitBash(command, gb)
-				} else {
-					userCmd = delegateToCmdExe(command)
-				}
+		if parsed.NeedsDelegation() {
+			// Command contains && / || inside $() or () — PS 5.1 can't parse
+			// these even as subexpressions. Delegate the whole command.
+			userCmd = delegateToExternalShell(command)
+		} else if parsed.HasChainOps() {
+			if parsed.HasEmptySegment() {
+				// Syntax errors like "&& cmd" — still can't pass raw to PS 5.1.
+				userCmd = delegateToExternalShell(command)
 			} else {
+				// Simple top-level chain: transform to PS equivalents.
 				userCmd = buildPSChainOps(parsed)
 			}
 		}

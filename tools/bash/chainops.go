@@ -10,19 +10,19 @@ type chainSegment struct {
 
 // chainParse holds the result of parsing chain operators from a command.
 type chainParse struct {
-	Segments  []chainSegment
-	HasParens bool // true if ( or ) found outside quotes alongside chain ops
+	Segments     []chainSegment
+	HasNestedOps bool // && / || found inside $() or () — PS 5.1 can't handle these
 }
 
-// HasChainOps returns true if && or || operators were found outside quotes.
+// HasChainOps returns true if top-level && or || operators were found outside quotes.
 func (p chainParse) HasChainOps() bool {
 	return len(p.Segments) > 1
 }
 
-// HasGrouping returns true if parenthesized subexpressions exist with chain ops.
-// e.g. "(cmd1 && cmd2) || cmd3"
-func (p chainParse) HasGrouping() bool {
-	return p.HasChainOps() && p.HasParens
+// NeedsDelegation returns true if the command contains && / || inside nested
+// structures like $() or () that PowerShell 5.1 cannot parse.
+func (p chainParse) NeedsDelegation() bool {
+	return p.HasNestedOps
 }
 
 // HasEmptySegment returns true if any segment is empty (e.g. "&& cmd" or "cmd &&").
@@ -35,20 +35,22 @@ func (p chainParse) HasEmptySegment() bool {
 	return false
 }
 
-// parseChainOps tokenizes a bash command, splitting by && and || operators
-// while correctly handling:
+// parseChainOps tokenizes a bash command, splitting by top-level && and ||
+// operators while correctly handling:
 //   - Single quotes: content is literal, no escaping (bash rule)
 //   - Double quotes: backslash escapes \" and \\ (bash rule)
-//   - Parentheses outside quotes are detected for grouping
+//   - $() command substitution and () subshells: tracked via paren depth,
+//     so && / || inside these are NOT treated as top-level operators
 //
 // This is the single source of truth for quote-aware chain operator parsing.
-// All consumers (hasChainOps, hasGrouping, transformChainOps, handler warnings)
-// should use this function instead of ad-hoc string scanning.
+// All consumers (hasChainOps, buildPSChainOps, handler warnings) should use
+// this function instead of ad-hoc string scanning.
 func parseChainOps(cmd string) chainParse {
 	var segments []chainSegment
 	var buf strings.Builder
-	hasParens := false
+	hasNestedOps := false
 	inSingle, inDouble := false, false
+	parenDepth := 0
 
 	for i := 0; i < len(cmd); i++ {
 		ch := cmd[i]
@@ -74,22 +76,35 @@ func parseChainOps(cmd string) chainParse {
 			inDouble = !inDouble
 		}
 
-		// Outside quotes: detect operators and parentheses
+		// Outside quotes: track paren depth and detect operators
 		if !inSingle && !inDouble {
+			// Track $() and () nesting so we only split at the top level.
+			// $((expr)) arithmetic also works — depth increments twice.
+			if ch == '(' {
+				parenDepth++
+			}
+			if ch == ')' && parenDepth > 0 {
+				parenDepth--
+			}
+
 			if i+1 < len(cmd) {
 				pair := cmd[i : i+2]
 				if pair == "&&" || pair == "||" {
-					segments = append(segments, chainSegment{
-						Text: strings.TrimSpace(buf.String()),
-						Op:   pair,
-					})
-					buf.Reset()
-					i++ // skip second character
-					continue
+					if parenDepth == 0 {
+						// Top-level chain operator — split here.
+						segments = append(segments, chainSegment{
+							Text: strings.TrimSpace(buf.String()),
+							Op:   pair,
+						})
+						buf.Reset()
+						i++ // skip second character
+						continue
+					} else {
+						// Chain op inside $() or () — PS 5.1 can't handle this,
+						// so the entire command must be delegated to git-bash/cmd.exe.
+						hasNestedOps = true
+					}
 				}
-			}
-			if ch == '(' || ch == ')' {
-				hasParens = true
 			}
 		}
 
@@ -102,8 +117,8 @@ func parseChainOps(cmd string) chainParse {
 	})
 
 	return chainParse{
-		Segments:  segments,
-		HasParens: hasParens,
+		Segments:     segments,
+		HasNestedOps: hasNestedOps,
 	}
 }
 
