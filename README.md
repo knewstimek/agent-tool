@@ -108,23 +108,11 @@ After installing, agents will have access to agent-tool but may still default to
 
 **Strict mode** (recommended for projects with non-UTF-8 files or mixed indentation):
 
-```markdown
-ALWAYS use agent-tool MCP tools (mcp__agent-tool__*) instead of built-in file tools.
-Do NOT use built-in Read, Edit, Write, Grep, or Glob — use mcp__agent-tool__read,
-mcp__agent-tool__edit, mcp__agent-tool__write, mcp__agent-tool__grep, mcp__agent-tool__glob instead.
-agent-tool preserves file encoding (UTF-8, EUC-KR, Shift_JIS, etc.) and respects
-.editorconfig indentation settings, which built-in tools do not.
-When spawning subagents (Agent tool), instruct them to use agent-tool MCP tools
-(mcp__agent-tool__*) as well. Subagents have full access to MCP tools.
-```
+> ALWAYS use agent-tool MCP tools (mcp__agent-tool__*) instead of built-in file tools. agent-tool preserves file encoding and respects .editorconfig indentation settings.
 
 **Soft mode** (gentle nudge for general projects):
 
-```markdown
-Prefer agent-tool MCP tools (mcp__agent-tool__*) over built-in file tools when available.
-agent-tool provides encoding-aware read/write/edit and smart indentation conversion.
-When spawning subagents, instruct them to prefer agent-tool MCP tools too.
-```
+> Prefer agent-tool MCP tools (mcp__agent-tool__*) over built-in file tools when available.
 
 ## Installation
 
