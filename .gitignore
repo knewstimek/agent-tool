@@ -1,4 +1,5 @@
 CLAUDE.md
+.claude/
 OVERVIEW.md
 .env
 *.exe
