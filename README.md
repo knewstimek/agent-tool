@@ -71,8 +71,10 @@ Edits preserve the original file encoding instead of forcing UTF-8.
 3. Restart your IDE / agent
 4. Done — all tools are available immediately with no permission popups
 
-Or ask your AI agent:
+Or just ask your AI agent to do it for you:
 > "Download agent-tool from https://github.com/knewstimek/agent-tool/releases/latest and run `agent-tool install`"
+
+Any capable AI coding agent (Claude Code, Codex, etc.) can handle the full download → install → restart flow automatically.
 
 ## Installation
 

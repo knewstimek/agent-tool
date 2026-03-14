@@ -74,6 +74,8 @@ UTF-8로 강제 변환하지 않고, 원본 파일 인코딩을 유지합니다.
 또는 AI 에이전트에게 시키세요:
 > "https://github.com/knewstimek/agent-tool/releases/latest 에서 agent-tool을 다운받고 `agent-tool install` 실행해줘"
 
+Claude Code, Codex 등 AI 코딩 에이전트가 다운로드 → 설치 → 재시작까지 알아서 처리합니다.
+
 ## 설치
 
 ### 자동 설치 (권장)
