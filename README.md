@@ -36,6 +36,7 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **Decompress** | Extract zip / tar.gz archives (Zip Slip/Bomb protection) | ✅ |
 | **Backup** | Timestamped zip backup with exclude patterns | ✅ |
 | **ConvertEncoding** | Convert file encoding (EUC-KR ↔ UTF-8, add/remove BOM, etc.) | ✅ |
+| **Delete** | Safe single-file deletion (no directories, no symlinks, system path protection, dry_run) | ✅ |
 | **FindTools** | Discover installed dev tools — compilers, runtimes, build systems (Go, .NET, Node, Python, Java, Rust, C/C++, etc.) | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
@@ -57,6 +58,16 @@ Edits preserve the original file encoding instead of forcing UTF-8.
 - **Detection priority**: `.editorconfig` charset → chardet auto-detection → fallback encoding
 - **Supported**: UTF-8, UTF-8 BOM, EUC-KR, Shift-JIS, ISO-8859-1, UTF-16, and more
 - **Line endings**: Preserves `\r\n` / `\n` as-is
+
+## Quick Start
+
+1. Download the binary for your OS from [Releases](https://github.com/knewstimek/agent-tool/releases/latest)
+2. Run `agent-tool install` (or `agent-tool install claude` for a specific agent)
+3. Restart your IDE / agent
+4. Done — all tools are available immediately with no permission popups
+
+Or ask your AI agent:
+> "Download agent-tool from https://github.com/knewstimek/agent-tool/releases/latest and run `agent-tool install`"
 
 ## Installation
 
