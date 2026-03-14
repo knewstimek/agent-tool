@@ -64,8 +64,8 @@ func getDiskInfo() ([]DiskInfo, error) {
 		if err := syscall.Statfs(p, &stat); err != nil {
 			continue
 		}
-		// 같은 파일시스템 중복 방지
-		fsid := uint64(stat.Fsid.Val[0])<<32 | uint64(stat.Fsid.Val[1])
+		// 같은 파일시스템 중복 방지 (Blocks+Bsize 조합 — Fsid 필드명이 OS마다 다름)
+		fsid := uint64(stat.Blocks)<<32 | uint64(stat.Bsize)
 		if seen[fsid] {
 			continue
 		}
