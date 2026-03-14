@@ -48,6 +48,37 @@ func validateRemotePath(path string) error {
 	return nil
 }
 
+// sensitiveLocalDirs lists directory basenames that should be protected from SFTP writes.
+var sensitiveLocalDirs = map[string]bool{
+	".ssh":        true,
+	".gnupg":      true,
+	".config":     true,
+	".kube":       true,
+	".docker":     true,
+	".aws":        true,
+	".azure":      true,
+	".gcloud":     true,
+	".npmrc":      true,
+	".pypirc":     true,
+	".gem":        true,
+	".cargo":      true,
+}
+
+// sensitiveLocalFiles lists filenames that should be protected from SFTP writes.
+var sensitiveLocalFiles = map[string]bool{
+	".bashrc":       true,
+	".bash_profile": true,
+	".zshrc":        true,
+	".profile":      true,
+	".gitconfig":    true,
+	".netrc":        true,
+	".env":          true,
+	"id_rsa":        true,
+	"id_ed25519":    true,
+	"authorized_keys": true,
+	"known_hosts":   true,
+}
+
 // validateLocalPath checks that a local path is safe for file transfer.
 func validateLocalPath(path string) error {
 	if path == "" {
@@ -59,6 +90,34 @@ func validateLocalPath(path string) error {
 	if strings.ContainsRune(path, 0) {
 		return fmt.Errorf("local_path contains null byte")
 	}
+	return nil
+}
+
+// isSensitiveLocalPath checks if a local path targets a sensitive location.
+// Used for download/write operations to prevent overwriting critical files.
+func isSensitiveLocalPath(path string) error {
+	cleaned := filepath.Clean(path)
+
+	// Resolve symlinks to prevent symlink-based bypass
+	resolved, err := filepath.EvalSymlinks(filepath.Dir(cleaned))
+	if err == nil {
+		cleaned = filepath.Join(resolved, filepath.Base(cleaned))
+	}
+
+	// Check each component of the path for sensitive directories
+	parts := strings.Split(filepath.ToSlash(cleaned), "/")
+	for _, part := range parts {
+		if sensitiveLocalDirs[part] {
+			return fmt.Errorf("refusing to write to sensitive directory %q in path: %s", part, path)
+		}
+	}
+
+	// Check filename
+	baseName := filepath.Base(cleaned)
+	if sensitiveLocalFiles[baseName] {
+		return fmt.Errorf("refusing to write to sensitive file: %s", baseName)
+	}
+
 	return nil
 }
 

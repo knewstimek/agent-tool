@@ -20,6 +20,19 @@ const (
 	maxOutputSize = 64 * 1024 // 64 KB
 )
 
+// dangerousEnvKeys are environment variable keys that could be used to hijack execution.
+var dangerousEnvKeys = map[string]bool{
+	"PATH":              true,
+	"LD_PRELOAD":        true,
+	"LD_LIBRARY_PATH":   true,
+	"DYLD_LIBRARY_PATH": true,
+	"DYLD_INSERT_LIBRARIES": true,
+	"DYLD_FRAMEWORK_PATH":   true,
+	"COMSPEC":           true, // Windows command interpreter
+	"PATHEXT":           true, // Windows executable extensions
+	"IFS":               true, // shell field separator
+}
+
 type ProcExecInput struct {
 	Command    string   `json:"command" jsonschema:"Command to execute (required)"`
 	Args       []string `json:"args,omitempty" jsonschema:"Command arguments"`
@@ -73,10 +86,14 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ProcExecInput) 
 		}
 	}
 
-	// 4. Validate env format
+	// 4. Validate env format and block dangerous keys
 	for _, e := range input.Env {
 		if !strings.Contains(e, "=") {
 			return errorResult(fmt.Sprintf("invalid env format (must be KEY=VALUE): %s", e))
+		}
+		key := strings.ToUpper(e[:strings.Index(e, "=")])
+		if dangerousEnvKeys[key] {
+			return errorResult(fmt.Sprintf("env key %q is blocked for security (could alter execution behavior)", key))
 		}
 	}
 

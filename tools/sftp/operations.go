@@ -73,6 +73,9 @@ func opDownload(client *sftp.Client, input SFTPInput) (string, error) {
 	if err := validateLocalPath(input.LocalPath); err != nil {
 		return "", err
 	}
+	if err := isSensitiveLocalPath(input.LocalPath); err != nil {
+		return "", err
+	}
 
 	// Check remote file
 	remoteInfo, err := client.Stat(input.RemotePath)

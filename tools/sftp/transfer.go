@@ -86,11 +86,25 @@ func generateID() string {
 	return string(b)
 }
 
-// allocateTransferID generates a unique ID and inserts the entry atomically.
-// Returns the ID. Caller must hold NO locks.
-func allocateTransferID(entry *transferEntry) string {
+// allocateTransferID checks the concurrent limit, generates a unique ID, and inserts
+// the entry atomically. Returns the ID or an error if the limit is reached.
+// Caller must hold NO locks.
+func allocateTransferID(entry *transferEntry) (string, error) {
 	transfers.mu.Lock()
 	defer transfers.mu.Unlock()
+
+	// Atomic check-and-insert: count + allocate in same critical section
+	running := 0
+	for _, e := range transfers.m {
+		e.mu.Lock()
+		if e.Status == "running" {
+			running++
+		}
+		e.mu.Unlock()
+	}
+	if running >= maxConcurrentTransfers {
+		return "", fmt.Errorf("too many concurrent transfers (max %d)", maxConcurrentTransfers)
+	}
 
 	id := generateID()
 	for transfers.m[id] != nil {
@@ -98,21 +112,7 @@ func allocateTransferID(entry *transferEntry) string {
 	}
 	entry.ID = id
 	transfers.m[id] = entry
-	return id
-}
-
-// countRunningTransfers returns the number of currently running transfers.
-// Must be called with transfers.mu held.
-func countRunningTransfers() int {
-	count := 0
-	for _, e := range transfers.m {
-		e.mu.Lock()
-		if e.Status == "running" {
-			count++
-		}
-		e.mu.Unlock()
-	}
-	return count
+	return id, nil
 }
 
 // progressReader wraps an io.Reader and tracks bytes read.
@@ -164,14 +164,6 @@ func startAsyncUpload(input SFTPInput) (string, error) {
 		return "", fmt.Errorf("file too large: %s (max %s)", formatSize(localInfo.Size()), formatSize(maxTransferSize))
 	}
 
-	// Check concurrent transfer limit
-	transfers.mu.Lock()
-	if countRunningTransfers() >= maxConcurrentTransfers {
-		transfers.mu.Unlock()
-		return "", fmt.Errorf("too many concurrent transfers (max %d)", maxConcurrentTransfers)
-	}
-	transfers.mu.Unlock()
-
 	ctx, cancel := context.WithCancel(context.Background())
 
 	entry := &transferEntry{
@@ -184,7 +176,12 @@ func startAsyncUpload(input SFTPInput) (string, error) {
 		cancel:     cancel,
 	}
 
-	id := allocateTransferID(entry)
+	// Atomic: check concurrent limit + allocate ID + insert entry
+	id, err := allocateTransferID(entry)
+	if err != nil {
+		cancel()
+		return "", err
+	}
 	go runAsyncUpload(ctx, entry, input)
 
 	return id, nil
@@ -198,14 +195,9 @@ func startAsyncDownload(input SFTPInput) (string, error) {
 	if err := validateLocalPath(input.LocalPath); err != nil {
 		return "", err
 	}
-
-	// Check concurrent transfer limit
-	transfers.mu.Lock()
-	if countRunningTransfers() >= maxConcurrentTransfers {
-		transfers.mu.Unlock()
-		return "", fmt.Errorf("too many concurrent transfers (max %d)", maxConcurrentTransfers)
+	if err := isSensitiveLocalPath(input.LocalPath); err != nil {
+		return "", err
 	}
-	transfers.mu.Unlock()
 
 	// We need to check remote file size, which requires SSH connection
 	sshInput := toSSHInput(input)
@@ -248,7 +240,12 @@ func startAsyncDownload(input SFTPInput) (string, error) {
 		cancel:     cancel,
 	}
 
-	id := allocateTransferID(entry)
+	// Atomic: check concurrent limit + allocate ID + insert entry
+	id, err := allocateTransferID(entry)
+	if err != nil {
+		cancel()
+		return "", err
+	}
 	go runAsyncDownload(ctx, entry, input)
 
 	return id, nil
