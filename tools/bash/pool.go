@@ -19,15 +19,18 @@ type shellKind int
 
 const (
 	kindDefault    shellKind = 0 // bash/sh on Unix
-	kindPowerShell shellKind = 1
+	kindPowerShell shellKind = 1 // Windows PowerShell 5.1 — does NOT support && / ||
 	kindGitBash    shellKind = 2
 	kindCmd        shellKind = 3
+	kindPwsh       shellKind = 4 // PowerShell 7+ (pwsh.exe) — supports && / || natively
 )
 
 func (k shellKind) String() string {
 	switch k {
 	case kindPowerShell:
 		return "powershell"
+	case kindPwsh:
+		return "pwsh"
 	case kindGitBash:
 		return "git-bash"
 	case kindCmd:

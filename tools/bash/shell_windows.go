@@ -18,12 +18,12 @@ import (
 // PowerShell is preferred because it provides native UTF-8 output, structured
 // exit codes via $LASTEXITCODE, and better PATH handling than cmd.exe.
 func detectShell() (string, []string, shellKind) {
-	// PowerShell Core (pwsh.exe) — cross-platform, newer
+	// PowerShell 7+ (pwsh.exe) — supports && / || natively
 	if path, err := exec.LookPath("pwsh.exe"); err == nil {
-		return path, psArgs(), kindPowerShell
+		return path, psArgs(), kindPwsh
 	}
 
-	// Windows PowerShell (available on Windows 7+)
+	// Windows PowerShell 5.1 — does NOT support && / ||
 	if path, err := exec.LookPath("powershell.exe"); err == nil {
 		return path, psArgs(), kindPowerShell
 	}
@@ -106,24 +106,101 @@ func decodeOutput(kind shellKind, raw string) string {
 	return raw
 }
 
-// containsCmdOperators checks if a command uses && or || operators
-// that are not supported in Windows PowerShell 5.1 (added in PS 7).
-func containsCmdOperators(cmd string) bool {
-	return strings.Contains(cmd, "&&") || strings.Contains(cmd, "||")
+// findGitBash returns the path to git bash if installed, empty string otherwise.
+func findGitBash() string {
+	for _, p := range []string{
+		filepath.Join(os.Getenv("ProgramFiles"), "Git", "bin", "bash.exe"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Git", "bin", "bash.exe"),
+		filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "Git", "bin", "bash.exe"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// buildPSChainOps converts parsed chain segments to PowerShell equivalents.
+//
+//	"cmd1 && cmd2"  →  "$global:LASTEXITCODE=0; cmd1; if($global:LASTEXITCODE -eq 0){ cmd2 }"
+//	"cmd1 || cmd2"  →  "$global:LASTEXITCODE=0; cmd1; if($global:LASTEXITCODE -ne 0){ cmd2 }"
+func buildPSChainOps(parsed chainParse) string {
+	var result strings.Builder
+	// Initialize $LASTEXITCODE to 0 so the first "if" check works even when
+	// the first command is a PS cmdlet (which doesn't set $LASTEXITCODE).
+	result.WriteString("$global:LASTEXITCODE=0; ")
+	result.WriteString(parsed.Segments[0].Text)
+
+	for i := 0; i < len(parsed.Segments)-1; i++ {
+		op := parsed.Segments[i].Op
+		next := parsed.Segments[i+1].Text
+		if op == "&&" {
+			result.WriteString("; if($global:LASTEXITCODE -eq 0){ ")
+		} else {
+			result.WriteString("; if($global:LASTEXITCODE -ne 0){ ")
+		}
+		result.WriteString(next)
+		result.WriteString(" }")
+	}
+
+	return result.String()
+}
+
+// delegateToGitBash wraps a command for execution via git-bash from PowerShell.
+// Uses PS double-quotes so bash receives original single-quotes intact.
+func delegateToGitBash(command, gbPath string) string {
+	escaped := strings.ReplaceAll(command, "`", "``")
+	escaped = strings.ReplaceAll(escaped, "$", "`$")
+	escaped = strings.ReplaceAll(escaped, `"`, "`\"")
+	return fmt.Sprintf("& '%s' -c \"%s\"", gbPath, escaped)
+}
+
+// delegateToCmdExe wraps a command for execution via cmd.exe from PowerShell.
+func delegateToCmdExe(command string) string {
+	escaped := strings.ReplaceAll(command, "'", "''")
+	return fmt.Sprintf("& cmd /c '%s'", escaped)
 }
 
 // buildSentinelCmd wraps a command with exit code capture and sentinel marker.
 func buildSentinelCmd(kind shellKind, command string, sentinel string) string {
 	switch kind {
+	case kindPwsh:
+		// PowerShell 7+ supports && and || natively — pass through as-is.
+		return fmt.Sprintf(
+			"%s; $__ec = $LASTEXITCODE; if ($null -eq $__ec) { $__ec = if ($?) {0} else {1} }; Write-Host \"\"; Write-Host \"%s$__ec%s\"",
+			command, sentinel, sentinelSuffix,
+		)
 	case kindPowerShell:
+		// PowerShell 5.1: && / || cause a parse error that kills the entire line
+		// including the sentinel, causing the reader to hang forever.
+		// Parse once, then choose strategy based on result.
+		// handler.go also emits a warning so the agent learns to use ; instead.
 		userCmd := command
-		// Windows PowerShell 5.1 doesn't support && and || operators.
-		// Route through cmd.exe when these operators are present.
-		if containsCmdOperators(command) {
-			escaped := strings.ReplaceAll(command, "'", "''")
-			userCmd = fmt.Sprintf("& cmd /c '%s'", escaped)
+		parsed := parseChainOps(command)
+		if parsed.HasChainOps() {
+			if parsed.HasGrouping() {
+				// Parenthesized chains like (cmd1 && cmd2) || cmd3 can't be
+				// correctly flattened — delegate to a shell that handles them.
+				// Prefer git-bash (Unix paths, UTF-8), fall back to cmd.exe.
+				if gb := findGitBash(); gb != "" {
+					userCmd = delegateToGitBash(command, gb)
+				} else {
+					userCmd = delegateToCmdExe(command)
+				}
+			} else if parsed.HasEmptySegment() {
+				// Empty segments like "&& cmd" or "cmd &&" are syntax errors,
+				// but we still can't pass them to PS 5.1 raw — the && would
+				// kill the entire line including the sentinel, causing a hang.
+				// Delegate to git-bash/cmd.exe so the error is reported normally.
+				if gb := findGitBash(); gb != "" {
+					userCmd = delegateToGitBash(command, gb)
+				} else {
+					userCmd = delegateToCmdExe(command)
+				}
+			} else {
+				userCmd = buildPSChainOps(parsed)
+			}
 		}
-		// $LASTEXITCODE: set by native commands. $?: set by all commands.
 		return fmt.Sprintf(
 			"%s; $__ec = $LASTEXITCODE; if ($null -eq $__ec) { $__ec = if ($?) {0} else {1} }; Write-Host \"\"; Write-Host \"%s$__ec%s\"",
 			userCmd, sentinel, sentinelSuffix,

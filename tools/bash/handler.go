@@ -94,6 +94,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BashInput) (*mc
 	var sb strings.Builder
 	if isNew {
 		sb.WriteString(fmt.Sprintf("[New session: %s (%s)]\n", input.SessionID, sess.shellKind))
+		if sess.shellKind == kindPowerShell {
+			sb.WriteString("[Warning: PowerShell 5.1 does not support && and ||. Use ; (semicolons) to chain commands.]\n")
+		}
 	}
 	sb.WriteString(fmt.Sprintf("$ %s\n", input.Command))
 	if result.Output != "" {
@@ -103,6 +106,11 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BashInput) (*mc
 		}
 	}
 	sb.WriteString(fmt.Sprintf("[exit code: %d]", result.ExitCode))
+	// Warn when chain operators were used in PS 5.1 (auto-transformed to prevent hang).
+	// Uses quote-aware hasChainOps to avoid false warnings on: echo "a && b"
+	if sess.shellKind == kindPowerShell && hasChainOps(input.Command) {
+		sb.WriteString("\n[Warning: && / || were auto-transformed for PowerShell 5.1 compatibility. Use ; to chain commands.]")
+	}
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
