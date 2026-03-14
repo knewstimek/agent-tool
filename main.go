@@ -93,7 +93,7 @@ func main() {
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "agent-tool",
-			Version: "v0.3.2",
+			Version: "v0.4.0",
 		},
 		nil,
 	)
