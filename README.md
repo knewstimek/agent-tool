@@ -60,6 +60,7 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **YAMLQuery** | Query YAML files with dot-notation paths (same syntax as JSONQuery) | ✅ |
 | **TOMLQuery** | Query TOML files with dot-notation paths (same syntax as JSONQuery). Supports TOML-specific types (datetime, int64) | ✅ |
 | **Copy** | Copy files/directories with atomic write and permission preservation. Recursive directory copy. dry_run preview | ✅ |
+| **Mkdir** | Create directories with optional permission mode (octal, e.g. 0755). Recursive by default (mkdir -p). dry_run preview | ✅ |
 | **MultiRead** | Read multiple files in a single call to reduce API round-trips. Encoding-aware, offset/limit support. Max 50 files | ✅ |
 | **RegexReplace** | Regex find-and-replace across files/directories. Encoding-preserving, capture groups ($1, $2). dry_run preview | ✅ |
 | **TLSCheck** | Check TLS certificate details — subject, issuer, expiry, SANs, TLS version, cipher suite | ✅ |

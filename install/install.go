@@ -427,6 +427,7 @@ var safePermissionEntries = []string{
 	"mcp__agent-tool__convert_encoding",
 	"mcp__agent-tool__delete",
 	"mcp__agent-tool__rename",
+	"mcp__agent-tool__mkdir",
 	"mcp__agent-tool__copy",
 	"mcp__agent-tool__regexreplace",
 	"mcp__agent-tool__jsonquery",

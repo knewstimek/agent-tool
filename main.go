@@ -32,6 +32,7 @@ import (
 	"agent-tool/tools/httpreq"
 	"agent-tool/tools/jsonquery"
 	"agent-tool/tools/listdir"
+	"agent-tool/tools/mkdir"
 	mysqltool "agent-tool/tools/mysql"
 	"agent-tool/tools/multiread"
 	"agent-tool/tools/tomlquery"
@@ -164,6 +165,7 @@ func main() {
 	delete.Register(server)
 	rename.Register(server)
 	copytool.Register(server)
+	mkdir.Register(server)
 	multiread.Register(server)
 	sysinfo.Register(server)
 	findtools.Register(server)

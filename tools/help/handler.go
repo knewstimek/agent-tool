@@ -96,6 +96,7 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - download: Download files from URLs with ECH, DoH, proxy, and SSRF protection
 - httpreq: Execute HTTP requests with any method (POST, PUT, DELETE, etc.) for API testing
 - copy: Copy files or directories (recursive, atomic write, permissions preserved, dry_run)
+- mkdir: Create directories with optional permission mode (recursive by default)
 - multiread: Read multiple files in one call (reduces API round-trips)
 - regexreplace: Regex find-and-replace across files or directories (capture groups, encoding-aware, dry_run)
 - jsonquery: Query JSON files with dot-notation paths to extract specific values (saves tokens)
@@ -376,6 +377,12 @@ Copy a file or directory. Supports recursive directory copying.
 Uses atomic write (temp file + rename) and preserves file permissions.
 Validates absolute paths and blocks path traversal (..).
 Parameters: source, destination, overwrite (default false), dry_run (default false)
+
+## mkdir
+Create a directory. Creates parent directories by default (like mkdir -p).
+Supports permission mode in octal (e.g. 0755, 0700) — applied on Unix/Linux.
+Use dry_run=true to preview what would be created.
+Parameters: path, recursive (default true), mode (octal, default 0755), dry_run
 
 ## multiread
 Read multiple files in a single call to reduce API round-trips.
