@@ -9,7 +9,9 @@ import (
 
 	"agent-tool/common"
 	"agent-tool/install"
+	bashtool "agent-tool/tools/bash"
 	"agent-tool/tools/backup"
+	"agent-tool/tools/download"
 	"agent-tool/tools/checksum"
 	"agent-tool/tools/compress"
 	"agent-tool/tools/config"
@@ -34,6 +36,8 @@ import (
 	sftptool "agent-tool/tools/sftp"
 	"agent-tool/tools/ssh"
 	"agent-tool/tools/sysinfo"
+	"agent-tool/tools/webfetch"
+	"agent-tool/tools/websearch"
 	"agent-tool/tools/write"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -124,6 +128,10 @@ func main() {
 	firewall.Register(server)
 	ssh.Register(server)
 	sftptool.Register(server)
+	bashtool.Register(server)
+	webfetch.Register(server)
+	websearch.Register(server)
+	download.Register(server)
 	help.Register(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

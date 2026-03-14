@@ -90,6 +90,10 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - firewall: Read firewall rules (iptables/nftables/netsh, read-only)
 - ssh: Execute commands on remote servers via SSH (IPv4/IPv6, ProxyJump, session pooling)
 - sftp: Transfer files and manage remote filesystems over SSH (upload, download, ls, stat, mkdir, rm, chmod, rename, async transfers)
+- bash: Persistent shell sessions with working directory and environment variable retention
+- webfetch: Fetch web content as text/Markdown with ECH, DoH, proxy, and SSRF protection
+- websearch: Web search via Brave Search or Naver API (requires API key env vars)
+- download: Download files from URLs with ECH, DoH, proxy, and SSRF protection
 - set_config: Change runtime settings (fallback encoding, encoding warnings, max file size)
 - agent_tool_help: This help tool
 
@@ -316,6 +320,35 @@ Max transfer size: 2 GB. Recursive delete limited to 10,000 items. Dangerous pat
 Parameters: host, port, user, password, key_file, passphrase, use_agent, host_key_check,
   jump_host, jump_port, jump_user, jump_password, jump_key_file, jump_passphrase,
   operation, local_path, remote_path, recursive, mode, new_path, overwrite, transfer_id
+
+## bash
+Persistent shell sessions that maintain working directory, environment variables, and state across calls.
+Sessions are pooled (max 5, idle timeout 30 min). Uses sentinel markers for output delimitation.
+Unix: /bin/bash (fallback /bin/sh). Windows: cmd.exe.
+Use disconnect=true to close a session.
+Parameters: command, cwd (initial directory for new sessions), session_id (default: "default"), timeout_sec (default 120, max 600), disconnect
+
+## webfetch
+Fetch content from a URL and return it as text. HTML pages are automatically converted to Markdown.
+ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) enabled by default for privacy.
+SSRF protection blocks private/internal IP addresses.
+Default User-Agent mimics Chrome browser. Custom headers supported (User-Agent, Referer, etc.).
+Supports HTTP and SOCKS5 proxies.
+Parameters: url, headers, max_length (default 100000), timeout_sec (default 30, max 120), proxy_url, no_doh, no_ech, raw
+
+## websearch
+Search the web using Brave Search or Naver Search API.
+Requires API keys via environment variables:
+- BRAVE_SEARCH_API_KEY for Brave Search (English/global, default)
+- NAVER_CLIENT_ID + NAVER_CLIENT_SECRET for Naver Search (Korean content)
+Auto-selects engine based on configured keys (Brave preferred) if engine is not specified.
+Parameters: query, engine (brave/naver), max_results (default 5, max 20), timeout_sec (default 15, max 30)
+
+## download
+Download a file from a URL and save it to disk. Supports binary and text files.
+ECH and DoH enabled by default. SSRF protection. HTTP and SOCKS5 proxy support.
+Atomic file write (temp file + rename). Auto-creates parent directories.
+Parameters: url, output_path, headers, overwrite, timeout_sec (default 60, max 600), max_size_mb (default 100, max 2048), proxy_url, no_doh, no_ech
 
 ## set_config
 Change agent-tool runtime configuration.

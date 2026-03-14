@@ -2,6 +2,10 @@
 
 [한국어](README.ko.md)
 
+<a href="https://glama.ai/mcp/servers/knewstimek/agent-tool">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/knewstimek/agent-tool/badge" alt="agent-tool MCP server" />
+</a>
+
 MCP (Model Context Protocol) tool server for AI coding agents.
 
 ## Why?
@@ -47,6 +51,10 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **Firewall** | Read firewall rules — iptables/nftables/firewalld (Linux), netsh (Windows). Read-only | ✅ |
 | **SSH** | Execute commands on remote servers via SSH. Password & key auth, session pooling, host key verification (strict/tofu/none), ProxyJump (IPv4→IPv6 bastion), IPv6 support | ✅ |
 | **SFTP** | Transfer files and manage remote filesystems over SSH. Upload, download, ls, stat, mkdir, rm, chmod, rename. Reuses SSH session pool. Max 2 GB per transfer | ✅ |
+| **Bash** | Persistent shell sessions with working directory and environment variable retention. Session pooling (max 5, idle timeout 30 min). Unix: bash/sh, Windows: cmd.exe | ✅ |
+| **WebFetch** | Fetch web content as text/Markdown. ECH (Encrypted Client Hello) + DoH (DNS over HTTPS) by default. HTML→Markdown auto-conversion. SSRF protection. HTTP/SOCKS5 proxy. Chrome User-Agent | ✅ |
+| **WebSearch** | Web search via Brave Search or Naver API. Requires API key env vars (`BRAVE_SEARCH_API_KEY` or `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`). Auto-selects engine, Brave preferred | ✅ |
+| **Download** | Download files from URLs to disk. ECH + DoH by default. SSRF protection. HTTP/SOCKS5 proxy. Atomic write. Max 2 GB | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 
@@ -90,6 +98,8 @@ Do NOT use built-in Read, Edit, Write, Grep, or Glob — use mcp__agent-tool__re
 mcp__agent-tool__edit, mcp__agent-tool__write, mcp__agent-tool__grep, mcp__agent-tool__glob instead.
 agent-tool preserves file encoding (UTF-8, EUC-KR, Shift_JIS, etc.) and respects
 .editorconfig indentation settings, which built-in tools do not.
+When spawning subagents (Agent tool), instruct them to use agent-tool MCP tools
+(mcp__agent-tool__*) as well. Subagents have full access to MCP tools.
 ```
 
 **Soft mode** (gentle nudge for general projects):
@@ -97,6 +107,7 @@ agent-tool preserves file encoding (UTF-8, EUC-KR, Shift_JIS, etc.) and respects
 ```markdown
 Prefer agent-tool MCP tools (mcp__agent-tool__*) over built-in file tools when available.
 agent-tool provides encoding-aware read/write/edit and smart indentation conversion.
+When spawning subagents, instruct them to prefer agent-tool MCP tools too.
 ```
 
 ## Installation

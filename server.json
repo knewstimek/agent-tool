@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.knewstimek/agent-tool",
+  "title": "agent-tool",
+  "description": "Encoding-aware, indentation-smart file tools for AI coding agents with SSH, SFTP, and 20+ tools.",
+  "repository": {
+    "url": "https://github.com/knewstimek/agent-tool",
+    "source": "github"
+  },
+  "version": "0.4.2",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/knewstimek/agent-tool/releases/download/v0.4.2/agent-tool.mcpb",
+      "fileSha256": "ecd56ae5291c72911f870e1fd20233d12f7a03621cd1b1186075e666a41fbbfa",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
