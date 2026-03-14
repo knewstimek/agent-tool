@@ -328,7 +328,7 @@ Parameters: host, port, user, password, key_file, passphrase, use_agent, host_ke
 ## bash
 Persistent shell sessions that maintain working directory, environment variables, and state across calls.
 Sessions are pooled (max 5, idle timeout 30 min). Uses sentinel markers for output delimitation.
-Platform: bash/sh on Unix, PowerShell/git-bash/cmd on Windows (auto-detected, best available).
+Platform: bash/sh on Unix, pwsh/git-bash/powershell/cmd on Windows (auto-detected, priority order).
 Use disconnect=true to close a session.
 Parameters: command, cwd (initial directory for new sessions), session_id (default: "default"), timeout_sec (default 120, max 600), disconnect
 

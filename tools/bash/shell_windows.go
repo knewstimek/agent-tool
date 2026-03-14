@@ -14,21 +14,21 @@ import (
 	"agent-tool/common"
 )
 
-// detectShell finds the best available shell: PowerShell > git bash > cmd.exe.
-// PowerShell is preferred because it provides native UTF-8 output, structured
-// exit codes via $LASTEXITCODE, and better PATH handling than cmd.exe.
+// detectShell finds the best available shell on Windows.
+// Priority: pwsh (7+) > git-bash > powershell (5.1) > cmd.exe
+//
+// Git-bash is preferred over PowerShell 5.1 because PS 5.1 doesn't support
+// && / || operators, GOOS=linux env syntax, or other bash conventions that
+// AI agents commonly use. PS 5.1 parsing failures can also cause sentinel
+// hangs that are difficult to recover from.
 func detectShell() (string, []string, shellKind) {
-	// PowerShell 7+ (pwsh.exe) — supports && / || natively
+	// PowerShell 7+ (pwsh.exe) — supports && / || natively, best of both worlds
 	if path, err := exec.LookPath("pwsh.exe"); err == nil {
 		return path, psArgs(), kindPwsh
 	}
 
-	// Windows PowerShell 5.1 — does NOT support && / ||
-	if path, err := exec.LookPath("powershell.exe"); err == nil {
-		return path, psArgs(), kindPowerShell
-	}
-
-	// Git bash — check known install locations only (avoid WSL bash)
+	// Git bash — most Windows developers have Git installed.
+	// Handles &&, ||, env vars, Unix paths natively — no parsing surprises.
 	gitPaths := []string{
 		filepath.Join(os.Getenv("ProgramFiles"), "Git", "bin", "bash.exe"),
 		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Git", "bin", "bash.exe"),
@@ -38,6 +38,13 @@ func detectShell() (string, []string, shellKind) {
 		if _, err := os.Stat(p); err == nil {
 			return p, []string{}, kindGitBash
 		}
+	}
+
+	// Windows PowerShell 5.1 — does NOT support && / ||.
+	// Chain operators are auto-transformed (see chainops.go), but other PS
+	// parsing edge cases can still cause sentinel hangs.
+	if path, err := exec.LookPath("powershell.exe"); err == nil {
+		return path, psArgs(), kindPowerShell
 	}
 
 	// Fallback: cmd.exe
