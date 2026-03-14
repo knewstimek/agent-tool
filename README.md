@@ -22,16 +22,21 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 
 | Tool | Description | Status |
 |------|-------------|--------|
-| **Edit** | String replacement with smart indentation and encoding preservation | ✅ |
+| **Edit** | String replacement with smart indentation and encoding preservation (supports dry_run) | ✅ |
 | **Read** | Encoding-aware file reading with line range support | ✅ |
 | **Write** | Encoding-aware file creation/overwrite | ✅ |
 | **Grep** | Encoding-aware regex content search | ✅ |
 | **Glob** | File pattern matching with `**` recursive support | ✅ |
 | **ListDir** | Tree-style directory listing | ✅ |
+| **Diff** | Compare two files with unified diff output (encoding-aware) | ✅ |
+| **Patch** | Apply unified diff patch to a file (supports dry_run) | ✅ |
+| **Checksum** | Compute file hash (md5, sha1, sha256) | ✅ |
+| **FileInfo** | File metadata (size, encoding, line ending, indentation, line count) | ✅ |
 | **Compress** | Create zip / tar.gz archives | ✅ |
 | **Decompress** | Extract zip / tar.gz archives (Zip Slip/Bomb protection) | ✅ |
 | **Backup** | Timestamped zip backup with exclude patterns | ✅ |
 | **ConvertEncoding** | Convert file encoding (EUC-KR ↔ UTF-8, add/remove BOM, etc.) | ✅ |
+| **FindTools** | Discover installed dev tools — compilers, runtimes, build systems (Go, .NET, Node, Python, Java, Rust, C/C++, etc.) | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 | SSH | Remote server connection and command execution | Planned |

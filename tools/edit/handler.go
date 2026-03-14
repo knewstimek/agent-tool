@@ -19,6 +19,7 @@ type EditInput struct {
 	OldString   string `json:"old_string" jsonschema:"Exact text to find in the file"`
 	NewString   string `json:"new_string" jsonschema:"Replacement text (must differ from old_string)"`
 	ReplaceAll  bool   `json:"replace_all,omitempty" jsonschema:"Replace all occurrences instead of just the first (default false)"`
+	DryRun      bool   `json:"dry_run,omitempty" jsonschema:"Preview changes without modifying the file (default false)"`
 	IndentStyle string `json:"indent_style,omitempty" jsonschema:"Override indentation style. Values: tabs or spaces-N (e.g. spaces-4). Empty = auto-detect (default)"`
 }
 
@@ -79,6 +80,15 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 		return errorResult(result.Message)
 	}
 
+	// dry-run이면 쓰기 없이 결과 미리보기 반환
+	if input.DryRun {
+		preview := dryRunPreview(content, result.Content, input.FilePath)
+		msg := fmt.Sprintf("[DRY RUN] would %s (%s, encoding=%s)\n\n%s", result.Message, input.FilePath, encInfo.Charset, preview)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+		}, EditOutput{Result: msg}, nil
+	}
+
 	// 파일 쓰기 (원본 인코딩 보존)
 	if err := common.WriteFileWithEncoding(input.FilePath, result.Content, encInfo); err != nil {
 		return errorResult(fmt.Sprintf("failed to write file: %v", err))
@@ -103,7 +113,8 @@ func Register(server *mcp.Server) {
 		Description: `Replaces old_string with new_string in the specified file.
 Smart indentation: auto-converts between tabs and spaces to match the file's style.
 Encoding-aware: preserves original file encoding (UTF-8, EUC-KR, Shift-JIS, UTF-8 BOM, etc.).
-Reads .editorconfig for indentation settings.`,
+Reads .editorconfig for indentation settings.
+Use dry_run=true to preview changes without modifying the file.`,
 	}, Handle)
 }
 
@@ -132,6 +143,66 @@ func parseIndentStyleOption(s string) (IndentStyle, error) {
 	}
 
 	return IndentStyle{}, fmt.Errorf("expected 'tabs', 'spaces', or 'spaces-N' (e.g. spaces-4), got '%s'", s)
+}
+
+// dryRunPreview는 변경 전후의 차이를 간단한 diff 형식으로 보여준다.
+// 변경된 줄 주변 context 3줄을 포함한다.
+func dryRunPreview(before, after, filePath string) string {
+	oldLines := strings.Split(before, "\n")
+	newLines := strings.Split(after, "\n")
+
+	// 변경된 범위 찾기 (앞뒤 공통 부분 제거)
+	prefixLen := 0
+	minLen := len(oldLines)
+	if len(newLines) < minLen {
+		minLen = len(newLines)
+	}
+	for prefixLen < minLen && oldLines[prefixLen] == newLines[prefixLen] {
+		prefixLen++
+	}
+
+	suffixLen := 0
+	for suffixLen < minLen-prefixLen &&
+		oldLines[len(oldLines)-1-suffixLen] == newLines[len(newLines)-1-suffixLen] {
+		suffixLen++
+	}
+
+	// context 범위 계산
+	ctxStart := prefixLen - 3
+	if ctxStart < 0 {
+		ctxStart = 0
+	}
+	ctxEndOld := len(oldLines) - suffixLen + 3
+	if ctxEndOld > len(oldLines) {
+		ctxEndOld = len(oldLines)
+	}
+	ctxEndNew := len(newLines) - suffixLen + 3
+	if ctxEndNew > len(newLines) {
+		ctxEndNew = len(newLines)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("--- %s (before)\n+++ %s (after)\n", filePath, filePath))
+
+	// 공통 앞부분 context
+	for i := ctxStart; i < prefixLen; i++ {
+		sb.WriteString(" " + oldLines[i] + "\n")
+	}
+	// 삭제된 줄
+	for i := prefixLen; i < len(oldLines)-suffixLen; i++ {
+		sb.WriteString("-" + oldLines[i] + "\n")
+	}
+	// 추가된 줄
+	for i := prefixLen; i < len(newLines)-suffixLen; i++ {
+		sb.WriteString("+" + newLines[i] + "\n")
+	}
+	// 공통 뒷부분 context
+	endOld := len(oldLines) - suffixLen
+	for i := endOld; i < ctxEndOld; i++ {
+		sb.WriteString(" " + oldLines[i] + "\n")
+	}
+
+	return sb.String()
 }
 
 func errorResult(msg string) (*mcp.CallToolResult, EditOutput, error) {

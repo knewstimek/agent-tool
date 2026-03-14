@@ -111,6 +111,13 @@ var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 // ReadFileWithEncoding은 파일을 읽고 UTF-8 텍스트와 인코딩 정보를 반환한다.
 // hintCharset이 비어있지 않으면 (.editorconfig 등에서 온 힌트) 최우선으로 사용한다.
 func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo, error) {
+	// symlink 검사: allow_symlinks가 false이면 symlink 차단
+	if !GetAllowSymlinks() {
+		if lfi, err := os.Lstat(path); err == nil && lfi.Mode()&os.ModeSymlink != 0 {
+			return "", EncodingInfo{}, fmt.Errorf("symlink not allowed: %s (enable via set_config allow_symlinks=true)", path)
+		}
+	}
+
 	// OOM 방지: 파일 크기 사전 체크
 	limit := GetMaxFileSize()
 	fi, err := os.Stat(path)

@@ -65,7 +65,7 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - Fallback encoding: ` + common.GetFallbackEncoding() + `
 
 ## Available Tools
-- edit: String replacement with smart indentation + encoding preservation
+- edit: String replacement with smart indentation + encoding preservation (supports dry_run)
 - read: Encoding-aware file reading with line range support
 - write: Encoding-aware file creation/overwrite
 - grep: Encoding-aware regex content search
@@ -75,6 +75,11 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - decompress: Extract zip / tar.gz archives
 - backup: Timestamped zip backup with exclude patterns
 - convert_encoding: Convert file encoding (EUC-KR ↔ UTF-8, BOM, etc.)
+- checksum: Compute file hash (md5, sha1, sha256)
+- file_info: File metadata (size, encoding, line ending, indentation, line count)
+- diff: Compare two files (unified diff output)
+- patch: Apply unified diff patch to a file (supports dry_run)
+- find_tools: Discover installed dev tools (compilers, runtimes, build systems)
 - set_config: Change runtime settings (fallback encoding, encoding warnings, max file size)
 - agent_tool_help: This help tool
 
@@ -168,7 +173,7 @@ func helpTools() string {
 
 ## edit
 Replace text in a file with smart indentation and encoding preservation.
-Parameters: file_path, old_string, new_string, replace_all, indent_style
+Parameters: file_path, old_string, new_string, replace_all, dry_run, indent_style
 
 ## read
 Read a file with encoding auto-detection. Returns content with line numbers.
@@ -209,6 +214,28 @@ Parameters: source, output_dir, excludes
 Convert a file's encoding to a different character set.
 Supports: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1, UTF-16, ASCII, Windows-1252, Big5, GB18030.
 Parameters: file_path, to_encoding
+
+## checksum
+Compute file hash checksum. Reads raw bytes (no encoding conversion).
+Parameters: file_path, algorithm (md5, sha1, sha256; default sha256)
+
+## file_info
+Returns detailed file metadata: size, encoding, line ending, indentation, line count.
+Parameters: file_path
+
+## diff
+Compare two files and output unified diff. Encoding-aware.
+Parameters: file_a, file_b, context_lines (default 3)
+
+## patch
+Apply unified diff patch to a file. Verifies context lines before applying.
+Parameters: file_path, patch, dry_run
+
+## find_tools
+Discover installed development tools on the system.
+Returns paths and versions for compilers, build systems, and runtimes.
+Searches env vars, PATH, and known installation directories.
+Parameters: category (go, dotnet, node, python, java, rust, c_cpp, build, vcs, container, js_runtime, or all)
 
 ## set_config
 Change agent-tool runtime configuration.

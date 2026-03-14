@@ -2,4 +2,7 @@ CLAUDE.md
 OVERVIEW.md
 .env
 *.exe
+*.exe~
 temp/
+dist/
+test_*.go

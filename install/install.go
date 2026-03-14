@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -131,6 +132,15 @@ func Uninstall(target string) error {
 }
 
 func uninstallFromAgent(agent agentConfig) error {
+	// Claude Code: 'claude mcp remove' 우선 시도
+	if agent.name == "Claude Code" {
+		removeClaudePermission()
+		if err := uninstallClaudeMCPRemove(); err == nil {
+			return nil
+		}
+		fmt.Println("[Claude Code] 'claude' CLI를 찾을 수 없습니다. settings.json에서 직접 제거합니다.")
+	}
+
 	switch agent.format {
 	case "json":
 		return uninstallJSON(agent)
@@ -139,6 +149,23 @@ func uninstallFromAgent(agent agentConfig) error {
 	default:
 		return fmt.Errorf("지원하지 않는 설정 형식: %s", agent.format)
 	}
+}
+
+// uninstallClaudeMCPRemove는 'claude mcp remove' CLI 명령으로 제거한다.
+func uninstallClaudeMCPRemove() error {
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(claudePath, "mcp", "remove", "agent-tool")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("claude mcp remove 실패: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	fmt.Printf("[Claude Code] 제거 완료 (claude mcp remove)\n")
+	return nil
 }
 
 func uninstallJSON(agent agentConfig) error {
@@ -222,14 +249,168 @@ func uninstallTOML(agent agentConfig) error {
 }
 
 func installForAgent(agent agentConfig, exePath string) error {
+	// Claude Code: 'claude mcp add' 우선 시도 (CLI + VSCode 확장 모두 지원)
+	if agent.name == "Claude Code" {
+		if err := installClaudeMCPAdd(exePath); err == nil {
+			return nil
+		}
+		// claude CLI가 없으면 settings.json 직접 수정으로 폴백
+		fmt.Println("[Claude Code] 'claude' CLI를 찾을 수 없습니다. settings.json에 직접 등록합니다.")
+	}
+
 	switch agent.format {
 	case "json":
-		return installJSON(agent, exePath)
+		err := installJSON(agent, exePath)
+		if err != nil {
+			return err
+		}
+		// Claude Code JSON 폴백에서도 권한 등록
+		if agent.name == "Claude Code" {
+			if perr := addClaudePermission(); perr != nil {
+				fmt.Fprintf(os.Stderr, "[Claude Code] 권한 자동 등록 실패 (수동 허용 필요): %v\n", perr)
+			}
+		}
+		return nil
 	case "toml":
 		return installTOML(agent, exePath)
 	default:
 		return fmt.Errorf("지원하지 않는 설정 형식: %s", agent.format)
 	}
+}
+
+// installClaudeMCPAdd는 'claude mcp add' CLI 명령으로 등록한다.
+func installClaudeMCPAdd(exePath string) error {
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		return err
+	}
+
+	normalizedPath := filepath.ToSlash(exePath)
+
+	// 기존 항목 제거 후 재등록 (업데이트 지원)
+	// 에러 무시 — 없으면 remove가 실패하지만 상관없음
+	exec.Command(claudePath, "mcp", "remove", "agent-tool").Run()
+
+	cmd := exec.Command(claudePath, "mcp", "add", "--scope", "user", "agent-tool", normalizedPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("claude mcp add 실패: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	// settings.json에 와일드카드 권한 자동 등록 (도구별 팝업 방지)
+	if err := addClaudePermission(); err != nil {
+		fmt.Fprintf(os.Stderr, "[Claude Code] 권한 자동 등록 실패 (수동 허용 필요): %v\n", err)
+	} else {
+		fmt.Printf("[Claude Code] 도구 권한 등록 완료 (permissions.allow: %s)\n", mcpPermissionEntry)
+	}
+
+	fmt.Printf("[Claude Code] 등록 완료 (claude mcp add)\n")
+	return nil
+}
+
+const mcpPermissionEntry = "mcp__agent-tool__*"
+
+// addClaudePermission은 ~/.claude/settings.json의 permissions.allow에
+// "mcp__agent-tool__*" 와일드카드를 추가하여 모든 도구의 권한 팝업을 방지한다.
+func addClaudePermission() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+
+	var config map[string]any
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("settings.json 읽기 실패: %w", err)
+		}
+		config = make(map[string]any)
+	} else {
+		if err := json.Unmarshal(data, &config); err != nil {
+			return fmt.Errorf("settings.json 파싱 실패: %w", err)
+		}
+	}
+
+	// permissions.allow 배열 가져오기
+	perms, _ := config["permissions"].(map[string]any)
+	if perms == nil {
+		perms = make(map[string]any)
+	}
+
+	allowList, _ := perms["allow"].([]any)
+
+	// 이미 등록되어 있는지 확인 (와일드카드 또는 개별 항목)
+	for _, item := range allowList {
+		if s, ok := item.(string); ok && s == mcpPermissionEntry {
+			return nil // 이미 있음
+		}
+	}
+
+	// 기존 개별 항목(mcp__agent-tool__xxx) 제거 후 와일드카드로 통합
+	var cleaned []any
+	for _, item := range allowList {
+		s, ok := item.(string)
+		if ok && strings.HasPrefix(s, "mcp__agent-tool__") {
+			continue // 개별 항목 제거
+		}
+		cleaned = append(cleaned, item)
+	}
+	cleaned = append(cleaned, mcpPermissionEntry)
+
+	perms["allow"] = cleaned
+	config["permissions"] = perms
+
+	output, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("JSON 직렬화 실패: %w", err)
+	}
+
+	return os.WriteFile(settingsPath, output, 0644)
+}
+
+// removeClaudePermission은 settings.json에서 agent-tool 관련 권한 항목을 제거한다.
+func removeClaudePermission() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		return
+	}
+
+	perms, _ := config["permissions"].(map[string]any)
+	if perms == nil {
+		return
+	}
+
+	allowList, _ := perms["allow"].([]any)
+	var cleaned []any
+	for _, item := range allowList {
+		s, ok := item.(string)
+		if ok && strings.HasPrefix(s, "mcp__agent-tool") {
+			continue
+		}
+		cleaned = append(cleaned, item)
+	}
+
+	perms["allow"] = cleaned
+	config["permissions"] = perms
+
+	output, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return
+	}
+	os.WriteFile(settingsPath, output, 0644)
 }
 
 func installJSON(agent agentConfig, exePath string) error {
@@ -264,8 +445,10 @@ func installJSON(agent agentConfig, exePath string) error {
 
 	// agent-tool 서버 등록
 	servers["agent-tool"] = map[string]any{
+		"type":    "stdio",
 		"command": normalizedPath,
 		"args":    []string{},
+		"env":     map[string]any{},
 	}
 	config[agent.jsonKey] = servers
 
@@ -295,7 +478,7 @@ func installTOML(agent agentConfig, exePath string) error {
 		normalizedPath = filepath.ToSlash(exePath)
 	}
 
-	entry := fmt.Sprintf("\n[mcp_servers.agent-tool]\ncommand = %q\nargs = []\n", normalizedPath)
+	entry := fmt.Sprintf("\n[mcp_servers.agent-tool]\ncommand = %q\nargs = []\nenabled = true\n", normalizedPath)
 
 	// 기존 파일 읽기
 	data, err := os.ReadFile(agent.configPath)

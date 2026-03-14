@@ -10,14 +10,19 @@ import (
 	"agent-tool/common"
 	"agent-tool/install"
 	"agent-tool/tools/backup"
+	"agent-tool/tools/checksum"
 	"agent-tool/tools/compress"
 	"agent-tool/tools/config"
 	"agent-tool/tools/convertenc"
+	"agent-tool/tools/diff"
 	edit "agent-tool/tools/edit"
+	"agent-tool/tools/fileinfo"
+	"agent-tool/tools/findtools"
 	"agent-tool/tools/glob"
 	"agent-tool/tools/grep"
 	"agent-tool/tools/help"
 	"agent-tool/tools/listdir"
+	"agent-tool/tools/patch"
 	"agent-tool/tools/read"
 	"agent-tool/tools/write"
 
@@ -73,7 +78,7 @@ func main() {
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "agent-tool",
-			Version: "v0.2.1",
+			Version: "v0.3.0",
 		},
 		nil,
 	)
@@ -89,6 +94,11 @@ func main() {
 	backup.Register(server)
 	config.Register(server)
 	convertenc.Register(server)
+	checksum.Register(server)
+	fileinfo.Register(server)
+	diff.Register(server)
+	patch.Register(server)
+	findtools.Register(server)
 	help.Register(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
