@@ -147,15 +147,19 @@ func buildPSChainOps(parsed chainParse) string {
 }
 
 // delegateToGitBash wraps a command for execution via git-bash from PowerShell.
-// Uses PS double-quotes so bash receives original single-quotes intact.
+// Uses PS single-quotes so PowerShell treats the entire string as a literal —
+// no backtick, dollar, or backslash interpretation. Bash -c receives the
+// command exactly as-is since PS single-quoted strings are verbatim.
 func delegateToGitBash(command, gbPath string) string {
-	escaped := strings.ReplaceAll(command, "`", "``")
-	escaped = strings.ReplaceAll(escaped, "$", "`$")
-	escaped = strings.ReplaceAll(escaped, `"`, "`\"")
-	return fmt.Sprintf("& '%s' -c \"%s\"", gbPath, escaped)
+	// In PS single-quotes, the only special char is ' itself (escaped as '').
+	escaped := strings.ReplaceAll(command, "'", "''")
+	return fmt.Sprintf("& '%s' -c '%s'", gbPath, escaped)
 }
 
 // delegateToCmdExe wraps a command for execution via cmd.exe from PowerShell.
+// NOTE: cmd.exe still interprets its own special chars (%VAR%, ^, &, >, <, |)
+// after receiving the string. This is a known limitation of the cmd.exe fallback;
+// prefer git-bash when available.
 func delegateToCmdExe(command string) string {
 	escaped := strings.ReplaceAll(command, "'", "''")
 	return fmt.Sprintf("& cmd /c '%s'", escaped)

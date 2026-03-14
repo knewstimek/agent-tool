@@ -80,6 +80,9 @@ func parseChainOps(cmd string) chainParse {
 		if !inSingle && !inDouble {
 			// Track $() and () nesting so we only split at the top level.
 			// $((expr)) arithmetic also works — depth increments twice.
+			// Unmatched '(' (e.g. "echo ( && cmd") inflates depth, causing &&
+			// to be flagged as nested — safe, since git-bash handles the error.
+			// Unmatched ')' is harmless: the > 0 guard prevents negative depth.
 			if ch == '(' {
 				parenDepth++
 			}
