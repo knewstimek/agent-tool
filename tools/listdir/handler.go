@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"agent-tool/common"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -55,6 +56,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ListDirInput) (
 		return errorResult(fmt.Sprintf("cannot access path: %v", err))
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
+		if !common.GetAllowSymlinks() {
+			return errorResult("path is a symlink; enable via set_config allow_symlinks=true")
+		}
 		// Resolve symlink target to check if it's a directory
 		target, err := os.Stat(input.Path)
 		if err != nil || !target.IsDir() {
@@ -117,8 +121,8 @@ func buildFlat(sb *strings.Builder, root, dir string, depth, maxDepth int, relat
 		if strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		// Skip symlinks to prevent traversal outside intended directory
-		if entry.Type()&os.ModeSymlink != 0 {
+		// Skip symlinks unless explicitly allowed via set_config
+		if entry.Type()&os.ModeSymlink != 0 && !common.GetAllowSymlinks() {
 			continue
 		}
 		if *totalFiles+*totalDirs >= maxEntries {
@@ -166,7 +170,7 @@ func buildTree(sb *strings.Builder, dir, prefix string, depth, maxDepth int, tot
 	// Filter out hidden files/directories and symlinks
 	var visible []os.DirEntry
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".") && e.Type()&os.ModeSymlink == 0 {
+		if !strings.HasPrefix(e.Name(), ".") && (e.Type()&os.ModeSymlink == 0 || common.GetAllowSymlinks()) {
 			visible = append(visible, e)
 		}
 	}
