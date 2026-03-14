@@ -158,6 +158,7 @@ func uninstallClaudeMCPRemove() error {
 	}
 
 	cmd := exec.Command(claudePath, "mcp", "remove", "agent-tool")
+	cmd.Stdin = nil // prevent blocking on interactive prompts
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("claude mcp remove failed: %w (%s)", err, strings.TrimSpace(string(out)))
@@ -290,7 +291,10 @@ func installClaudeMCPAdd(exePath string) error {
 
 	// Remove existing entry before re-registering (supports updates).
 	// Ignore errors — remove may fail if entry doesn't exist.
-	exec.Command(claudePath, "mcp", "remove", "agent-tool").Run()
+	// Close stdin to prevent the CLI from blocking on interactive prompts.
+	removeCmd := exec.Command(claudePath, "mcp", "remove", "agent-tool")
+	removeCmd.Stdin = nil
+	removeCmd.Run()
 
 	// Update per-project MCP entries in ~/.claude.json.
 	// The 'claude mcp' CLI doesn't manage per-project entries (projects.*.mcpServers),
@@ -298,6 +302,7 @@ func installClaudeMCPAdd(exePath string) error {
 	updateClaudeProjectMCPServers(normalizedPath)
 
 	cmd := exec.Command(claudePath, "mcp", "add", "--scope", "user", "agent-tool", normalizedPath)
+	cmd.Stdin = nil // prevent blocking on interactive prompts
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("claude mcp add failed: %w (%s)", err, strings.TrimSpace(string(out)))

@@ -106,14 +106,27 @@ func decodeOutput(kind shellKind, raw string) string {
 	return raw
 }
 
+// containsCmdOperators checks if a command uses && or || operators
+// that are not supported in Windows PowerShell 5.1 (added in PS 7).
+func containsCmdOperators(cmd string) bool {
+	return strings.Contains(cmd, "&&") || strings.Contains(cmd, "||")
+}
+
 // buildSentinelCmd wraps a command with exit code capture and sentinel marker.
 func buildSentinelCmd(kind shellKind, command string, sentinel string) string {
 	switch kind {
 	case kindPowerShell:
+		userCmd := command
+		// Windows PowerShell 5.1 doesn't support && and || operators.
+		// Route through cmd.exe when these operators are present.
+		if containsCmdOperators(command) {
+			escaped := strings.ReplaceAll(command, "'", "''")
+			userCmd = fmt.Sprintf("& cmd /c '%s'", escaped)
+		}
 		// $LASTEXITCODE: set by native commands. $?: set by all commands.
 		return fmt.Sprintf(
 			"%s; $__ec = $LASTEXITCODE; if ($null -eq $__ec) { $__ec = if ($?) {0} else {1} }; Write-Host \"\"; Write-Host \"%s$__ec%s\"",
-			command, sentinel, sentinelSuffix,
+			userCmd, sentinel, sentinelSuffix,
 		)
 	case kindGitBash:
 		// Same pattern as Unix bash
