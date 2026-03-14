@@ -186,13 +186,19 @@ func (p *sessionPool) reaper() {
 // GetClient returns a pooled SSH client for the given input, creating a new
 // connection if needed. This is the exported entry point for other packages
 // (e.g. sftp) to reuse the SSH session pool.
+// SSRF check is the caller's responsibility — this function dials by hostname
+// since it has no resolved IP context. Callers (sftp, handler) must call
+// common.CheckHostSSRF before calling GetClient.
 func GetClient(input SSHInput) (*gossh.Client, bool, error) {
 	if err := validateInput(&input); err != nil {
 		return nil, false, err
 	}
 	key := sessionKey(input.Host, input.Port, input.User)
 	return pool.getOrCreate(key, func() (*dialResult, error) {
-		return dial(input)
+		// No resolved IP available — dial by hostname.
+		// This is acceptable because callers must perform SSRF checks before
+		// calling GetClient, and the pool reuses existing connections.
+		return dial(input, "", "")
 	})
 }
 

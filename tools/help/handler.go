@@ -108,6 +108,7 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - mysql: Execute MySQL/MariaDB queries (SELECT → table format, DML → affected rows)
 - redis: Execute Redis commands (any command, result formatting)
 - externalip: Get your external (public) IP address
+- sloc: Count source lines of code (SLOC) with per-language summary
 - set_config: Change runtime settings (encoding, file size, SSRF policy, DoH/ECH toggle)
 - agent_tool_help: This help tool
 
@@ -453,6 +454,12 @@ Returns your external (public) IP address.
 Queries multiple IP detection services (ipify, ifconfig.me, icanhazip) with automatic fallback.
 Useful for SSH configuration, firewall rules, or verifying VPN/proxy status.
 No parameters required.
+
+## sloc
+Count source lines of code (SLOC) in a file or directory.
+Returns per-language summary with file count, total lines, and blank lines.
+Recognizes 70+ languages by file extension. Skips node_modules, .git, vendor, dist, build.
+Parameters: path (file or directory), glob (filter pattern), max_depth, show_files, skip_blank
 
 ## set_config
 Change agent-tool runtime configuration.

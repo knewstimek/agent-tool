@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"agent-tool/common"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -49,8 +51,24 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input TLSCheckInput) 
 		return errorResult(fmt.Sprintf("timeout_sec exceeds maximum (%d)", maxTimeoutSec))
 	}
 
-	// No SSRF protection — TLS check is a diagnostic tool where users explicitly
-	// specify the host. Checking local/internal services is a legitimate use case.
+	// Block cloud metadata IPs — prevents using TLS check as an SSRF probe
+	// against cloud metadata endpoints. Private/internal IPs are allowed
+	// since checking internal services is a legitimate diagnostic use case.
+	if ip := net.ParseIP(input.Host); ip != nil {
+		if common.IsCloudMetadataIP(ip) {
+			return errorResult(fmt.Sprintf("blocked: %s is a cloud metadata address", input.Host))
+		}
+	} else {
+		ips, resolveErr := net.DefaultResolver.LookupHost(ctx, input.Host)
+		if resolveErr == nil {
+			for _, ipStr := range ips {
+				if parsed := net.ParseIP(ipStr); parsed != nil && common.IsCloudMetadataIP(parsed) {
+					return errorResult(fmt.Sprintf("blocked: %s resolves to cloud metadata address %s", input.Host, ipStr))
+				}
+			}
+		}
+	}
+
 	addr := net.JoinHostPort(input.Host, strconv.Itoa(port))
 	timeout := time.Duration(timeoutSec) * time.Second
 

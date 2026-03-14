@@ -27,6 +27,8 @@ var dangerousCommands = map[string]bool{
 	"REPLICAOF": true, "SLAVEOF": true,
 	"CONFIG": true, "CLUSTER": true,
 	"SCRIPT": true, "EVAL": true, "EVALSHA": true,
+	"EVALRO": true, "EVALSHA_RO": true,
+	"FUNCTION": true, "RESTORE": true,
 	"MODULE": true, "ACL": true, "BGSAVE": true,
 	"BGREWRITEAOF": true, "FAILOVER": true,
 	"SUBSCRIBE": true, "PSUBSCRIBE": true, "MONITOR": true,

@@ -46,6 +46,7 @@ import (
 	redistool "agent-tool/tools/redis"
 	"agent-tool/tools/rename"
 	sftptool "agent-tool/tools/sftp"
+	"agent-tool/tools/sloc"
 	"agent-tool/tools/ssh"
 	"agent-tool/tools/sysinfo"
 	"agent-tool/tools/tlscheck"
@@ -57,7 +58,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "v0.6.0"
+const Version = "v0.6.1"
 
 func main() {
 	args := os.Args[1:]
@@ -191,6 +192,7 @@ func main() {
 	mysqltool.Register(server)
 	redistool.Register(server)
 	externalip.Register(server)
+	sloc.Register(server)
 	help.Register(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

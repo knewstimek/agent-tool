@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"agent-tool/common"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -45,8 +47,18 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RenameInput) (*
 		return errorResult("old_path and new_path are the same")
 	}
 
-	// Check if source exists
-	oldInfo, err := os.Stat(oldCleaned)
+	// Block system paths (both source and destination)
+	for _, p := range []string{oldCleaned, newCleaned} {
+		if err := common.CheckWindowsReserved(p); err != nil {
+			return errorResult(err.Error())
+		}
+		if err := common.CheckDangerousPath(p); err != nil {
+			return errorResult(err.Error())
+		}
+	}
+
+	// Check if source exists (Lstat: don't follow symlinks)
+	oldInfo, err := os.Lstat(oldCleaned)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return errorResult(fmt.Sprintf("source not found: %s", oldCleaned))
@@ -54,8 +66,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RenameInput) (*
 		return errorResult(fmt.Sprintf("cannot access source: %v", err))
 	}
 
+	// Block symlinks when not allowed
+	if oldInfo.Mode()&os.ModeSymlink != 0 && !common.GetAllowSymlinks() {
+		return errorResult("source is a symlink and allow_symlinks is disabled")
+	}
+
 	// Check if destination already exists
-	if _, err := os.Stat(newCleaned); err == nil {
+	if _, err := os.Lstat(newCleaned); err == nil {
 		return errorResult(fmt.Sprintf("destination already exists: %s", newCleaned))
 	}
 

@@ -428,6 +428,7 @@ var safePermissionEntries = []string{
 	"mcp__agent-tool__delete",
 	"mcp__agent-tool__rename",
 	"mcp__agent-tool__mkdir",
+	"mcp__agent-tool__sloc",
 	"mcp__agent-tool__copy",
 	"mcp__agent-tool__regexreplace",
 	"mcp__agent-tool__jsonquery",
@@ -437,8 +438,8 @@ var safePermissionEntries = []string{
 	"mcp__agent-tool__find_tools",
 	"mcp__agent-tool__proclist",
 	"mcp__agent-tool__envvar",
-	"mcp__agent-tool__externalip",
-	"mcp__agent-tool__set_config",
+	// externalip excluded from safe: makes external HTTP requests
+	// set_config excluded from safe: can change SSRF policy
 	"mcp__agent-tool__agent_tool_help",
 }
 

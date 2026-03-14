@@ -91,8 +91,15 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WebFetchInput) 
 	httpReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
-	// Apply custom headers (override defaults)
+	// Apply custom headers (override defaults, block hop-by-hop headers)
 	for k, v := range input.Headers {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		lower := strings.ToLower(k)
+		if lower == "host" || lower == "content-length" || lower == "transfer-encoding" {
+			continue
+		}
 		httpReq.Header.Set(k, v)
 	}
 

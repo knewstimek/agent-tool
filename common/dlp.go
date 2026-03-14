@@ -77,7 +77,7 @@ func init() {
 
 // ScanSensitiveData checks if the given data contains high-confidence
 // sensitive patterns. Returns nil if no sensitive data is detected.
-// Only call this for outbound data (POST/PUT/PATCH bodies).
+// Call this for any outbound HTTP request body (all methods with body).
 func ScanSensitiveData(data string) []SensitiveMatch {
 	if len(data) == 0 {
 		return nil

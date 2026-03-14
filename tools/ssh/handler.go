@@ -61,13 +61,16 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	// SSRF policy: cloud metadata always blocked. Private IPs allowed by default
 	// (configurable via set_config allow_ssh_private). Warning shown on every
 	// private IP access to help detect prompt injection attacks.
-	_, ssrfWarning, ssrfErr := common.CheckHostSSRF(ctx, input.Host, common.GetAllowSSHPrivate(), "ssh")
+	resolvedIP, ssrfWarning, ssrfErr := common.CheckHostSSRF(ctx, input.Host, common.GetAllowSSHPrivate(), "ssh")
 	if ssrfErr != nil {
 		return errorResult(ssrfErr.Error())
 	}
 	// Also check jump host — prevents SSRF via ProxyJump to cloud metadata
+	jumpResolvedIP := ""
 	if input.JumpHost != "" {
-		_, jumpWarning, jumpErr := common.CheckHostSSRF(ctx, input.JumpHost, common.GetAllowSSHPrivate(), "ssh")
+		var jumpWarning string
+		var jumpErr error
+		jumpResolvedIP, jumpWarning, jumpErr = common.CheckHostSSRF(ctx, input.JumpHost, common.GetAllowSSHPrivate(), "ssh")
 		if jumpErr != nil {
 			return errorResult(fmt.Sprintf("jump_host: %s", jumpErr.Error()))
 		}
@@ -98,8 +101,10 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	}
 
 	// 4. Get or create SSH connection
+	// Use resolved IP for dialing to prevent DNS rebinding attacks —
+	// the hostname was already verified by CheckHostSSRF above.
 	client, isNew, err := pool.getOrCreate(key, func() (*dialResult, error) {
-		return dial(input)
+		return dial(input, resolvedIP, jumpResolvedIP)
 	})
 	if err != nil {
 		return errorResult(fmt.Sprintf("SSH connection failed: %s", sanitizeError(err, input)))
@@ -170,9 +175,11 @@ Supports IPv6 addresses and ProxyJump (jump_host) for reaching servers through b
 }
 
 // dial establishes a new SSH connection, optionally through a jump host.
+// resolvedIP/jumpResolvedIP are pre-resolved addresses from SSRF checks —
+// using them prevents DNS rebinding between check and connect.
 // Returns a dialResult containing the client and any agent connection that
 // must be closed when the session is removed from the pool.
-func dial(input SSHInput) (*dialResult, error) {
+func dial(input SSHInput, resolvedIP, jumpResolvedIP string) (*dialResult, error) {
 	auth, err := buildAuthMethods(input)
 	if err != nil {
 		return nil, err
@@ -193,7 +200,13 @@ func dial(input SSHInput) (*dialResult, error) {
 		Timeout:         dialTimeout,
 	}
 
-	targetAddr := formatAddr(input.Host, input.Port)
+	// Use resolved IP for actual connection to prevent DNS rebinding.
+	// Fall back to hostname if no resolved IP (e.g., pool re-dial from GetClient).
+	dialHost := input.Host
+	if resolvedIP != "" {
+		dialHost = resolvedIP
+	}
+	targetAddr := formatAddr(dialHost, input.Port)
 
 	// Direct connection (no jump host)
 	if input.JumpHost == "" {
@@ -208,7 +221,7 @@ func dial(input SSHInput) (*dialResult, error) {
 	}
 
 	// ProxyJump: connect through jump host
-	jumpClient, jumpAgentConn, err := dialJumpHost(input)
+	jumpClient, jumpAgentConn, err := dialJumpHost(input, jumpResolvedIP)
 	if err != nil {
 		if auth.agentConn != nil {
 			auth.agentConn.Close()
@@ -261,7 +274,8 @@ func dial(input SSHInput) (*dialResult, error) {
 }
 
 // dialJumpHost establishes an SSH connection to the jump/bastion host.
-func dialJumpHost(input SSHInput) (*gossh.Client, net.Conn, error) {
+// jumpResolvedIP is the pre-resolved address from SSRF check.
+func dialJumpHost(input SSHInput, jumpResolvedIP string) (*gossh.Client, net.Conn, error) {
 	jumpInput := SSHInput{
 		Host:       input.JumpHost,
 		Port:       input.JumpPort,
@@ -292,7 +306,12 @@ func dialJumpHost(input SSHInput) (*gossh.Client, net.Conn, error) {
 		Timeout:         dialTimeout,
 	}
 
-	jumpAddr := formatAddr(input.JumpHost, input.JumpPort)
+	// Use resolved IP for jump host to prevent DNS rebinding
+	jumpDialHost := input.JumpHost
+	if jumpResolvedIP != "" {
+		jumpDialHost = jumpResolvedIP
+	}
+	jumpAddr := formatAddr(jumpDialHost, input.JumpPort)
 	client, err := gossh.Dial("tcp", jumpAddr, jumpConfig)
 	if err != nil {
 		if jumpAuth.agentConn != nil {

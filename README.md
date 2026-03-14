@@ -69,6 +69,7 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **Redis** | Execute Redis commands with formatted output by type. TLS support. Dangerous commands (FLUSHALL, SHUTDOWN, etc.) blocked | ✅ |
 | **PortCheck** | Check if a TCP port is open on a host. Returns OPEN/CLOSED with response time. Supports hostname, IPv4, IPv6 | ✅ |
 | **ExternalIP** | Get your external (public) IP address. Multiple providers with automatic fallback (ipify, ifconfig.me, icanhazip) | ✅ |
+| **SLOC** | Count source lines of code per language. 70+ language detection, per-file/language breakdown, blank line stats, max_depth control | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 
@@ -265,7 +266,7 @@ agent-tool provides powerful system access (SSH, MySQL, Redis, file operations, 
 When used with AI coding agents, be aware of prompt injection risks:
 
 - **SSRF Protection**: Cloud metadata IPs (169.254.x.x, fe80::/10) are always blocked regardless of settings. Private IP access is configurable per protocol via `set_config` (`allow_http_private`, `allow_mysql_private`, `allow_redis_private`, `allow_ssh_private`)
-- **DLP (Data Loss Prevention)**: Outbound HTTP POST/PUT/PATCH request bodies are scanned for sensitive data patterns (PEM private keys, AWS access keys, GitHub/GitLab tokens, Slack tokens, .env file dumps) and **blocked before transmission**
+- **DLP (Data Loss Prevention)**: All outbound HTTP request bodies are scanned for sensitive data patterns (PEM private keys, AWS access keys, GitHub/GitLab tokens, Slack tokens, .env file dumps) and **blocked before transmission**
 - **Prompt Injection Warnings**: Every private IP connection shows a security warning visible to both the user and the AI agent, helping detect prompt injection attacks from fetched web content
 - **Zip Slip protection**: Archive entries with `../` path traversal are blocked (both zip and tar)
 - **Zip Bomb protection**: Single file limit (1GB), total extraction limit (5GB)

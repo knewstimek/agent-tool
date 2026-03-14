@@ -203,7 +203,7 @@ func startAsyncDownload(input SFTPInput) (string, error) {
 	sshInput := toSSHInput(input)
 	sshClient, _, err := ssh.GetClient(sshInput)
 	if err != nil {
-		return "", fmt.Errorf("SSH connection failed: %v", err)
+		return "", fmt.Errorf("SSH connection failed: %s", ssh.SanitizeError(err, sshInput))
 	}
 
 	sftpClient, err := gosftp.NewClient(sshClient)
@@ -260,7 +260,8 @@ func runAsyncUpload(ctx context.Context, entry *transferEntry, input SFTPInput) 
 	if err != nil {
 		entry.mu.Lock()
 		entry.Status = "failed"
-		entry.Error = fmt.Sprintf("SSH connection: %v", err)
+		// Sanitize error to prevent password leakage in stored error messages
+		entry.Error = fmt.Sprintf("SSH connection: %s", ssh.SanitizeError(err, sshInput))
 		entry.CompletedAt = time.Now()
 		entry.mu.Unlock()
 		return
@@ -346,7 +347,8 @@ func runAsyncDownload(ctx context.Context, entry *transferEntry, input SFTPInput
 	if err != nil {
 		entry.mu.Lock()
 		entry.Status = "failed"
-		entry.Error = fmt.Sprintf("SSH connection: %v", err)
+		// Sanitize error to prevent password leakage in stored error messages
+		entry.Error = fmt.Sprintf("SSH connection: %s", ssh.SanitizeError(err, sshInput))
 		entry.CompletedAt = time.Now()
 		entry.mu.Unlock()
 		return

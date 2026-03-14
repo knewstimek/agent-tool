@@ -102,6 +102,7 @@ func handleDirCopy(src, dst string, dryRun, overwrite bool) (*mcp.CallToolResult
 		return errorResult("source is inside destination directory")
 	}
 
+	const maxCopyFiles = 10000
 	var fileCount int
 	var totalSize int64
 
@@ -124,6 +125,9 @@ func handleDirCopy(src, dst string, dryRun, overwrite bool) (*mcp.CallToolResult
 				return err
 			}
 			fileCount++
+			if fileCount > maxCopyFiles {
+				return fmt.Errorf("too many files (>%d), aborting", maxCopyFiles)
+			}
 			totalSize += info.Size()
 		}
 		return nil

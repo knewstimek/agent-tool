@@ -75,9 +75,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 	}
 
 	// DLP: scan outbound body for sensitive data before transmission.
-	// Only methods that carry a request body are checked. Blocked patterns
-	// have near-zero false positive rates (PEM keys, AWS keys, token formats).
-	if input.Body != "" && (input.Method == "POST" || input.Method == "PUT" || input.Method == "PATCH") {
+	// All methods with a body are checked — DELETE/GET can also carry bodies
+	// that exfiltrate secrets to attacker-controlled servers.
+	if input.Body != "" {
 		if matches := common.ScanSensitiveData(input.Body); len(matches) > 0 {
 			msg := common.FormatDLPBlock(matches)
 			return errorResult(msg)

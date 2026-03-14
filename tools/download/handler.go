@@ -107,7 +107,15 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DownloadInput) 
 	}
 
 	httpReq.Header.Set("User-Agent", defaultUserAgent)
+	// Block hop-by-hop headers that could enable request smuggling
 	for k, v := range input.Headers {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		lower := strings.ToLower(k)
+		if lower == "host" || lower == "content-length" || lower == "transfer-encoding" {
+			continue
+		}
 		httpReq.Header.Set(k, v)
 	}
 

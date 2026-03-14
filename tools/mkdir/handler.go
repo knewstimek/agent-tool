@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"agent-tool/common"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -39,6 +41,11 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MkdirInput) (*m
 		}
 	}
 
+	// Block system paths
+	if err := common.CheckDangerousPath(cleaned); err != nil {
+		return errorResult(err.Error())
+	}
+
 	// Parse permission mode (default 0755)
 	perm := os.FileMode(0755)
 	if input.Mode != "" {
@@ -52,8 +59,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MkdirInput) (*m
 		perm = os.FileMode(parsed)
 	}
 
-	// Check if already exists
-	if info, err := os.Stat(cleaned); err == nil {
+	// Check if already exists (Lstat: don't follow symlinks)
+	if info, err := os.Lstat(cleaned); err == nil {
+		// Block symlinks
+		if info.Mode()&os.ModeSymlink != 0 && !common.GetAllowSymlinks() {
+			return errorResult("path is a symlink and allow_symlinks is disabled")
+		}
 		if info.IsDir() {
 			msg := fmt.Sprintf("directory already exists: %s", cleaned)
 			return &mcp.CallToolResult{
