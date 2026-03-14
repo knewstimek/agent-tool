@@ -78,6 +78,16 @@ Or just ask your AI agent to do it for you:
 
 Any capable AI coding agent (Claude Code, Codex, etc.) can handle the full download → install → restart flow automatically.
 
+### Recommended: Add to your CLAUDE.md / AGENTS.md
+
+After installing, agents will have access to agent-tool but may still default to built-in tools (Read, Edit, etc.). To ensure agents **prefer** agent-tool's encoding-aware, indentation-smart tools, add this to your project's `CLAUDE.md` or `AGENTS.md`:
+
+```markdown
+Use agent-tool MCP tools (mcp__agent-tool__*) instead of built-in file tools when available.
+agent-tool provides encoding-aware read/write/edit, smart indentation conversion,
+and additional tools like SSH, SFTP, process management, and system info.
+```
+
 ## Installation
 
 ### Auto-install (recommended)

@@ -78,6 +78,16 @@ UTF-8로 강제 변환하지 않고, 원본 파일 인코딩을 유지합니다.
 
 Claude Code, Codex 등 AI 코딩 에이전트가 다운로드 → 설치 → 재시작까지 알아서 처리합니다.
 
+### 권장: CLAUDE.md / AGENTS.md에 추가
+
+설치 후 에이전트가 agent-tool을 사용할 수 있게 되지만, 기본 내장 도구(Read, Edit 등)를 계속 쓸 수 있습니다. 에이전트가 agent-tool을 **우선 사용**하게 하려면, 프로젝트의 `CLAUDE.md` 또는 `AGENTS.md`에 다음을 추가하세요:
+
+```markdown
+Use agent-tool MCP tools (mcp__agent-tool__*) instead of built-in file tools when available.
+agent-tool provides encoding-aware read/write/edit, smart indentation conversion,
+and additional tools like SSH, SFTP, process management, and system info.
+```
+
 ## 설치
 
 ### 자동 설치 (권장)
