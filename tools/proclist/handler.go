@@ -32,7 +32,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ProcListInput) 
 	var portEntries []PortEntry
 	portPIDSet := map[int]PortEntry{}
 	if input.Port > 0 {
-		entries, err := listPortPIDs()
+		entries, err := ListPortPIDs()
 		if err == nil {
 			for _, e := range entries {
 				if e.Port == input.Port {

@@ -11,8 +11,9 @@ import (
 )
 
 type ListDirInput struct {
-	Path     string `json:"path" jsonschema:"Absolute path to the directory to list"`
-	MaxDepth int    `json:"max_depth,omitempty" jsonschema:"Maximum depth for tree traversal. Default: 3"`
+	Path          string `json:"path" jsonschema:"Absolute path to the directory to list"`
+	MaxDepth      int    `json:"max_depth,omitempty" jsonschema:"Maximum depth for tree traversal. Default: 3"`
+	RelativePaths bool   `json:"relative_paths,omitempty" jsonschema:"Show the root as '.' instead of the full absolute path. Saves tokens in output. Default: false"`
 }
 
 type ListDirOutput struct {
@@ -62,8 +63,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ListDirInput) (
 	totalFiles := 0
 	totalDirs := 0
 
-	sb.WriteString(input.Path)
-	sb.WriteString("\n")
+	if input.RelativePaths {
+		sb.WriteString(".\n")
+	} else {
+		sb.WriteString(input.Path)
+		sb.WriteString("\n")
+	}
 
 	buildTree(&sb, input.Path, "", 0, maxDepth, &totalFiles, &totalDirs)
 
@@ -133,7 +138,8 @@ func Register(server *mcp.Server) {
 		Description: `Lists directory contents in a tree structure.
 Shows files and directories with visual tree connectors (├── └──).
 Skips hidden directories and common build/vendor directories.
-Use max_depth to control traversal depth (default: 3).`,
+Use max_depth to control traversal depth (default: 3).
+Use relative_paths=true to show root as '.' instead of full path (saves tokens).`,
 	}, Handle)
 }
 

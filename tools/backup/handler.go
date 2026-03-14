@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,15 +18,16 @@ type BackupInput struct {
 	Source    string   `json:"source" jsonschema:"Absolute path to the directory to backup"`
 	OutputDir string   `json:"output_dir,omitempty" jsonschema:"Absolute path to the backup output directory. Default: ./backups/"`
 	Excludes []string `json:"excludes,omitempty" jsonschema:"Glob patterns to exclude (e.g. node_modules, *.log, .git)"`
+	DryRun   bool     `json:"dry_run,omitempty" jsonschema:"Preview backup without creating archive. Shows summary with directory counts, exclude pattern matches, and largest files (default false)"`
 }
 
 type BackupOutput struct {
-	Result    string `json:"result"`
-	ArchivePath string `json:"archive_path"`
-	FileCount int    `json:"file_count"`
+	Result      string `json:"result"`
+	ArchivePath string `json:"archive_path,omitempty"`
+	FileCount   int    `json:"file_count"`
 }
 
-// 기본 제외 패턴
+// Default exclude patterns
 var defaultExcludes = []string{
 	".git",
 	"node_modules",
@@ -56,30 +58,39 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BackupInput) (*
 		return errorResult("source must be a directory")
 	}
 
-	// 출력 디렉토리
+	// Output directory
 	outputDir := input.OutputDir
+	if outputDir != "" && !filepath.IsAbs(outputDir) {
+		return errorResult("output_dir must be an absolute path")
+	}
 	if outputDir == "" {
 		outputDir = filepath.Join(input.Source, "backups")
 	}
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return errorResult(fmt.Sprintf("failed to create output directory: %v", err))
-	}
 
-	// 타임스탬프 파일명 생성
+	// Timestamp filename
 	dirName := filepath.Base(input.Source)
 	timestamp := time.Now().Format("20060102_150405")
 	archivePath := filepath.Join(outputDir, fmt.Sprintf("%s_%s.zip", dirName, timestamp))
 
-	// 제외 패턴 (기본 + 사용자 지정)
+	// Exclude patterns (default + user-specified)
 	excludes := append([]string{}, defaultExcludes...)
 	excludes = append(excludes, input.Excludes...)
 
-	// 백업 출력 디렉토리가 source 하위일 수 있으므로 (기본값: source/backups/)
-	// 절대 경로로 정규화해서 자기 자신을 압축하는 무한 루프를 방지한다.
+	// Normalize backup output directory to prevent infinite loop
 	absOutputDir, _ := filepath.Abs(outputDir)
+
+	if input.DryRun {
+		return dryRun(input.Source, excludes, absOutputDir, archivePath)
+	}
+
+	// Create output directory
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return errorResult(fmt.Sprintf("failed to create output directory: %v", err))
+	}
 
 	count, err := createBackupZip(archivePath, input.Source, excludes, absOutputDir)
 	if err != nil {
+		os.Remove(archivePath) // clean up incomplete zip
 		return errorResult(fmt.Sprintf("backup failed: %v", err))
 	}
 
@@ -87,6 +98,218 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BackupInput) (*
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 	}, BackupOutput{Result: msg, ArchivePath: archivePath, FileCount: count}, nil
+}
+
+// dryRunStats collects statistics during dry run walk.
+type dryRunStats struct {
+	includeCount    int
+	includeSize     int64
+	excludeCount    int
+	dirCounts       map[string]int      // top-level dir → file count
+	dirSizes        map[string]int64    // top-level dir → total size
+	patternMatches  map[string]int      // exclude pattern → match count
+	largestFiles    []fileEntry         // sorted by size desc
+}
+
+type fileEntry struct {
+	path string
+	size int64
+}
+
+func dryRun(sourceDir string, excludes []string, backupDir string, archivePath string) (*mcp.CallToolResult, BackupOutput, error) {
+	stats := &dryRunStats{
+		dirCounts:      make(map[string]int),
+		dirSizes:       make(map[string]int64),
+		patternMatches: make(map[string]int),
+	}
+
+	err := filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		// Skip backup output directory (with boundary check to avoid false prefix match)
+		absPath, _ := filepath.Abs(path)
+		if absPath == backupDir || strings.HasPrefix(absPath, backupDir+string(filepath.Separator)) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Skip symlinks to prevent directory traversal
+		linfo, lerr := os.Lstat(path)
+		if lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		rel, _ := filepath.Rel(sourceDir, path)
+		relSlash := filepath.ToSlash(rel)
+
+		// Check exclusion and track which pattern matched
+		if matchedPattern := matchExcludePattern(info.Name(), relSlash, info.IsDir(), excludes); matchedPattern != "" {
+			stats.patternMatches[matchedPattern]++
+			if info.IsDir() {
+				stats.excludeCount++ // count the directory itself
+				return filepath.SkipDir
+			}
+			stats.excludeCount++
+			return nil
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		// Included file
+		stats.includeCount++
+		stats.includeSize += info.Size()
+
+		// Track directory stats (first path component)
+		topDir := topDirectory(relSlash)
+		stats.dirCounts[topDir]++
+		stats.dirSizes[topDir] += info.Size()
+
+		// Track largest files (keep top 5)
+		stats.largestFiles = append(stats.largestFiles, fileEntry{path: relSlash, size: info.Size()})
+		if len(stats.largestFiles) > 50 {
+			// Periodically trim to avoid memory bloat
+			sort.Slice(stats.largestFiles, func(i, j int) bool {
+				return stats.largestFiles[i].size > stats.largestFiles[j].size
+			})
+			stats.largestFiles = stats.largestFiles[:5]
+		}
+
+		return nil
+	})
+	if err != nil {
+		return errorResult(fmt.Sprintf("dry run walk failed: %v", err))
+	}
+
+	// Sort largest files
+	sort.Slice(stats.largestFiles, func(i, j int) bool {
+		return stats.largestFiles[i].size > stats.largestFiles[j].size
+	})
+	if len(stats.largestFiles) > 5 {
+		stats.largestFiles = stats.largestFiles[:5]
+	}
+
+	// Build output
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("[dry_run] Backup preview: %s\n\n", sourceDir))
+
+	// Summary
+	sb.WriteString("=== Summary ===\n")
+	sb.WriteString(fmt.Sprintf("  Include: %d files (%s)\n", stats.includeCount, formatSize(stats.includeSize)))
+	sb.WriteString(fmt.Sprintf("  Exclude: %d files/directories\n", stats.excludeCount))
+
+	// Top included directories
+	if len(stats.dirCounts) > 0 {
+		sb.WriteString("\n=== Top included directories ===\n")
+		type dirStat struct {
+			name  string
+			count int
+			size  int64
+		}
+		var dirs []dirStat
+		for name, count := range stats.dirCounts {
+			dirs = append(dirs, dirStat{name: name, count: count, size: stats.dirSizes[name]})
+		}
+		sort.Slice(dirs, func(i, j int) bool {
+			return dirs[i].count > dirs[j].count
+		})
+		limit := 10
+		if len(dirs) < limit {
+			limit = len(dirs)
+		}
+		for _, d := range dirs[:limit] {
+			sb.WriteString(fmt.Sprintf("  %-40s %5d files  %s\n", d.name+"/", d.count, formatSize(d.size)))
+		}
+	}
+
+	// Exclude pattern matches
+	if len(stats.patternMatches) > 0 {
+		sb.WriteString("\n=== Exclude pattern matches ===\n")
+		type patternStat struct {
+			pattern string
+			count   int
+		}
+		var patterns []patternStat
+		for p, c := range stats.patternMatches {
+			patterns = append(patterns, patternStat{pattern: p, count: c})
+		}
+		sort.Slice(patterns, func(i, j int) bool {
+			return patterns[i].count > patterns[j].count
+		})
+		for _, p := range patterns {
+			sb.WriteString(fmt.Sprintf("  %-40s %5d matches\n", p.pattern, p.count))
+		}
+	}
+
+	// Largest files
+	if len(stats.largestFiles) > 0 {
+		sb.WriteString("\n=== Largest files ===\n")
+		for _, f := range stats.largestFiles {
+			sb.WriteString(fmt.Sprintf("  %-60s %s\n", f.path, formatSize(f.size)))
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf("\n=== Output ===\n  → %s\n", archivePath))
+
+	result := sb.String()
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: result}},
+	}, BackupOutput{Result: result, FileCount: stats.includeCount}, nil
+}
+
+// matchExcludePattern returns the first matching exclude pattern, or "" if none match.
+func matchExcludePattern(name string, relPath string, isDir bool, excludes []string) string {
+	for _, pattern := range excludes {
+		if isDir && name == pattern {
+			return pattern
+		}
+		if matched, _ := filepath.Match(pattern, name); matched {
+			return pattern
+		}
+		if strings.Contains(pattern, "/") || strings.Contains(pattern, string(filepath.Separator)) {
+			normalizedPattern := filepath.ToSlash(pattern)
+			if matched, _ := filepath.Match(normalizedPattern, relPath); matched {
+				return pattern
+			}
+			if isDir {
+				trimmed := strings.TrimSuffix(normalizedPattern, "/*")
+				if trimmed != normalizedPattern && relPath == trimmed {
+					return pattern
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// topDirectory returns the first path component (top-level directory).
+func topDirectory(relPath string) string {
+	parts := strings.SplitN(relPath, "/", 2)
+	if len(parts) == 1 {
+		return "."
+	}
+	return parts[0]
+}
+
+func formatSize(bytes int64) string {
+	if bytes >= 1024*1024*1024 {
+		return fmt.Sprintf("%.1f GB", float64(bytes)/(1024*1024*1024))
+	}
+	if bytes >= 1024*1024 {
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+	}
+	if bytes >= 1024 {
+		return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
+	}
+	return fmt.Sprintf("%d B", bytes)
 }
 
 func createBackupZip(output, sourceDir string, excludes []string, backupDir string) (int, error) {
@@ -105,17 +328,28 @@ func createBackupZip(output, sourceDir string, excludes []string, backupDir stri
 			return nil
 		}
 
-		// 백업 출력 디렉토리 자체를 스킵
+		// Skip backup output directory (with boundary check to avoid false prefix match)
 		absPath, _ := filepath.Abs(path)
-		if strings.HasPrefix(absPath, backupDir) {
+		if absPath == backupDir || strings.HasPrefix(absPath, backupDir+string(filepath.Separator)) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		// 제외 패턴 체크
-		if shouldExclude(info.Name(), info.IsDir(), excludes) {
+		// Skip symlinks to prevent directory traversal
+		linfo, lerr := os.Lstat(path)
+		if lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Check exclude patterns
+		rel, _ := filepath.Rel(sourceDir, path)
+		relSlash := filepath.ToSlash(rel)
+		if shouldExclude(info.Name(), relSlash, info.IsDir(), excludes) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -126,8 +360,7 @@ func createBackupZip(output, sourceDir string, excludes []string, backupDir stri
 			return nil
 		}
 
-		rel, _ := filepath.Rel(sourceDir, path)
-		archivePath := filepath.ToSlash(rel)
+		archivePath := relSlash
 
 		header, err := zip.FileInfoHeader(info)
 		if err != nil {
@@ -143,7 +376,7 @@ func createBackupZip(output, sourceDir string, excludes []string, backupDir stri
 
 		file, err := os.Open(path)
 		if err != nil {
-			return nil // 읽기 실패한 파일은 스킵
+			return nil // skip unreadable files
 		}
 		defer file.Close()
 
@@ -159,18 +392,8 @@ func createBackupZip(output, sourceDir string, excludes []string, backupDir stri
 	return count, err
 }
 
-func shouldExclude(name string, isDir bool, excludes []string) bool {
-	for _, pattern := range excludes {
-		// 디렉토리 이름 매칭 (예: node_modules, .git)
-		if isDir && name == pattern {
-			return true
-		}
-		// glob 패턴 매칭 (예: *.log, *.exe)
-		if matched, _ := filepath.Match(pattern, name); matched {
-			return true
-		}
-	}
-	return false
+func shouldExclude(name string, relPath string, isDir bool, excludes []string) bool {
+	return matchExcludePattern(name, relPath, isDir, excludes) != ""
 }
 
 func Register(server *mcp.Server) {

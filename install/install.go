@@ -291,6 +291,11 @@ func installClaudeMCPAdd(exePath string) error {
 	// 에러 무시 — 없으면 remove가 실패하지만 상관없음
 	exec.Command(claudePath, "mcp", "remove", "agent-tool").Run()
 
+	// ~/.claude.json의 프로젝트별 MCP 항목도 정리/업데이트
+	// 'claude mcp' CLI는 프로젝트별 항목(projects.*.mcpServers)을 관리하지 않으므로
+	// 직접 업데이트하지 않으면 오래된 바이너리가 전역 설정을 덮어쓸 수 있다.
+	updateClaudeProjectMCPServers(normalizedPath)
+
 	cmd := exec.Command(claudePath, "mcp", "add", "--scope", "user", "agent-tool", normalizedPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -306,6 +311,62 @@ func installClaudeMCPAdd(exePath string) error {
 
 	fmt.Printf("[Claude Code] 등록 완료 (claude mcp add)\n")
 	return nil
+}
+
+// updateClaudeProjectMCPServers는 ~/.claude.json의 프로젝트별 MCP 항목을 업데이트한다.
+// Claude Code는 projects."경로".mcpServers에 프로젝트별 MCP를 저장하며,
+// 이것이 전역 mcpServers보다 우선한다. 'claude mcp' CLI로는 관리되지 않는다.
+func updateClaudeProjectMCPServers(newPath string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	claudeJSON := filepath.Join(home, ".claude.json")
+	data, err := os.ReadFile(claudeJSON)
+	if err != nil {
+		return
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		return
+	}
+
+	projects, ok := config["projects"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	updated := false
+	for _, projVal := range projects {
+		proj, ok := projVal.(map[string]any)
+		if !ok {
+			continue
+		}
+		servers, ok := proj["mcpServers"].(map[string]any)
+		if !ok {
+			continue
+		}
+		entry, ok := servers["agent-tool"].(map[string]any)
+		if !ok {
+			continue
+		}
+		oldCmd, _ := entry["command"].(string)
+		if oldCmd != newPath {
+			entry["command"] = newPath
+			updated = true
+		}
+	}
+
+	if updated {
+		output, err := json.MarshalIndent(config, "", "  ")
+		if err != nil {
+			return
+		}
+		os.WriteFile(claudeJSON, output, 0644)
+		fmt.Println("[Claude Code] 프로젝트별 MCP 경로 업데이트 완료")
+	}
 }
 
 const mcpPermissionEntry = "mcp__agent-tool__*"

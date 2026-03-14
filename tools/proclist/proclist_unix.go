@@ -84,7 +84,7 @@ func listProcesses() ([]ProcessInfo, error) {
 }
 
 // listPortPIDs는 Linux에서 /proc/net/tcp{,6}를 읽어 포트-PID 매핑을 반환한다.
-func listPortPIDs() ([]PortEntry, error) {
+func ListPortPIDs() ([]PortEntry, error) {
 	// inode → PortEntry 매핑 구축
 	inodeMap := make(map[uint64]PortEntry)
 

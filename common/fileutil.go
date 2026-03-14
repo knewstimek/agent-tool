@@ -47,6 +47,11 @@ var (
 	// 기본값 false (보안상 스킵). set_config의 allow_symlinks로 변경 가능.
 	allowSymlinks   = false
 	allowSymlinksMu sync.RWMutex
+	// workspace는 기본 작업 디렉토리이다.
+	// glob 등에서 path가 미지정일 때 os.Getwd() 대신 사용된다.
+	// set_config의 workspace로 런타임에 변경 가능.
+	workspace   string
+	workspaceMu sync.RWMutex
 )
 
 // GetFallbackEncoding은 현재 폴백 인코딩을 스레드 안전하게 반환한다.
@@ -106,6 +111,21 @@ func SetAllowSymlinks(allow bool) {
 	allowSymlinksMu.Lock()
 	defer allowSymlinksMu.Unlock()
 	allowSymlinks = allow
+}
+
+// GetWorkspace는 현재 워크스페이스 경로를 반환한다.
+// 빈 문자열이면 설정되지 않은 것이다.
+func GetWorkspace() string {
+	workspaceMu.RLock()
+	defer workspaceMu.RUnlock()
+	return workspace
+}
+
+// SetWorkspace는 워크스페이스 경로를 설정한다.
+func SetWorkspace(path string) {
+	workspaceMu.Lock()
+	defer workspaceMu.Unlock()
+	workspace = path
 }
 
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}

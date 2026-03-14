@@ -9,12 +9,15 @@ import (
 	"strings"
 	"time"
 
+	"agent-tool/common"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type GlobInput struct {
-	Pattern string `json:"pattern" jsonschema:"Glob pattern to match files (e.g. **/*.go or src/**/*.ts)"`
-	Path    string `json:"path,omitempty" jsonschema:"Directory to search in (absolute path). Defaults to current directory if empty"`
+	Pattern       string `json:"pattern" jsonschema:"Glob pattern to match files (e.g. **/*.go or src/**/*.ts)"`
+	Path          string `json:"path,omitempty" jsonschema:"Directory to search in (absolute path). Defaults to current directory if empty"`
+	RelativePaths bool   `json:"relative_paths,omitempty" jsonschema:"Return paths relative to the search directory instead of absolute paths. Saves tokens in output. Default: false"`
 }
 
 type GlobOutput struct {
@@ -29,10 +32,14 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GlobInput) (*mc
 
 	searchDir := input.Path
 	if searchDir == "" {
-		var err error
-		searchDir, err = os.Getwd()
-		if err != nil {
-			return errorResult(fmt.Sprintf("failed to get working directory: %v", err))
+		if ws := common.GetWorkspace(); ws != "" {
+			searchDir = ws
+		} else {
+			var err error
+			searchDir, err = os.Getwd()
+			if err != nil {
+				return errorResult(fmt.Sprintf("failed to get working directory: %v", err))
+			}
 		}
 	}
 
@@ -89,8 +96,21 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GlobInput) (*mc
 		}
 	}
 
+	// Build display paths (relative or absolute)
+	displayPaths := matches
+	if input.RelativePaths && len(matches) > 0 {
+		displayPaths = make([]string, len(matches))
+		for i, m := range matches {
+			if rel, err := filepath.Rel(searchDir, m); err == nil {
+				displayPaths[i] = filepath.ToSlash(rel)
+			} else {
+				displayPaths[i] = m
+			}
+		}
+	}
+
 	var sb strings.Builder
-	for _, m := range matches {
+	for _, m := range displayPaths {
 		sb.WriteString(m)
 		sb.WriteString("\n")
 	}
@@ -102,7 +122,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input GlobInput) (*mc
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
-	}, GlobOutput{Files: matches, Count: len(matches)}, nil
+	}, GlobOutput{Files: displayPaths, Count: len(matches)}, nil
 }
 
 // findMatches는 baseDir에서 pattern에 매칭되는 파일 경로를 반환한다.
@@ -169,7 +189,8 @@ func Register(server *mcp.Server) {
 		Description: `Finds files matching a glob pattern.
 Supports ** for recursive directory matching.
 Returns matching file paths sorted by modification time (newest first).
-Skips hidden directories (.git, etc.) and common vendor directories.`,
+Skips hidden directories (.git, etc.) and common vendor directories.
+Use relative_paths=true to return paths relative to the search directory (saves tokens).`,
 	}, Handle)
 }
 

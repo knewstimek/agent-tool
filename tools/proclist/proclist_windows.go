@@ -187,7 +187,7 @@ func enrichCommandLines(procs []ProcessInfo) {
 }
 
 // listPortPIDs는 Windows에서 netstat -ano로 포트-PID 매핑을 반환한다.
-func listPortPIDs() ([]PortEntry, error) {
+func ListPortPIDs() ([]PortEntry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
