@@ -10,11 +10,12 @@ MCP (Model Context Protocol) tool server for AI coding agents.
 
 ## Why?
 
-Built-in Edit tools in AI coding agents (Claude Code, Cursor, Codex, etc.) have known limitations:
+Built-in tools in AI coding agents (Claude Code, Cursor, Codex, etc.) have known limitations:
 
 - **Tab indentation breaks**: LLMs output spaces, but your project uses tabs. The built-in Edit tool writes spaces as-is, corrupting your indentation style.
 - **Encoding corruption**: Editing EUC-KR, Shift-JIS, or UTF-8 BOM files silently converts them to plain UTF-8, breaking legacy projects.
-- **No SSH/SFTP**: Can't manage remote servers or transfer files directly from the agent.
+- **Too many separate tools**: Making the agent find, install, and configure Redis CLI, MySQL client, SSH client, etc. is tedious and error-prone. agent-tool bundles 43 tools into a single binary — one install, everything works.
+- **Network censorship**: In some countries, government-level web filtering breaks plain `curl`/`wget` requests. agent-tool uses ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) by default to work around these restrictions.
 
 **agent-tool** solves these by providing drop-in replacement tools that respect your project's conventions.
 
