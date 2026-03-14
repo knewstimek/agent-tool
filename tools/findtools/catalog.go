@@ -107,6 +107,8 @@ func Catalog() []ToolDef {
 		// VCS
 		{Name: "git", Commands: []string{"git"}, Category: "vcs",
 			VersionArg: "--version"},
+		{Name: "gh", Commands: []string{"gh"}, Category: "vcs",
+			VersionArg: "--version"},
 
 		// Container
 		{Name: "docker", Commands: []string{"docker"}, Category: "container",

@@ -79,6 +79,7 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - file_info: File metadata (size, encoding, line ending, indentation, line count)
 - diff: Compare two files (unified diff output)
 - patch: Apply unified diff patch to a file (supports dry_run)
+- delete: Delete a single file (no directories, no symlinks, supports dry_run)
 - find_tools: Discover installed dev tools (compilers, runtimes, build systems)
 - set_config: Change runtime settings (fallback encoding, encoding warnings, max file size)
 - agent_tool_help: This help tool
@@ -230,6 +231,12 @@ Parameters: file_a, file_b, context_lines (default 3)
 ## patch
 Apply unified diff patch to a file. Verifies context lines before applying.
 Parameters: file_path, patch, dry_run
+
+## delete
+Delete a single file safely.
+Safety: no directory deletion, no symlinks, no path traversal (..).
+Use dry_run=true to preview what would be deleted.
+Parameters: file_path, dry_run
 
 ## find_tools
 Discover installed development tools on the system.

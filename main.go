@@ -14,6 +14,7 @@ import (
 	"agent-tool/tools/compress"
 	"agent-tool/tools/config"
 	"agent-tool/tools/convertenc"
+	"agent-tool/tools/delete"
 	"agent-tool/tools/diff"
 	edit "agent-tool/tools/edit"
 	"agent-tool/tools/fileinfo"
@@ -98,6 +99,7 @@ func main() {
 	fileinfo.Register(server)
 	diff.Register(server)
 	patch.Register(server)
+	delete.Register(server)
 	findtools.Register(server)
 	help.Register(server)
 

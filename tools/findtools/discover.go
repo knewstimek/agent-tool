@@ -211,6 +211,13 @@ func cleanVersion(s string) string {
 	if strings.HasPrefix(s, "git version ") {
 		return strings.TrimPrefix(s, "git version ")
 	}
+	// "gh version 2.69.0 (2025-03-19)" → "2.69.0"
+	if strings.HasPrefix(s, "gh version ") {
+		parts := strings.Fields(s)
+		if len(parts) >= 3 {
+			return parts[2]
+		}
+	}
 	// "Docker version 24.0.7, build afdd53b" → "24.0.7"
 	if strings.HasPrefix(s, "Docker version ") {
 		v := strings.TrimPrefix(s, "Docker version ")

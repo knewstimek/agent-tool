@@ -102,6 +102,11 @@ func injectKnownPaths(defs []ToolDef) {
 			"/usr/bin/git",
 			"/usr/local/bin/git",
 		},
+		"gh": {
+			"/usr/bin/gh",
+			"/usr/local/bin/gh",
+			filepath.Join(home, ".local", "bin", "gh"),
+		},
 		"docker": {
 			"/usr/bin/docker",
 			"/usr/local/bin/docker",

@@ -101,6 +101,10 @@ func injectKnownPaths(defs []ToolDef) {
 			filepath.Join(pf, "Git", "cmd", "git.exe"),
 			filepath.Join(pf, "Git", "bin", "git.exe"),
 		},
+		"gh": {
+			filepath.Join(pf, "GitHub CLI", "gh.exe"),
+			filepath.Join(localAppdata, "GitHub CLI", "gh.exe"),
+		},
 		"docker": {
 			filepath.Join(pf, "Docker", "Docker", "resources", "bin", "docker.exe"),
 		},
