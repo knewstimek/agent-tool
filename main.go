@@ -33,17 +33,22 @@ import (
 func main() {
 	args := os.Args[1:]
 
-	// install / uninstall 서브커맨드
-	if len(args) > 0 && (args[0] == "install" || args[0] == "uninstall") {
+	// install / uninstall / reinstall 서브커맨드
+	if len(args) > 0 && (args[0] == "install" || args[0] == "uninstall" || args[0] == "reinstall") {
 		target := ""
 		if len(args) > 1 {
 			target = args[1]
 		}
 		var err error
-		if args[0] == "install" {
+		switch args[0] {
+		case "install":
 			err = install.Run(target)
-		} else {
+		case "uninstall":
 			err = install.Uninstall(target)
+		case "reinstall":
+			// uninstall 에러는 무시 (아직 설치 안 된 경우)
+			install.Uninstall(target)
+			err = install.Run(target)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -79,7 +84,7 @@ func main() {
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "agent-tool",
-			Version: "v0.3.0",
+			Version: "v0.3.1",
 		},
 		nil,
 	)
