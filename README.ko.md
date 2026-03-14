@@ -13,7 +13,7 @@ AI 코딩 에이전트를 위한 MCP(Model Context Protocol) 도구 서버.
 AI 코딩 에이전트(Claude Code, Cursor, Codex 등)의 내장 도구에는 알려진 한계가 있습니다:
 
 - **탭 들여쓰기 깨짐**: LLM은 공백을 출력하지만, 프로젝트는 탭을 사용. 내장 Edit는 공백을 그대로 써서 들여쓰기 스타일이 망가짐.
-- **인코딩 손상**: EUC-KR, Shift-JIS 파일을 편집하면 조용히 UTF-8로 변환되어 레거시 프로젝트가 깨짐.
+- **인코딩 손상**: EUC-KR, Shift-JIS, GB18030 파일을 편집하면 조용히 UTF-8로 변환되어 레거시 프로젝트가 깨짐.
 - **도구가 너무 분산됨**: 에이전트에게 Redis CLI, MySQL 클라이언트, SSH 클라이언트 등을 찾고, 설치하고, 설정하게 시키는 과정 자체가 번거롭고 오류가 잦음. agent-tool은 43개 도구를 단일 바이너리로 통합 — 한 번 설치하면 전부 동작.
 - **네트워크 검열**: 일부 국가에서 정부 수준의 웹 필터링으로 `curl`/`wget` 요청이 차단됨. agent-tool은 ECH (Encrypted Client Hello)와 DoH (DNS over HTTPS)를 기본 활성화하여 이런 제한을 우회.
 
