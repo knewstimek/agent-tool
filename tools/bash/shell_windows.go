@@ -4,6 +4,7 @@ package bash
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -181,6 +182,30 @@ func delegateToExternalShell(command string) string {
 	return delegateToCmdExe(command)
 }
 
+// wrapWithTokenize wraps a command in a PS Tokenize pre-validation wrapper.
+// The command is Base64-encoded so PowerShell never directly parses the raw text.
+// PSParser::Tokenize checks syntax before Invoke-Expression executes it.
+// If parse errors are found, an error message is shown and $LASTEXITCODE=1,
+// but the sentinel ALWAYS runs because the wrapper itself is always valid PS syntax.
+// This prevents sentinel hangs from ANY PS 5.1 parsing failure, not just && / ||.
+func wrapWithTokenize(command string) string {
+	b64 := base64.StdEncoding.EncodeToString([]byte(command))
+	var w strings.Builder
+	w.WriteString("$__b64='")
+	w.WriteString(b64)
+	w.WriteString("'; ")
+	w.WriteString("$__cmd=[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__b64)); ")
+	w.WriteString("$__e=$null; ")
+	w.WriteString("[void][System.Management.Automation.PSParser]::Tokenize($__cmd,[ref]$__e); ")
+	w.WriteString("if($__e.Count -gt 0){ ")
+	w.WriteString("Write-Host \"PS syntax error: $($__e[0].Message)\"; ")
+	w.WriteString("$global:LASTEXITCODE=1 ")
+	// Reset $LASTEXITCODE before execution so the sentinel's $null check
+	// can fall back to $? for PS cmdlets that don't set $LASTEXITCODE.
+	w.WriteString("}else{ $global:LASTEXITCODE=$null; Invoke-Expression $__cmd }")
+	return w.String()
+}
+
 // buildSentinelCmd wraps a command with exit code capture and sentinel marker.
 func buildSentinelCmd(kind shellKind, command string, sentinel string) string {
 	switch kind {
@@ -210,6 +235,10 @@ func buildSentinelCmd(kind shellKind, command string, sentinel string) string {
 				userCmd = buildPSChainOps(parsed)
 			}
 		}
+		// Wrap with Tokenize pre-validation as a safety net against ANY PS 5.1
+		// parse failure (not just && / ||). The Base64 + Tokenize wrapper ensures
+		// the sentinel always runs even if the command has unexpected syntax.
+		userCmd = wrapWithTokenize(userCmd)
 		return fmt.Sprintf(
 			"%s; $__ec = $LASTEXITCODE; if ($null -eq $__ec) { $__ec = if ($?) {0} else {1} }; Write-Host \"\"; Write-Host \"%s$__ec%s\"",
 			userCmd, sentinel, sentinelSuffix,
