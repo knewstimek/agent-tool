@@ -59,6 +59,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 		return errorResult("only http and https URLs are supported")
 	}
 
+	// SSRF policy check — warn on private IP access (helps detect prompt injection)
+	_, ssrfWarning, ssrfErr := common.CheckHostSSRF(ctx, parsedURL.Hostname(), common.GetAllowHTTPPrivate(), "http")
+	if ssrfErr != nil {
+		return errorResult(ssrfErr.Error())
+	}
+
 	// Validate method
 	input.Method = strings.ToUpper(strings.TrimSpace(input.Method))
 	if input.Method == "" {
@@ -66,6 +72,16 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 	}
 	if !allowedMethods[input.Method] {
 		return errorResult(fmt.Sprintf("unsupported method: %s (supported: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS)", input.Method))
+	}
+
+	// DLP: scan outbound body for sensitive data before transmission.
+	// Only methods that carry a request body are checked. Blocked patterns
+	// have near-zero false positive rates (PEM keys, AWS keys, token formats).
+	if input.Body != "" && (input.Method == "POST" || input.Method == "PUT" || input.Method == "PATCH") {
+		if matches := common.ScanSensitiveData(input.Body); len(matches) > 0 {
+			msg := common.FormatDLPBlock(matches)
+			return errorResult(msg)
+		}
 	}
 
 	// Defaults
@@ -90,8 +106,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 	client, err := common.NewHTTPClient(common.HTTPClientConfig{
 		TimeoutSec: input.TimeoutSec,
 		ProxyURL:   input.ProxyURL,
-		EnableDoH:  !input.NoDoH,
-		EnableECH:  !input.NoECH,
+		EnableDoH:  !input.NoDoH && common.GetEnableDoH(),
+		EnableECH:  !input.NoECH && common.GetEnableECH(),
 	})
 	if err != nil {
 		return errorResult(fmt.Sprintf("client setup failed: %v", err))
@@ -125,9 +141,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 	}
 
 	// Execute
-	resp, err := common.DoRequestWithECH(ctx, client, httpReq, !input.NoECH)
+	resp, err := common.DoRequestWithECH(ctx, client, httpReq, !input.NoECH && common.GetEnableECH())
 	if err != nil {
-		return errorResult(fmt.Sprintf("request failed: %v", err))
+		msg := fmt.Sprintf("request failed: %v", err)
+		if ssrfWarning != "" {
+			msg = ssrfWarning + "\n\n" + msg
+		}
+		return errorResult(msg)
 	}
 	defer resp.Body.Close()
 
@@ -177,6 +197,10 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 	}
 
 	result := sb.String()
+	if ssrfWarning != "" {
+		result = ssrfWarning + "\n\n" + result
+	}
+
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: result}},
 		IsError: resp.StatusCode >= 400,

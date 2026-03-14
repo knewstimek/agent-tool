@@ -2,12 +2,16 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"agent-tool/common"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	gossh "golang.org/x/crypto/ssh"
@@ -52,6 +56,24 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	// 1. Validate input
 	if err := validateInput(&input); err != nil {
 		return errorResult(err.Error())
+	}
+
+	// SSRF policy: cloud metadata always blocked. Private IPs allowed by default
+	// (configurable via set_config allow_ssh_private). Warning shown on every
+	// private IP access to help detect prompt injection attacks.
+	_, ssrfWarning, ssrfErr := common.CheckHostSSRF(ctx, input.Host, common.GetAllowSSHPrivate(), "ssh")
+	if ssrfErr != nil {
+		return errorResult(ssrfErr.Error())
+	}
+	// Also check jump host — prevents SSRF via ProxyJump to cloud metadata
+	if input.JumpHost != "" {
+		_, jumpWarning, jumpErr := common.CheckHostSSRF(ctx, input.JumpHost, common.GetAllowSSHPrivate(), "ssh")
+		if jumpErr != nil {
+			return errorResult(fmt.Sprintf("jump_host: %s", jumpErr.Error()))
+		}
+		if jumpWarning != "" && ssrfWarning == "" {
+			ssrfWarning = jumpWarning
+		}
 	}
 
 	key := sessionKey(input.Host, input.Port, input.User)
@@ -128,6 +150,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	}
 
 	output := sb.String()
+	if ssrfWarning != "" {
+		output = ssrfWarning + "\n\n" + output
+	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: output}},
 	}, SSHOutput{Result: output}, nil
@@ -377,7 +402,14 @@ func validateInput(input *SSHInput) error {
 
 // expandTilde expands ~/path to the user's home directory.
 func expandTilde(path string) string {
-	if strings.HasPrefix(path, "~/") || path == "~" {
+	if path == "~" {
+		// Bare "~" — return home directory directly.
+		// Must be handled separately: path[2:] would panic on a 1-char string.
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return home
+		}
+	} else if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
 		home, err := os.UserHomeDir()
 		if err == nil {
 			return filepath.Join(home, path[2:])
@@ -416,15 +448,18 @@ func isConnectionError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for common network errors
 	if _, ok := err.(*net.OpError); ok {
+		return true
+	}
+	// Use errors.Is for precise EOF detection instead of broad string matching
+	// that could false-positive on unrelated error messages containing "EOF".
+	if errors.Is(err, io.EOF) {
 		return true
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "connection reset") ||
 		strings.Contains(msg, "broken pipe") ||
-		strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "EOF")
+		strings.Contains(msg, "connection refused")
 }
 
 func errorResult(msg string) (*mcp.CallToolResult, SSHOutput, error) {

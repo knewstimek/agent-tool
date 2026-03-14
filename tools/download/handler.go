@@ -52,6 +52,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DownloadInput) 
 		return errorResult("only http and https URLs are supported")
 	}
 
+	// SSRF policy check — warn on private IP access (helps detect prompt injection)
+	_, ssrfWarning, ssrfErr := common.CheckHostSSRF(ctx, parsedURL.Hostname(), common.GetAllowHTTPPrivate(), "http")
+	if ssrfErr != nil {
+		return errorResult(ssrfErr.Error())
+	}
+
 	// Validate output path
 	if strings.TrimSpace(input.OutputPath) == "" {
 		return errorResult("output_path is required")
@@ -87,8 +93,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DownloadInput) 
 	client, err := common.NewHTTPClient(common.HTTPClientConfig{
 		TimeoutSec: input.TimeoutSec,
 		ProxyURL:   input.ProxyURL,
-		EnableDoH:  !input.NoDoH,
-		EnableECH:  !input.NoECH,
+		EnableDoH:  !input.NoDoH && common.GetEnableDoH(),
+		EnableECH:  !input.NoECH && common.GetEnableECH(),
 	})
 	if err != nil {
 		return errorResult(fmt.Sprintf("client setup failed: %v", err))
@@ -106,9 +112,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DownloadInput) 
 	}
 
 	// Execute with ECH support
-	resp, err := common.DoRequestWithECH(ctx, client, httpReq, !input.NoECH)
+	resp, err := common.DoRequestWithECH(ctx, client, httpReq, !input.NoECH && common.GetEnableECH())
 	if err != nil {
-		return errorResult(fmt.Sprintf("request failed: %v", err))
+		msg := fmt.Sprintf("request failed: %v", err)
+		if ssrfWarning != "" {
+			msg = ssrfWarning + "\n\n" + msg
+		}
+		return errorResult(msg)
 	}
 	defer resp.Body.Close()
 
@@ -158,6 +168,10 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DownloadInput) 
 	sizeStr := formatSize(written)
 	msg := fmt.Sprintf("Downloaded: %s\nSaved to: %s\nSize: %s\nContent-Type: %s",
 		input.URL, input.OutputPath, sizeStr, ct)
+
+	if ssrfWarning != "" {
+		msg = ssrfWarning + "\n\n" + msg
+	}
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: msg}},

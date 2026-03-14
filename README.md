@@ -49,7 +49,7 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **ProcExec** | Execute commands as new processes. Foreground/background/suspended start (Windows: CREATE_SUSPENDED, Linux: SIGSTOP). Timeout, env vars | ✅ |
 | **EnvVar** | Read environment variables. Sensitive values (passwords, tokens) auto-masked | ✅ |
 | **Firewall** | Read firewall rules — iptables/nftables/firewalld (Linux), netsh (Windows). Read-only | ✅ |
-| **SSH** | Execute commands on remote servers via SSH. Password & key auth, session pooling, host key verification (strict/tofu/none), ProxyJump (IPv4→IPv6 bastion), IPv6 support | ✅ |
+| **SSH** | Execute commands on remote servers via SSH. Password & key auth (PEM, OpenSSH, PuTTY PPK), session pooling, host key verification (strict/tofu/none), ProxyJump, IPv6 | ✅ |
 | **SFTP** | Transfer files and manage remote filesystems over SSH. Upload, download, ls, stat, mkdir, rm, chmod, rename. Reuses SSH session pool. Max 2 GB per transfer | ✅ |
 | **Bash** | Persistent shell sessions with working directory and environment variable retention. Session pooling (max 5, idle timeout 30 min). Unix: bash/sh, Windows: PowerShell/git-bash/cmd (auto-detected, best available). PowerShell sessions include UTF-8 encoding and PATH enhancement | ✅ |
 | **WebFetch** | Fetch web content as text/Markdown. ECH (Encrypted Client Hello) + DoH (DNS over HTTPS) by default. HTML→Markdown auto-conversion. SSRF protection. HTTP/SOCKS5 proxy. Chrome User-Agent | ✅ |
@@ -57,6 +57,15 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **Download** | Download files from URLs to disk. ECH + DoH by default. SSRF protection. HTTP/SOCKS5 proxy. Atomic write. Max 2 GB | ✅ |
 | **HTTPReq** | Execute HTTP requests with any method (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS). API testing with custom headers, body, proxy. SSRF protection | ✅ |
 | **JSONQuery** | Query JSON files with dot-notation paths (e.g. `dependencies.react`, `items[*].id`). Extract specific values without loading entire file into context | ✅ |
+| **YAMLQuery** | Query YAML files with dot-notation paths (same syntax as JSONQuery) | ✅ |
+| **TOMLQuery** | Query TOML files with dot-notation paths (same syntax as JSONQuery). Supports TOML-specific types (datetime, int64) | ✅ |
+| **Copy** | Copy files/directories with atomic write and permission preservation. Recursive directory copy. dry_run preview | ✅ |
+| **MultiRead** | Read multiple files in a single call to reduce API round-trips. Encoding-aware, offset/limit support. Max 50 files | ✅ |
+| **RegexReplace** | Regex find-and-replace across files/directories. Encoding-preserving, capture groups ($1, $2). dry_run preview | ✅ |
+| **TLSCheck** | Check TLS certificate details — subject, issuer, expiry, SANs, TLS version, cipher suite | ✅ |
+| **DNSLookup** | DNS record lookup (A/AAAA/MX/CNAME/TXT/NS/SOA). DNS over HTTPS (DoH) by default for privacy | ✅ |
+| **MySQL** | Execute SQL queries on MySQL/MariaDB. Table-formatted SELECT results, affected rows for DML. Max 1000 rows | ✅ |
+| **Redis** | Execute Redis commands with formatted output by type. TLS support. Dangerous commands (FLUSHALL, SHUTDOWN, etc.) blocked | ✅ |
 | **PortCheck** | Check if a TCP port is open on a host. Returns OPEN/CLOSED with response time. Supports hostname, IPv4, IPv6 | ✅ |
 | **ExternalIP** | Get your external (public) IP address. Multiple providers with automatic fallback (ipify, ifconfig.me, icanhazip) | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |
@@ -119,19 +128,31 @@ When spawning subagents, instruct them to prefer agent-tool MCP tools too.
 ### Auto-install (recommended)
 
 ```bash
-# Register with all detected agents
+# Register with all detected agents (full auto-approve — all tools)
 agent-tool install
+
+# Safe mode — only auto-approve local file tools (no SSH, HTTP, DB, shell)
+agent-tool install --safe-approve
+
+# No auto-approve — manual approval required for every tool call
+agent-tool install --no-auto-approve
 
 # Register with a specific agent
 agent-tool install claude
-agent-tool install codex
-agent-tool install cursor
-agent-tool install windsurf
+agent-tool install claude --safe-approve
 
 # Uninstall (removes agent-tool entry only, preserves other settings)
 agent-tool uninstall          # from all agents
 agent-tool uninstall claude   # from specific agent
 ```
+
+**Install permission levels:**
+
+| Level | Flag | Auto-approved tools |
+|-------|------|---------------------|
+| Full (default) | _(none)_ | All tools (`mcp__agent-tool__*` wildcard) |
+| Safe | `--safe-approve` | 29 local-only tools (read, edit, write, grep, glob, etc.) — no SSH, HTTP, DB, bash, process control |
+| None | `--no-auto-approve` | No tools — every call requires manual approval |
 
 ### Manual setup
 
@@ -184,6 +205,12 @@ Agents can change settings at runtime via `set_config` without restarting:
 | `max_file_size_mb` | Max file size for read/edit/grep (MB) | `50` |
 | `allow_symlinks` | Allow symlink extraction from tar archives | `false` |
 | `workspace` | Default workspace/project root for tools like glob when no explicit path is given | _(cwd)_ |
+| `allow_http_private` | Allow webfetch/download/httpreq to access private IPs | `false` |
+| `allow_mysql_private` | Allow mysql tool to access private IPs | `true` |
+| `allow_redis_private` | Allow redis tool to access private IPs | `true` |
+| `allow_ssh_private` | Allow ssh/sftp tools to access private IPs | `true` |
+| `enable_doh` | Enable DNS over HTTPS globally (webfetch/download/httpreq/dnslookup) | `true` |
+| `enable_ech` | Enable Encrypted Client Hello globally (webfetch/download/httpreq) | `true` |
 
 ## Build
 
@@ -233,11 +260,19 @@ Available topics: `overview`, `encoding`, `indentation`, `tools`, `troubleshooti
 
 ## Security
 
+agent-tool provides powerful system access (SSH, MySQL, Redis, file operations, HTTP requests).
+When used with AI coding agents, be aware of prompt injection risks:
+
+- **SSRF Protection**: Cloud metadata IPs (169.254.x.x, fe80::/10) are always blocked regardless of settings. Private IP access is configurable per protocol via `set_config` (`allow_http_private`, `allow_mysql_private`, `allow_redis_private`, `allow_ssh_private`)
+- **DLP (Data Loss Prevention)**: Outbound HTTP POST/PUT/PATCH request bodies are scanned for sensitive data patterns (PEM private keys, AWS access keys, GitHub/GitLab tokens, Slack tokens, .env file dumps) and **blocked before transmission**
+- **Prompt Injection Warnings**: Every private IP connection shows a security warning visible to both the user and the AI agent, helping detect prompt injection attacks from fetched web content
 - **Zip Slip protection**: Archive entries with `../` path traversal are blocked (both zip and tar)
 - **Zip Bomb protection**: Single file limit (1GB), total extraction limit (5GB)
 - **Symlinks**: Skipped by default. Enable via `set_config allow_symlinks=true` (tar only; zip symlinks always skipped). Even when enabled, symlinks targeting outside the output directory are blocked
 - **File size limit**: Configurable max file size (default 50MB) prevents OOM on large files. Adjustable via `set_config max_file_size_mb=N`
 - **Encoding safety**: chardet uses 64KB sample (not full file) for memory efficiency
+
+For maximum security, review the AI agent's tool calls before approving, especially for SSH commands, HTTP requests to external URLs, and database queries.
 
 ## Tech Stack
 

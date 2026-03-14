@@ -51,6 +51,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WebFetchInput) 
 		return errorResult("only http and https URLs are supported")
 	}
 
+	// SSRF policy check — warn on private IP access (helps detect prompt injection)
+	_, ssrfWarning, ssrfErr := common.CheckHostSSRF(ctx, parsedURL.Hostname(), common.GetAllowHTTPPrivate(), "http")
+	if ssrfErr != nil {
+		return errorResult(ssrfErr.Error())
+	}
+
 	// Defaults
 	if input.MaxLength <= 0 {
 		input.MaxLength = defaultMaxLength
@@ -66,8 +72,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WebFetchInput) 
 	client, err := common.NewHTTPClient(common.HTTPClientConfig{
 		TimeoutSec: input.TimeoutSec,
 		ProxyURL:   input.ProxyURL,
-		EnableDoH:  !input.NoDoH,
-		EnableECH:  !input.NoECH,
+		EnableDoH:  !input.NoDoH && common.GetEnableDoH(),
+		EnableECH:  !input.NoECH && common.GetEnableECH(),
 	})
 	if err != nil {
 		return errorResult(fmt.Sprintf("client setup failed: %v", err))
@@ -91,9 +97,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WebFetchInput) 
 	}
 
 	// Execute with ECH support
-	resp, err := common.DoRequestWithECH(ctx, client, httpReq, !input.NoECH)
+	resp, err := common.DoRequestWithECH(ctx, client, httpReq, !input.NoECH && common.GetEnableECH())
 	if err != nil {
-		return errorResult(fmt.Sprintf("request failed: %v", err))
+		msg := fmt.Sprintf("request failed: %v", err)
+		if ssrfWarning != "" {
+			msg = ssrfWarning + "\n\n" + msg
+		}
+		return errorResult(msg)
 	}
 	defer resp.Body.Close()
 
@@ -149,8 +159,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WebFetchInput) 
 		StatusCode: resp.StatusCode,
 	}
 
+	result := sb.String()
+	if ssrfWarning != "" {
+		result = ssrfWarning + "\n\n" + result
+	}
+
 	return &mcp.CallToolResult{
-		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+		Content: []mcp.Content{&mcp.TextContent{Text: result}},
 		IsError: resp.StatusCode >= 400,
 	}, out, nil
 }

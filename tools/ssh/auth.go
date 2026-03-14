@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/kayrus/putty"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -55,10 +56,47 @@ func buildAuthMethods(input SSHInput) (*authResult, error) {
 	return result, nil
 }
 
-// parseKey parses a PEM-encoded private key, optionally with passphrase.
+// parseKey parses a private key, trying PEM format first, then PPK (PuTTY) format.
+// PPK fallback allows users to use PuTTY-generated keys directly without conversion.
 func parseKey(keyBytes []byte, passphrase string) (gossh.Signer, error) {
+	// Try PEM format first (most common: OpenSSH, ssh-keygen output)
 	if passphrase != "" {
-		return gossh.ParsePrivateKeyWithPassphrase(keyBytes, []byte(passphrase))
+		signer, err := gossh.ParsePrivateKeyWithPassphrase(keyBytes, []byte(passphrase))
+		if err == nil {
+			return signer, nil
+		}
+	} else {
+		signer, err := gossh.ParsePrivateKey(keyBytes)
+		if err == nil {
+			return signer, nil
+		}
 	}
-	return gossh.ParsePrivateKey(keyBytes)
+
+	// Fallback: try PPK (PuTTY) format
+	ppkKey, err := putty.New(keyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("key is neither valid PEM nor PPK format: %w", err)
+	}
+
+	// Check if the key is encrypted but no passphrase was provided
+	if ppkKey.Encryption != "none" && passphrase == "" {
+		return nil, fmt.Errorf("PPK key is encrypted but no passphrase provided")
+	}
+
+	// ParseRawPrivateKey handles decryption internally via the password parameter.
+	// Supports RSA, DSA, ECDSA, and Ed25519.
+	var password []byte
+	if passphrase != "" {
+		password = []byte(passphrase)
+	}
+	cryptoKey, err := ppkKey.ParseRawPrivateKey(password)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse PPK private key: %w", err)
+	}
+
+	signer, err := gossh.NewSignerFromKey(cryptoKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SSH signer from PPK key: %w", err)
+	}
+	return signer, nil
 }

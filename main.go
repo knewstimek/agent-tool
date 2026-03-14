@@ -14,10 +14,12 @@ import (
 	"agent-tool/tools/download"
 	"agent-tool/tools/checksum"
 	"agent-tool/tools/compress"
+	copytool "agent-tool/tools/copy"
 	"agent-tool/tools/config"
 	"agent-tool/tools/convertenc"
 	"agent-tool/tools/delete"
 	"agent-tool/tools/diff"
+	"agent-tool/tools/dnslookup"
 	edit "agent-tool/tools/edit"
 	"agent-tool/tools/envvar"
 	"agent-tool/tools/externalip"
@@ -30,48 +32,86 @@ import (
 	"agent-tool/tools/httpreq"
 	"agent-tool/tools/jsonquery"
 	"agent-tool/tools/listdir"
+	mysqltool "agent-tool/tools/mysql"
+	"agent-tool/tools/multiread"
+	"agent-tool/tools/tomlquery"
 	"agent-tool/tools/patch"
 	"agent-tool/tools/portcheck"
+	"agent-tool/tools/regexreplace"
 	"agent-tool/tools/procexec"
 	"agent-tool/tools/prockill"
 	"agent-tool/tools/proclist"
 	"agent-tool/tools/read"
+	redistool "agent-tool/tools/redis"
 	"agent-tool/tools/rename"
 	sftptool "agent-tool/tools/sftp"
 	"agent-tool/tools/ssh"
 	"agent-tool/tools/sysinfo"
+	"agent-tool/tools/tlscheck"
 	"agent-tool/tools/webfetch"
 	"agent-tool/tools/websearch"
+	"agent-tool/tools/yamlquery"
 	"agent-tool/tools/write"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const Version = "v0.6.0"
+
 func main() {
 	args := os.Args[1:]
+
+	// version flag — print version and exit immediately
+	if len(args) > 0 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v") {
+		fmt.Println("agent-tool " + Version)
+		return
+	}
 
 	// install / uninstall / reinstall subcommands
 	if len(args) > 0 && (args[0] == "install" || args[0] == "uninstall" || args[0] == "reinstall") {
 		target := ""
-		if len(args) > 1 {
-			target = args[1]
+		approveLevel := install.ApproveFull // default: mcp__agent-tool__*
+		remaining := args[1:]
+		for _, a := range remaining {
+			switch a {
+			case "--no-auto-approve":
+				approveLevel = install.ApproveNone
+			case "--safe-approve":
+				approveLevel = install.ApproveSafe
+			default:
+				if target == "" {
+					target = a
+				}
+			}
 		}
 		var err error
 		switch args[0] {
 		case "install":
-			err = install.Run(target)
+			err = install.Run(target, approveLevel)
 		case "uninstall":
 			err = install.Uninstall(target)
 		case "reinstall":
 			// ignore uninstall errors (may not be installed yet)
 			install.Uninstall(target)
-			err = install.Run(target)
+			err = install.Run(target, approveLevel)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		return
+	}
+
+	// Reject unknown subcommands/flags to avoid hanging on stdin
+	if len(args) > 0 && args[0] != "--fallback-encoding" {
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
+		fmt.Fprintf(os.Stderr, "usage: agent-tool [install|uninstall|reinstall|version] [--fallback-encoding ENC]\n")
+		os.Exit(1)
+	}
+	// Guard: --fallback-encoding without a value would silently start MCP server
+	if len(args) == 1 && args[0] == "--fallback-encoding" {
+		fmt.Fprintf(os.Stderr, "error: --fallback-encoding requires a value (e.g. --fallback-encoding EUC-KR)\n")
+		os.Exit(1)
 	}
 
 	// fallback-encoding configuration (priority: CLI > env var > default)
@@ -101,7 +141,7 @@ func main() {
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "agent-tool",
-			Version: "v0.5.2",
+			Version: Version,
 		},
 		nil,
 	)
@@ -123,6 +163,8 @@ func main() {
 	patch.Register(server)
 	delete.Register(server)
 	rename.Register(server)
+	copytool.Register(server)
+	multiread.Register(server)
 	sysinfo.Register(server)
 	findtools.Register(server)
 	proclist.Register(server)
@@ -138,7 +180,14 @@ func main() {
 	download.Register(server)
 	httpreq.Register(server)
 	jsonquery.Register(server)
+	yamlquery.Register(server)
+	tomlquery.Register(server)
 	portcheck.Register(server)
+	regexreplace.Register(server)
+	tlscheck.Register(server)
+	dnslookup.Register(server)
+	mysqltool.Register(server)
+	redistool.Register(server)
 	externalip.Register(server)
 	help.Register(server)
 

@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"agent-tool/common"
-
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -44,25 +42,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PortCheckInput)
 		return errorResult(fmt.Sprintf("timeout_sec exceeds maximum (%d)", maxTimeoutSec))
 	}
 
-	// SSRF protection: block private/internal IP addresses
-	if ip := net.ParseIP(input.Host); ip != nil {
-		// Host is an IP literal — check directly
-		if common.IsPrivateIP(ip) {
-			return errorResult(fmt.Sprintf("blocked: %s is a private/internal address", input.Host))
-		}
-	} else {
-		// Host is a domain — resolve and validate all IPs
-		ips, err := net.DefaultResolver.LookupHost(ctx, input.Host)
-		if err != nil {
-			return errorResult(fmt.Sprintf("DNS resolution failed for %s", input.Host))
-		}
-		for _, ipStr := range ips {
-			if parsed := net.ParseIP(ipStr); parsed != nil && common.IsPrivateIP(parsed) {
-				return errorResult(fmt.Sprintf("blocked: %s resolves to private/internal address", input.Host))
-			}
-		}
-	}
-
+	// No SSRF protection — port check is a diagnostic tool where users explicitly
+	// specify the host. Checking local/internal services is a legitimate use case.
 	// Use JoinHostPort for correct IPv6 bracket handling
 	addr := net.JoinHostPort(input.Host, strconv.Itoa(input.Port))
 	timeout := time.Duration(input.TimeoutSec) * time.Second
@@ -113,7 +94,7 @@ func Register(server *mcp.Server) {
 Tests connectivity by attempting a TCP connection with a configurable timeout.
 Returns OPEN/CLOSED status with response time or error details.
 Useful for verifying if a server is running, checking firewall rules, or validating deployments.
-Supports hostnames, IPv4, and IPv6 addresses. SSRF protection blocks private/internal IPs.`,
+Supports hostnames, IPv4, and IPv6 addresses.`,
 	}, Handle)
 }
 

@@ -7,10 +7,47 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"golang.org/x/net/proxy"
 )
+
+// --- Global DoH/ECH defaults ---
+// Per-request no_doh/no_ech parameters can override these,
+// but set_config allows changing the defaults globally.
+
+var (
+	enableDoH   = true
+	enableDoHMu sync.RWMutex
+
+	enableECH   = true
+	enableECHMu sync.RWMutex
+)
+
+func GetEnableDoH() bool {
+	enableDoHMu.RLock()
+	defer enableDoHMu.RUnlock()
+	return enableDoH
+}
+
+func SetEnableDoH(v bool) {
+	enableDoHMu.Lock()
+	defer enableDoHMu.Unlock()
+	enableDoH = v
+}
+
+func GetEnableECH() bool {
+	enableECHMu.RLock()
+	defer enableECHMu.RUnlock()
+	return enableECH
+}
+
+func SetEnableECH(v bool) {
+	enableECHMu.Lock()
+	defer enableECHMu.Unlock()
+	enableECH = v
+}
 
 // HTTPClientConfig holds configuration for creating a secure HTTP client.
 type HTTPClientConfig struct {
@@ -58,15 +95,15 @@ func NewHTTPClient(cfg HTTPClientConfig) (*http.Client, error) {
 			if resolveErr != nil {
 				return fmt.Errorf("SSRF check: DNS resolution failed for redirect target %s: %w", host, resolveErr)
 			}
-			return ValidateResolvedIP(ips)
+			return ValidateResolvedIPWithPolicy(ips, GetAllowHTTPPrivate())
 		},
 	}
 	return client, nil
 }
 
 // safeDialContext creates a DialContext function with SSRF protection.
-// It resolves DNS, validates IPs against SSRF rules, filters out private IPs,
-// and connects directly to resolved public IPs (preventing DNS rebinding).
+// It resolves DNS, filters out cloud metadata IPs (preventing credential theft),
+// and connects directly to resolved IPs (preventing DNS rebinding).
 func safeDialContext(dialer *net.Dialer, enableDoH bool, dohEndpoint string) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
@@ -89,27 +126,36 @@ func safeDialContext(dialer *net.Dialer, enableDoH bool, dohEndpoint string) fun
 			return nil, fmt.Errorf("DNS resolution failed: %w", err)
 		}
 
-		// FIX S5+S6: Filter out private IPs instead of just checking "at least one public"
-		// Sort: IPv4 first, then IPv6 (many networks lack IPv6 connectivity)
-		var publicIPv4, publicIPv6 []net.IP
+		// Filter IPs by SSRF policy:
+		// - Cloud metadata IPs: always blocked (non-configurable)
+		// - Private IPs: blocked unless allow_http_private is true
+		// Sort: IPv4 first (many networks lack IPv6 connectivity)
+		allowPrivate := GetAllowHTTPPrivate()
+		var safeIPv4, safeIPv6 []net.IP
 		for _, ip := range ips {
-			if IsPrivateIP(ip) {
+			if IsCloudMetadataIP(ip) {
+				continue
+			}
+			if !allowPrivate && IsPrivateIP(ip) {
 				continue
 			}
 			if ip.To4() != nil {
-				publicIPv4 = append(publicIPv4, ip)
+				safeIPv4 = append(safeIPv4, ip)
 			} else {
-				publicIPv6 = append(publicIPv6, ip)
+				safeIPv6 = append(safeIPv6, ip)
 			}
 		}
-		publicIPs := append(publicIPv4, publicIPv6...)
-		if len(publicIPs) == 0 {
-			return nil, fmt.Errorf("SSRF blocked: all resolved IPs are private/internal (%v)", ips)
+		safeIPs := append(safeIPv4, safeIPv6...)
+		if len(safeIPs) == 0 {
+			if allowPrivate {
+				return nil, fmt.Errorf("SSRF blocked: all resolved IPs are cloud metadata addresses (%v)", ips)
+			}
+			return nil, fmt.Errorf("SSRF blocked: all resolved IPs are private/internal (%v). Use set_config to enable allow_http_private if intended", ips)
 		}
 
-		// FIX S5 (TOCTOU): Connect directly to resolved public IPs (no re-resolution)
+		// Connect directly to resolved IPs (prevents DNS rebinding TOCTOU)
 		var lastErr error
-		for _, ip := range publicIPs {
+		for _, ip := range safeIPs {
 			target := net.JoinHostPort(ip.String(), port)
 			conn, err := dialer.DialContext(ctx, network, target)
 			if err != nil {
@@ -151,19 +197,18 @@ func buildTransport(cfg HTTPClientConfig) (*http.Transport, error) {
 			return nil, fmt.Errorf("invalid proxy URL: %w", err)
 		}
 
-		// Validate proxy host itself is not private
+		// Validate proxy host is not a cloud metadata endpoint
 		proxyHost := proxyURL.Hostname()
 		if proxyIP := net.ParseIP(proxyHost); proxyIP != nil {
-			if IsPrivateIP(proxyIP) {
-				return nil, fmt.Errorf("SSRF blocked: proxy host %s is a private IP", proxyHost)
+			if IsCloudMetadataIP(proxyIP) {
+				return nil, fmt.Errorf("SSRF blocked: proxy host %s is a cloud metadata address", proxyHost)
 			}
 		} else {
-			// Domain name — resolve and check
 			resolvedIPs, err := net.LookupIP(proxyHost)
 			if err != nil {
 				return nil, fmt.Errorf("proxy host DNS resolution failed: %w", err)
 			}
-			if err := ValidateResolvedIP(resolvedIPs); err != nil {
+			if err := ValidateResolvedIPWithPolicy(resolvedIPs, GetAllowHTTPPrivate()); err != nil {
 				return nil, fmt.Errorf("SSRF blocked: proxy host %s: %w", proxyHost, err)
 			}
 		}
@@ -203,12 +248,30 @@ func buildTransport(cfg HTTPClientConfig) (*http.Transport, error) {
 				if resolveErr != nil {
 					return nil, fmt.Errorf("DNS resolution failed: %w", resolveErr)
 				}
-				// SSRF check on target (not proxy)
-				if err := ValidateResolvedIP(ips); err != nil {
-					return nil, fmt.Errorf("SSRF blocked (SOCKS5 target): %w", err)
+				// Filter IPs by same policy as safeDialContext
+				allowPrivate := GetAllowHTTPPrivate()
+				var safeIPs []net.IP
+				for _, ip := range ips {
+					if IsCloudMetadataIP(ip) {
+						continue
+					}
+					if !allowPrivate && IsPrivateIP(ip) {
+						continue
+					}
+					safeIPs = append(safeIPs, ip)
 				}
-				// SOCKS5 proxy handles the actual connection
-				return ctxDialer.DialContext(ctx, network, addr)
+				if len(safeIPs) == 0 {
+					if !allowPrivate {
+						return nil, fmt.Errorf("SSRF blocked (SOCKS5 target): all resolved IPs for %s are private or cloud metadata addresses", host)
+					}
+					return nil, fmt.Errorf("SSRF blocked (SOCKS5 target): all resolved IPs for %s are cloud metadata addresses", host)
+				}
+				// Use resolved IP to prevent DNS rebinding — the SOCKS5 proxy
+				// receives the validated IP, not the hostname that could re-resolve
+				// to a different (potentially malicious) address.
+				_, port, _ := net.SplitHostPort(addr)
+				safeAddr := net.JoinHostPort(safeIPs[0].String(), port)
+				return ctxDialer.DialContext(ctx, network, safeAddr)
 			}
 		default:
 			return nil, fmt.Errorf("unsupported proxy scheme: %s (use http, https, or socks5)", proxyURL.Scheme)

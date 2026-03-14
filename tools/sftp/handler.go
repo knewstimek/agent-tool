@@ -2,9 +2,12 @@ package sftp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
+	"agent-tool/common"
 	"agent-tool/tools/ssh"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -56,6 +59,24 @@ var validOperations = map[string]bool{
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mcp.CallToolResult, SFTPOutput, error) {
+	// SSRF policy: cloud metadata always blocked. Private IPs allowed by default
+	// (configurable via set_config allow_ssh_private). Warning shown on every
+	// private IP access to help detect prompt injection attacks.
+	if strings.TrimSpace(input.Host) != "" {
+		// Use "ssh" as toolName so error message references allow_ssh_private (not allow_sftp_private)
+		_, _, ssrfErr := common.CheckHostSSRF(ctx, input.Host, common.GetAllowSSHPrivate(), "ssh")
+		if ssrfErr != nil {
+			return errorResult(ssrfErr.Error())
+		}
+		// Also check jump host — prevents SSRF via ProxyJump to cloud metadata
+		if input.JumpHost != "" {
+			_, _, jumpErr := common.CheckHostSSRF(ctx, input.JumpHost, common.GetAllowSSHPrivate(), "ssh")
+			if jumpErr != nil {
+				return errorResult(fmt.Sprintf("jump_host: %s", jumpErr.Error()))
+			}
+		}
+	}
+
 	// Validate operation
 	op := strings.ToLower(strings.TrimSpace(input.Operation))
 	if !validOperations[op] {
@@ -206,10 +227,12 @@ func isConnectionBroken(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, io.EOF) {
+		return true
+	}
 	msg := err.Error()
 	return strings.Contains(msg, "connection reset") ||
 		strings.Contains(msg, "broken pipe") ||
-		strings.Contains(msg, "EOF") ||
 		strings.Contains(msg, "connection refused")
 }
 

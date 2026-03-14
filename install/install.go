@@ -50,9 +50,22 @@ func getAgents() (map[string]agentConfig, error) {
 	}, nil
 }
 
+// ApproveLevel controls which tools are auto-approved during install.
+type ApproveLevel int
+
+const (
+	ApproveFull ApproveLevel = iota // mcp__agent-tool__* (all tools, no popups)
+	ApproveSafe                     // safe tools only (file/search/metadata)
+	ApproveNone                     // no auto-approval (every call needs manual approval)
+)
+
+// approveLevel is set by Run() and used by permission functions.
+var currentApproveLevel ApproveLevel
+
 // Run executes the install command.
 // If target is empty, registers with all detected agents.
-func Run(target string) error {
+func Run(target string, level ApproveLevel) error {
+	currentApproveLevel = level
 	agents, err := getAgents()
 	if err != nil {
 		return err
@@ -308,11 +321,20 @@ func installClaudeMCPAdd(exePath string) error {
 		return fmt.Errorf("claude mcp add failed: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 
-	// Register wildcard permission in settings.json (prevents per-tool permission popups)
-	if err := addClaudePermission(); err != nil {
-		fmt.Fprintf(os.Stderr, "[Claude Code] Failed to register permissions (manual approval needed): %v\n", err)
+	// Register permissions in settings.json based on approve level
+	if currentApproveLevel != ApproveNone {
+		if err := addClaudePermission(); err != nil {
+			fmt.Fprintf(os.Stderr, "[Claude Code] Failed to register permissions (manual approval needed): %v\n", err)
+		} else {
+			switch currentApproveLevel {
+			case ApproveFull:
+				fmt.Printf("[Claude Code] Tool permissions registered (permissions.allow: %s)\n", mcpPermissionEntry)
+			case ApproveSafe:
+				fmt.Printf("[Claude Code] Safe tool permissions registered (%d tools auto-approved, network/system tools require manual approval)\n", len(safePermissionEntries))
+			}
+		}
 	} else {
-		fmt.Printf("[Claude Code] Tool permissions registered (permissions.allow: %s)\n", mcpPermissionEntry)
+		fmt.Println("[Claude Code] No auto-approval (all tool calls require manual approval)")
 	}
 
 	fmt.Printf("[Claude Code] Registered (claude mcp add)\n")
@@ -375,11 +397,57 @@ func updateClaudeProjectMCPServers(newPath string) {
 	}
 }
 
+// Permission levels for auto-approval:
+// - "full": wildcard mcp__agent-tool__* (all tools, no popups)
+// - "safe": only file/search tools auto-approved; network/system tools require manual approval
+// - "none": no auto-approval (every tool call requires manual approval)
+
 const mcpPermissionEntry = "mcp__agent-tool__*"
 
-// addClaudePermission adds "mcp__agent-tool__*" wildcard to ~/.claude/settings.json
-// permissions.allow to prevent per-tool permission popups.
+// safePermissionEntries lists tools that are safe to auto-approve.
+// These only access local files, metadata, or read-only system info.
+// Excluded (require manual approval): ssh, sftp, mysql, redis, httpreq,
+// webfetch, download, bash, procexec, prockill — these access networks,
+// remote systems, or execute arbitrary commands.
+var safePermissionEntries = []string{
+	"mcp__agent-tool__read",
+	"mcp__agent-tool__write",
+	"mcp__agent-tool__edit",
+	"mcp__agent-tool__grep",
+	"mcp__agent-tool__glob",
+	"mcp__agent-tool__multiread",
+	"mcp__agent-tool__listdir",
+	"mcp__agent-tool__diff",
+	"mcp__agent-tool__patch",
+	"mcp__agent-tool__checksum",
+	"mcp__agent-tool__file_info",
+	"mcp__agent-tool__compress",
+	"mcp__agent-tool__decompress",
+	"mcp__agent-tool__backup",
+	"mcp__agent-tool__convert_encoding",
+	"mcp__agent-tool__delete",
+	"mcp__agent-tool__rename",
+	"mcp__agent-tool__copy",
+	"mcp__agent-tool__regexreplace",
+	"mcp__agent-tool__jsonquery",
+	"mcp__agent-tool__yamlquery",
+	"mcp__agent-tool__tomlquery",
+	"mcp__agent-tool__sysinfo",
+	"mcp__agent-tool__find_tools",
+	"mcp__agent-tool__proclist",
+	"mcp__agent-tool__envvar",
+	"mcp__agent-tool__externalip",
+	"mcp__agent-tool__set_config",
+	"mcp__agent-tool__agent_tool_help",
+}
+
+// addClaudePermission adds agent-tool entries to ~/.claude/settings.json
+// permissions.allow based on the current approve level.
 func addClaudePermission() error {
+	if currentApproveLevel == ApproveNone {
+		return nil // user opted out of auto-approval
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -408,23 +476,25 @@ func addClaudePermission() error {
 
 	allowList, _ := perms["allow"].([]any)
 
-	// Check if already registered (wildcard or individual entries)
-	for _, item := range allowList {
-		if s, ok := item.(string); ok && s == mcpPermissionEntry {
-			return nil // already present
-		}
-	}
-
-	// Remove individual entries (mcp__agent-tool__xxx) and consolidate to wildcard
+	// Remove all existing agent-tool entries first (clean slate)
 	var cleaned []any
 	for _, item := range allowList {
 		s, ok := item.(string)
 		if ok && strings.HasPrefix(s, "mcp__agent-tool__") {
-			continue // remove individual entry
+			continue
 		}
 		cleaned = append(cleaned, item)
 	}
-	cleaned = append(cleaned, mcpPermissionEntry)
+
+	// Add entries based on approve level
+	switch currentApproveLevel {
+	case ApproveFull:
+		cleaned = append(cleaned, mcpPermissionEntry)
+	case ApproveSafe:
+		for _, entry := range safePermissionEntries {
+			cleaned = append(cleaned, entry)
+		}
+	}
 
 	perms["allow"] = cleaned
 	config["permissions"] = perms

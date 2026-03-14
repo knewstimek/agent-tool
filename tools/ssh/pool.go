@@ -70,24 +70,42 @@ func (p *sessionPool) getOrCreate(key string, dialFn func() (*dialResult, error)
 
 	// Check existing session
 	if entry, ok := p.sessions[key]; ok {
-		// Verify connection is alive
-		_, _, err := entry.client.SendRequest("keepalive@openssh.com", true, nil)
+		client := entry.client
+		p.mu.Unlock()
+
+		// Keepalive check WITHOUT holding the lock — prevents a slow or
+		// half-open connection from blocking the entire session pool.
+		_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
 		if err == nil {
-			entry.lastUsed = time.Now()
+			p.mu.Lock()
+			// Re-verify entry wasn't replaced/removed while unlocked.
+			// If another goroutine closed this client, we must not return it.
+			if e, ok := p.sessions[key]; ok && e.client == client {
+				e.lastUsed = time.Now()
+				p.mu.Unlock()
+				return client, false, nil
+			}
 			p.mu.Unlock()
-			return entry.client, false, nil
+			// Entry was replaced/removed — fall through to dial new connection
 		}
-		// Connection dead, remove it
-		entry.close()
-		delete(p.sessions, key)
-	}
 
-	// Evict oldest if at capacity
-	if len(p.sessions) >= maxSessions {
-		p.evictOldestLocked()
+		// Connection dead — clean up under lock
+		p.mu.Lock()
+		if e, ok := p.sessions[key]; ok && e.client == client {
+			e.close()
+			delete(p.sessions, key)
+		}
+		if len(p.sessions) >= maxSessions {
+			p.evictOldestLocked()
+		}
+		p.mu.Unlock()
+	} else {
+		// Evict oldest if at capacity
+		if len(p.sessions) >= maxSessions {
+			p.evictOldestLocked()
+		}
+		p.mu.Unlock()
 	}
-
-	p.mu.Unlock()
 
 	// Dial WITHOUT holding the lock — avoids blocking the entire pool
 	// during network I/O (can take up to dialTimeout = 10s).

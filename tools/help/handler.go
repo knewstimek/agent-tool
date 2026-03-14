@@ -95,10 +95,19 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - websearch: Web search via Brave Search or Naver API (requires API key env vars)
 - download: Download files from URLs with ECH, DoH, proxy, and SSRF protection
 - httpreq: Execute HTTP requests with any method (POST, PUT, DELETE, etc.) for API testing
+- copy: Copy files or directories (recursive, atomic write, permissions preserved, dry_run)
+- multiread: Read multiple files in one call (reduces API round-trips)
+- regexreplace: Regex find-and-replace across files or directories (capture groups, encoding-aware, dry_run)
 - jsonquery: Query JSON files with dot-notation paths to extract specific values (saves tokens)
+- yamlquery: Query YAML files with dot-notation paths (same syntax as jsonquery)
+- tomlquery: Query TOML files with dot-notation paths (same syntax as jsonquery)
 - portcheck: Check if a TCP port is open on a host (connectivity test)
+- tlscheck: Check TLS certificate of a host (expiry, issuer, SANs, protocol, cipher)
+- dnslookup: DNS record lookup (A, AAAA, MX, CNAME, TXT, NS, SOA) with DoH support
+- mysql: Execute MySQL/MariaDB queries (SELECT → table format, DML → affected rows)
+- redis: Execute Redis commands (any command, result formatting)
 - externalip: Get your external (public) IP address
-- set_config: Change runtime settings (fallback encoding, encoding warnings, max file size)
+- set_config: Change runtime settings (encoding, file size, SSRF policy, DoH/ECH toggle)
 - agent_tool_help: This help tool
 
 ## Quick Tips
@@ -309,7 +318,7 @@ Parameters: filter (rule name or port)
 
 ## ssh
 Execute commands on a remote server via SSH. Supports IPv4 and IPv6.
-Supports password and key-based authentication. SSH agent auto-used on Unix.
+Supports password and key-based authentication (PEM, OpenSSH, and PuTTY PPK formats). SSH agent auto-used on Unix.
 Sessions are pooled and reused (idle timeout: 30 min, max: 20 sessions).
 Host key verification: strict (known_hosts required), tofu (trust on first use, default), none (insecure).
 ProxyJump: use jump_host to connect through a bastion (e.g. reach IPv6-only servers via IPv4 bastion).
@@ -335,7 +344,7 @@ Parameters: command, cwd (initial directory for new sessions), session_id (defau
 ## webfetch
 Fetch content from a URL and return it as text. HTML pages are automatically converted to Markdown.
 ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) enabled by default for privacy.
-SSRF protection blocks private/internal IP addresses.
+Cloud metadata SSRF protection (blocks 169.254.x.x, link-local). Private IPs allowed for local dev.
 Default User-Agent mimics Chrome browser. Custom headers supported (User-Agent, Referer, etc.).
 Supports HTTP and SOCKS5 proxies.
 Parameters: url, headers, max_length (default 100000), timeout_sec (default 30, max 120), proxy_url, no_doh, no_ech, raw
@@ -350,16 +359,36 @@ Parameters: query, engine (brave/naver), max_results (default 5, max 20), timeou
 
 ## download
 Download a file from a URL and save it to disk. Supports binary and text files.
-ECH and DoH enabled by default. SSRF protection. HTTP and SOCKS5 proxy support.
+ECH and DoH enabled by default. Cloud metadata SSRF protection. HTTP and SOCKS5 proxy support.
 Atomic file write (temp file + rename). Auto-creates parent directories.
 Parameters: url, output_path, headers, overwrite, timeout_sec (default 60, max 600), max_size_mb (default 100, max 2048), proxy_url, no_doh, no_ech
 
 ## httpreq
 Execute HTTP requests with any method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS).
 Ideal for testing APIs, webhooks, and web services during development.
-ECH and DoH enabled by default. SSRF protection. HTTP and SOCKS5 proxy support.
+ECH and DoH enabled by default. Cloud metadata SSRF protection. HTTP and SOCKS5 proxy support.
+DLP: POST/PUT/PATCH bodies are scanned for sensitive data (PEM keys, AWS keys, tokens, .env dumps) and blocked before transmission.
 Response body is truncated at max_response_kb. Binary responses show Content-Type and size only.
 Parameters: url, method, body, headers, content_type (default application/json), timeout_sec (default 30, max 120), max_response_kb (default 512, max 2048), proxy_url, no_doh, no_ech
+
+## copy
+Copy a file or directory. Supports recursive directory copying.
+Uses atomic write (temp file + rename) and preserves file permissions.
+Validates absolute paths and blocks path traversal (..).
+Parameters: source, destination, overwrite (default false), dry_run (default false)
+
+## multiread
+Read multiple files in a single call to reduce API round-trips.
+Each file is read with encoding auto-detection and line numbering.
+Files are separated with headers. Errors on individual files don't stop processing.
+Parameters: file_paths (array, max 50), offset (1-based, or negative for end-relative), limit
+
+## regexreplace
+Regex find-and-replace in files or across directories.
+Supports capture groups ($1, $2, ${name}) in replacement strings.
+Encoding-aware: preserves original file encoding. Skips binary files.
+Atomic write for each modified file.
+Parameters: pattern, replacement, path (file or directory), glob, ignore_case, dry_run, max_files (default 100)
 
 ## jsonquery
 Query a JSON file using dot-notation paths without loading the entire file into context.
@@ -368,11 +397,49 @@ Examples: "dependencies.react", "scripts.build", "items[0].name", "users[*].emai
 Returns the matched value with its type. Objects and arrays are pretty-printed.
 Parameters: file_path, query
 
+## yamlquery
+Query a YAML file using dot-notation paths (same syntax as jsonquery).
+Supports nested keys, array indices, and wildcards.
+Examples: "services.web.ports[0]", "spec.containers[*].image".
+Parameters: file_path, query
+
+## tomlquery
+Query a TOML file using dot-notation paths (same syntax as jsonquery).
+Supports nested keys, array indices, and wildcards.
+Handles TOML-specific types: int64, datetime (RFC3339).
+Examples: "dependencies.react", "tool.poetry.name", "servers[0].host".
+Parameters: file_path, query
+
 ## portcheck
 Check if a TCP port is open on a host. Tests connectivity with configurable timeout.
 Returns OPEN/CLOSED status with response time or error details (refused, timeout, DNS failure).
 Supports hostnames, IPv4, and IPv6 addresses.
 Parameters: host, port (1-65535), timeout_sec (default 5, max 30)
+
+## tlscheck
+Check TLS certificate and connection details of a remote host.
+Returns: Subject, Issuer, NotBefore, NotAfter, days until expiry, SANs, TLS version, cipher suite.
+Parameters: host, port (default 443), timeout_sec (default 10, max 30)
+
+## dnslookup
+Look up DNS records for a hostname.
+Supports record types: A, AAAA, MX, CNAME, TXT, NS, SOA.
+Uses DNS over HTTPS (DoH) by default for privacy. Can fall back to system DNS.
+Parameters: host, record_type (default A), use_doh (default true), doh_endpoint
+
+## mysql
+Execute SQL queries on a MySQL/MariaDB server.
+SELECT/SHOW/DESCRIBE/EXPLAIN queries return results as formatted table.
+Other queries (INSERT/UPDATE/DELETE) return affected rows and last insert ID.
+Connection is opened and closed per call (no session pooling).
+Parameters: host, port (default 3306), user, password, database, query, timeout_sec (default 30, max 120)
+
+## redis
+Execute Redis commands on a Redis server.
+Supports any Redis command (GET, SET, HGETALL, etc.) via command + args.
+Results are formatted by type (string, integer, array, nil).
+Supports TLS connections. Connection is opened and closed per call.
+Parameters: host, port (default 6379), password, db (default 0), command, args (array), timeout_sec (default 30, max 120), tls
 
 ## externalip
 Returns your external (public) IP address.
@@ -383,8 +450,10 @@ No parameters required.
 ## set_config
 Change agent-tool runtime configuration.
 Supports: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks, workspace.
+SSRF policy: allow_http_private (default false), allow_mysql_private, allow_redis_private, allow_ssh_private (default true).
+Network: enable_doh (DNS over HTTPS, default true), enable_ech (Encrypted Client Hello, default true).
 Call with no arguments to view current config.
-Parameters: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks, workspace`
+Parameters: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks, workspace, allow_http_private, allow_mysql_private, allow_redis_private, allow_ssh_private, enable_doh, enable_ech`
 }
 
 func helpTroubleshooting() string {
