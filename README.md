@@ -37,6 +37,8 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **Backup** | Timestamped zip backup with exclude patterns | ✅ |
 | **ConvertEncoding** | Convert file encoding (EUC-KR ↔ UTF-8, add/remove BOM, etc.) | ✅ |
 | **Delete** | Safe single-file deletion (no directories, no symlinks, system path protection, dry_run) | ✅ |
+| **Rename** | Atomic file/directory rename or move (dry_run) | ✅ |
+| **SysInfo** | System information — OS, CPU, RAM, disk, uptime, CPU usage measurement | ✅ |
 | **FindTools** | Discover installed dev tools — compilers, runtimes, build systems (Go, .NET, Node, Python, Java, Rust, C/C++, etc.) | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |

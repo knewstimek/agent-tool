@@ -80,6 +80,8 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - diff: Compare two files (unified diff output)
 - patch: Apply unified diff patch to a file (supports dry_run)
 - delete: Delete a single file (no directories, no symlinks, supports dry_run)
+- rename: Rename or move a file/directory (atomic, supports dry_run)
+- sysinfo: System information (OS, CPU, RAM, disk, uptime, CPU usage measurement)
 - find_tools: Discover installed dev tools (compilers, runtimes, build systems)
 - set_config: Change runtime settings (fallback encoding, encoding warnings, max file size)
 - agent_tool_help: This help tool
@@ -237,6 +239,17 @@ Delete a single file safely.
 Safety: no directory deletion, no symlinks, no path traversal (..).
 Use dry_run=true to preview what would be deleted.
 Parameters: file_path, dry_run
+
+## rename
+Rename or move a file/directory. Uses os.Rename (atomic operation).
+Fails if destination already exists.
+Use dry_run=true to preview.
+Parameters: old_path, new_path, dry_run
+
+## sysinfo
+Returns system information: OS, CPU cores, RAM, disk space, hostname, uptime.
+Set duration_sec (1-20) to measure CPU usage over that period.
+Parameters: duration_sec
 
 ## find_tools
 Discover installed development tools on the system.

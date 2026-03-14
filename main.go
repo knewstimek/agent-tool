@@ -25,6 +25,8 @@ import (
 	"agent-tool/tools/listdir"
 	"agent-tool/tools/patch"
 	"agent-tool/tools/read"
+	"agent-tool/tools/rename"
+	"agent-tool/tools/sysinfo"
 	"agent-tool/tools/write"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -105,6 +107,8 @@ func main() {
 	diff.Register(server)
 	patch.Register(server)
 	delete.Register(server)
+	rename.Register(server)
+	sysinfo.Register(server)
 	findtools.Register(server)
 	help.Register(server)
 

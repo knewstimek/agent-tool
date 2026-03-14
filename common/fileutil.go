@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -234,7 +235,35 @@ func WriteFileWithEncoding(path string, content string, info EncodingInfo) error
 		}
 	}
 
-	return os.WriteFile(path, data, perm)
+	// 원자적 쓰기: 임시 파일에 먼저 쓰고 rename
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".agent-tool-*.tmp")
+	if err != nil {
+		// 임시 파일 생성 실패 시 직접 쓰기로 폴백
+		return os.WriteFile(path, data, perm)
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("임시 파일 쓰기 실패: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("임시 파일 닫기 실패: %w", err)
+	}
+
+	// 퍼미션 설정
+	os.Chmod(tmpName, perm)
+
+	// 원자적 rename (같은 파일시스템이면 원자적)
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		// rename 실패 시 직접 쓰기로 폴백 (크로스 드라이브 등)
+		return os.WriteFile(path, data, perm)
+	}
+	return nil
 }
 
 // DetectLineEnding은 텍스트의 줄바꿈 문자를 감지한다.
