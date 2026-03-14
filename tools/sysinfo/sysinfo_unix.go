@@ -152,3 +152,12 @@ func getUptime() (time.Duration, error) {
 func getHostnameOS() (string, error) {
 	return os.Hostname()
 }
+
+func getLocale() string {
+	for _, key := range []string{"LANG", "LC_ALL", "LANGUAGE", "LC_CTYPE"} {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return ""
+}

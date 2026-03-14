@@ -71,7 +71,23 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SysInfoInput) (
 	uptime, err := getUptime()
 	if err == nil {
 		sb.WriteString(fmt.Sprintf("Uptime: %s\n", formatDuration(uptime)))
+		// 부팅 시각 계산
+		bootTime := time.Now().Add(-uptime)
+		sb.WriteString(fmt.Sprintf("Boot time: %s\n", bootTime.Format("2006-01-02 15:04:05")))
 	}
+
+	// 시간대
+	zone, offset := time.Now().Zone()
+	sb.WriteString(fmt.Sprintf("\nTimezone: %s (UTC%+d)\n", zone, offset/3600))
+
+	// 시스템 로캘/언어
+	locale := getLocale()
+	if locale != "" {
+		sb.WriteString(fmt.Sprintf("Locale: %s\n", locale))
+	}
+
+	// Go 런타임 버전
+	sb.WriteString(fmt.Sprintf("Go runtime: %s\n", runtime.Version()))
 
 	result := sb.String()
 	return &mcp.CallToolResult{

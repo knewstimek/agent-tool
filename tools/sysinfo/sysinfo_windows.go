@@ -135,3 +135,20 @@ func getUptime() (time.Duration, error) {
 func getHostnameOS() (string, error) {
 	return os.Hostname()
 }
+
+func getLocale() string {
+	// Windows: 환경변수 또는 시스템 로캘
+	for _, key := range []string{"LANG", "LC_ALL", "LANGUAGE"} {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	// PowerShell 없이 직접 레지스트리는 복잡하므로 GetUserDefaultLCID 사용
+	proc := kernel32.NewProc("GetUserDefaultLocaleName")
+	buf := make([]uint16, 85)
+	ret, _, _ := proc.Call(uintptr(unsafe.Pointer(&buf[0])), 85)
+	if ret > 0 {
+		return syscall.UTF16ToString(buf)
+	}
+	return ""
+}
