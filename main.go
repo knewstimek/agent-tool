@@ -17,6 +17,7 @@ import (
 	copytool "agent-tool/tools/copy"
 	"agent-tool/tools/config"
 	"agent-tool/tools/convertenc"
+	"agent-tool/tools/debug"
 	"agent-tool/tools/delete"
 	"agent-tool/tools/diff"
 	"agent-tool/tools/dnslookup"
@@ -193,6 +194,7 @@ func main() {
 	redistool.Register(server)
 	externalip.Register(server)
 	sloc.Register(server)
+	debug.Register(server)
 	help.Register(server)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

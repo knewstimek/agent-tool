@@ -4,6 +4,9 @@ OVERVIEW.md
 .env
 *.exe
 *.exe~
+*.obj
+*.pdb
 temp/
+tmp/
 dist/
 test_*.go

@@ -11,7 +11,7 @@ import (
 )
 
 type HelpInput struct {
-	Topic string `json:"topic,omitempty" jsonschema:"Help topic. Available: overview, encoding, indentation, tools, troubleshooting. Empty = overview"`
+	Topic string `json:"topic,omitempty" jsonschema:"Help topic. Available: overview, encoding, indentation, tools, debug, troubleshooting. Empty = overview"`
 }
 
 type HelpOutput struct {
@@ -34,11 +34,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HelpInput) (*mc
 		text = helpIndentation()
 	case "tools":
 		text = helpTools()
+	case "debug", "debugger", "dap":
+		text = helpDebug()
 	case "troubleshooting", "trouble":
 		text = helpTroubleshooting()
 	default:
 		text = "Unknown topic: " + topic + "\n\n" +
-			"Available topics: overview, encoding, indentation, tools, troubleshooting"
+			"Available topics: overview, encoding, indentation, tools, debug, troubleshooting"
 	}
 
 	return &mcp.CallToolResult{
@@ -51,7 +53,7 @@ func Register(server *mcp.Server) {
 		Name: "agent_tool_help",
 		Description: `Returns usage guide for agent-tool.
 Call this when you encounter encoding warnings, garbled text, or need to understand agent-tool features.
-Topics: overview, encoding, indentation, tools, troubleshooting.`,
+Topics: overview, encoding, indentation, tools, debug, troubleshooting.`,
 	}, Handle)
 }
 
@@ -109,6 +111,7 @@ It auto-detects file encoding and indentation style, preserving them across edit
 - redis: Execute Redis commands (any command, result formatting)
 - externalip: Get your external (public) IP address
 - sloc: Count source lines of code (SLOC) with per-language summary
+- debug: Interactive debugger via DAP (breakpoints, stepping, variables, stack traces)
 - set_config: Change runtime settings (encoding, file size, SSRF policy, DoH/ECH toggle)
 - agent_tool_help: This help tool
 
@@ -462,6 +465,18 @@ Returns per-language summary with file count, total lines, and blank lines.
 Recognizes 70+ languages by file extension. Skips node_modules, .git, vendor, dist, build.
 Parameters: path (file or directory), glob (filter pattern), max_depth, show_files, skip_blank
 
+## debug
+Interactive debugger using Debug Adapter Protocol (DAP).
+Supports any language with a DAP-compatible adapter (dlv for Go, debugpy for Python, codelldb/lldb-dap for C/C++/Rust).
+Uses a single tool with operation parameter for all debug actions.
+Operations: launch, attach, set_breakpoints, continue, next, step_in, step_out, pause, threads, stack_trace, scopes, variables, evaluate, disconnect, status.
+Session-based: launch/attach creates a session, subsequent operations use session_id.
+Stepping operations (continue, next, step_in, step_out) block until a stopped event (breakpoint, step completion) or timeout.
+Use operation=status to poll for events (output, state changes) between operations.
+Parameters: session_id, operation, adapter_command, adapter_args, address, launch_args (JSON),
+  source_path, breakpoints (JSON array), thread_id, frame_id, variables_reference,
+  expression, context, timeout_sec
+
 ## set_config
 Change agent-tool runtime configuration.
 Supports: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks, workspace.
@@ -469,6 +484,231 @@ SSRF policy: allow_http_private (default false), allow_mysql_private, allow_redi
 Network: enable_doh (DNS over HTTPS, default true), enable_ech (Encrypted Client Hello, default true).
 Call with no arguments to view current config.
 Parameters: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks, workspace, allow_http_private, allow_mysql_private, allow_redis_private, allow_ssh_private, enable_doh, enable_ech`
+}
+
+func helpDebug() string {
+	return `# Debug Tool Guide (DAP)
+
+## Overview
+The debug tool provides interactive debugging via the Debug Adapter Protocol (DAP).
+It works with any language that has a DAP-compatible debug adapter.
+
+## Tested Adapters
+- Go: dlv (Delve) — fully tested
+- Python: debugpy — fully tested
+- C/C++: codelldb (recommended, open source) — LLDB-based, reads PDB on Windows
+  - NOTE: vsdbg (VS Code C++ extension) is VS Code-only (license-locked)
+
+## Workflow
+
+### 1. Launch → 2. Set breakpoints → 3. Continue → 4. Inspect → 5. Step → 6. Disconnect
+
+  launch → set_breakpoints → continue (blocks until hit) →
+  stack_trace → scopes → variables → evaluate →
+  next/step_in/step_out → continue → ... → disconnect
+
+## Adapter Recipes (copy-paste ready)
+
+### Go (dlv)
+  Install: go install github.com/go-delve/delve/cmd/dlv@latest
+
+  debug(operation="launch",
+        adapter_command="dlv", adapter_args=["dap"],
+        launch_args='{"program":"./","mode":"debug","cwd":"/path/to/project"}')
+
+  With registers:
+  launch_args='{"program":"./","mode":"debug","cwd":"/path/to/project","showRegisters":true}'
+
+  IMPORTANT: "program" should be "./" (relative) with "cwd" set to the project directory.
+  Using an absolute path for "program" may fail if it points to a directory.
+
+### Python (debugpy)
+  Install: pip install debugpy
+
+  Stdio mode (recommended — single step):
+  debug(operation="launch",
+        adapter_command="python", adapter_args=["-m", "debugpy.adapter"],
+        launch_args='{"program":"/path/to/script.py","cwd":"/path/to/project","console":"internalConsole"}')
+
+  TCP mode (alternative — two steps):
+  Step 1: Run in terminal: python -m debugpy.adapter --host 127.0.0.1 --port 5679
+  Step 2: debug(operation="attach", address="127.0.0.1:5679",
+        launch_args='{"program":"/path/to/script.py","request":"launch","console":"internalConsole"}')
+
+### C/C++ (codelldb — recommended)
+  Install: Download from https://github.com/vadimcn/codelldb/releases
+  Or install the CodeLLDB VS Code extension.
+
+  debug(operation="launch",
+        adapter_command="/path/to/codelldb",
+        adapter_args=["--port", "0"],
+        launch_args='{"type":"lldb","program":"/path/to/binary","cwd":"/path/to/project","stopOnEntry":true}')
+
+### C/C++ (vsdbg — requires VS Code C++ extension installed)
+  vsdbg requires adapterID="cppvsdbg" and clientID="vscode".
+  Set "type":"cppvsdbg" and "__clientID":"vscode" in launch_args.
+
+  debug(operation="launch",
+        adapter_command="/path/to/vsdbg.exe",
+        adapter_args=["--interpreter=vscode"],
+        launch_args='{"type":"cppvsdbg","__clientID":"vscode","__clientName":"Visual Studio Code","program":"/path/to/binary.exe","cwd":"/path/to/project","console":"internalConsole","stopAtEntry":true}')
+
+  vsdbg is typically located at:
+  Windows: %USERPROFILE%/.vscode/extensions/ms-vscode.cpptools-*/debugAdapters/vsdbg/bin/vsdbg.exe
+  Linux/Mac: ~/.vscode/extensions/ms-vscode.cpptools-*/debugAdapters/vsdbg/bin/vsdbg
+
+## Key Operations Reference
+
+  Core:
+    set_breakpoints: source_path + breakpoints='[{"line":42},{"line":100,"condition":"x > 5"}]'
+    continue/next/step_in/step_out: blocks until stopped (timeout_sec to limit wait)
+    stack_trace: returns frame IDs → use frame_id for scopes/evaluate
+    scopes: returns scope names + variablesReference IDs → use for variables
+    variables: returns variable names, values, and nested references
+    evaluate: expression evaluation with context (repl/watch/hover)
+    threads: list all threads/goroutines
+    status: session state + recent events (non-blocking)
+    disconnect: end session and clean up
+
+  Breakpoints:
+    set_function_breakpoints: breakpoints='[{"name":"main.Run"}]'
+    set_exception_breakpoints: filters='["raised","uncaught"]'
+    set_data_breakpoints: breakpoints='[{"data_id":"...","access_type":"write"}]'
+    data_breakpoint_info: query if data breakpoint can be set (name + variables_reference)
+    set_instruction_breakpoints: breakpoints='[{"instruction_reference":"0x4000"}]'
+
+  Execution control:
+    step_back / reverse_continue: reverse debugging (adapter must support)
+    restart_frame: restart from a stack frame (frame_id)
+    goto: jump to a target (target_id from goto_targets)
+    goto_targets: list possible jump targets (source_path + line)
+    step_in_targets: list possible step-in targets (frame_id)
+    pause: suspend execution
+    terminate: graceful termination (debuggee handles it)
+    restart: restart the debug session
+
+  Modification:
+    set_variable: change variable value (variables_reference + name + value)
+    set_expression: change expression value (expression + value + frame_id)
+
+  Memory / disassembly:
+    disassemble: disassemble from memory_reference (count = instruction count)
+    read_memory: read bytes from memory_reference (count = byte count, returns base64)
+    write_memory: write base64 data to memory_reference
+
+  Info:
+    modules: loaded modules/libraries (with symbol status)
+    loaded_sources: all loaded source files
+    source: get source code by source_reference
+    exception_info: current exception details (thread_id)
+    completions: auto-completion suggestions (text + frame_id)
+    cancel: cancel a pending request (request_id)
+    terminate_threads: terminate specific threads (thread_ids='[1,2]')
+
+## Adapter-Specific Notes
+
+### AdapterID / "type" field
+  Some adapters (vsdbg) require a specific adapterID in the DAP initialize handshake.
+  If launch_args contains "type", that value is used as adapterID.
+  Otherwise, the adapter binary filename (without extension) is used.
+  If initialize fails, try adding "type" to launch_args with the adapter's expected ID.
+
+### Client ID / Client Name
+  Some adapters check clientID for licensing (vsdbg requires "vscode").
+  Use the dedicated client_id and client_name parameters for common overrides.
+  For advanced cases, __ (double underscore) prefixed keys in launch_args are
+  meta fields consumed by this tool and stripped before sending to the adapter.
+  Example: "__clientID":"vscode" in launch_args has the same effect as client_id="vscode".
+  Priority: dedicated parameter > __ meta field > default ("agent-tool").
+
+### Registers
+  Registers are exposed through scopes → variables, NOT a separate operation.
+  The adapter must include a "Registers" scope in the scopes response.
+  - dlv: set "showRegisters":true in launch_args
+  - codelldb/lldb-dap: registers shown by default
+  - debugpy: not applicable (Python has no CPU registers)
+
+### Features vary by adapter
+  Each adapter supports different launch_args options and capabilities.
+  If a feature seems missing (no registers, no conditional breakpoints, etc.),
+  it's likely an adapter configuration issue — NOT a tool limitation.
+  Search "<adapter name> DAP launch configuration" to find available options.
+
+### Release Builds and Debugging
+  Optimized/release builds can make debugging unreliable:
+  - Variables may show <optimized out> or wrong values
+  - set_variable may report success but not actually change the value
+  - Lines may execute out of order or be skipped
+  - Stack frames may be missing
+
+  If you see these symptoms, rebuild with debug/unoptimized settings.
+  Most languages and build systems have a "debug" vs "release" mode —
+  always use debug mode when you need reliable variable inspection.
+
+### Capabilities
+  Use operation=status after launch to see which features the adapter supports.
+  Unsupported operations will return an error — this is normal, not a bug.
+  Example: dlv supports disassemble but not modules; debugpy supports modules but not disassemble.
+
+### Breakpoint Timing
+  Set breakpoints AFTER launch but BEFORE the first continue.
+  The tool sends configurationDone automatically on the first continue.
+
+## Using Other Adapters
+  This tool is a standard DAP client. However, some adapters have non-standard
+  quirks (custom adapterID requirements, extra handshake steps, adapter-specific
+  launch_args fields). The recipes above document known quirks for tested adapters.
+
+  For unlisted adapters:
+  1. Search for "<language> DAP debug adapter" to find the adapter
+  2. Check the adapter's docs for launch configuration — especially:
+     - stdio vs TCP mode
+     - Required launch_args fields (program, cwd, request, etc.)
+     - Whether "type" must be set to a specific value (e.g. "cppvsdbg" for vsdbg)
+  3. If initialize fails with a vague error, the most common cause is a wrong
+     adapterID. Try setting "type" in launch_args to the value the adapter expects.
+  4. If launch succeeds but debugging doesn't start, check operation=status for
+     error events — some adapters have license restrictions (e.g. vsdbg).
+
+## Tips
+- If timeout occurs, use operation=status to check state and poll events
+- Variables use reference IDs — get them from scopes response
+- References are only valid while stopped; they reset on continue
+- Max 5 concurrent debug sessions (oldest evicted at capacity)
+- Sessions auto-expire after 30 minutes of inactivity
+- Always disconnect when done to clean up adapter processes
+
+## Debugging Tips for Specific Scenarios
+
+### Node.js under codelldb (LLDB)
+  When debugging Node.js scripts under codelldb, async operations (setTimeout,
+  setImmediate, Promise callbacks) may NOT execute — Node's event loop doesn't
+  tick properly under LLDB's stdio capture.
+  Workaround: Use synchronous scripts only. Replace async patterns with sync
+  equivalents (e.g., require() instead of dynamic import, synchronous loops
+  instead of setTimeout).
+
+### LLDB commands via evaluate
+  codelldb supports LLDB native commands through evaluate with context="repl".
+  Example: evaluate(expression="breakpoint set -a 0x7470", context="repl")
+  These may return empty "Result: " strings but still execute successfully.
+  Use "breakpoint list" to verify breakpoints were set.
+  This is useful for instruction-level breakpoints when set_instruction_breakpoints
+  fails (some adapters have parsing issues with hex addresses).
+
+### vsdbg handshake
+  vsdbg requires a proprietary handshake: it sends a reverse request with a
+  challenge value, and the client must sign it. This tool handles the handshake
+  automatically using a built-in signing algorithm. No external dependencies needed.
+  Note: vsdbg may still enforce additional license checks beyond the handshake
+  that restrict usage to VS Code environments.
+
+### Reading native code / DLL internals
+  Use codelldb with read_memory and disassemble for low-level inspection.
+  For native addon analysis (e.g., .node files), load them in a host process
+  (Node.js for .node files) and set instruction breakpoints at known RVAs.
+  PE image base for DLLs is typically 0x180000000 — add the RVA offset to
+  compute the runtime address for breakpoints.`
 }
 
 func helpTroubleshooting() string {

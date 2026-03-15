@@ -19,6 +19,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/go-sql-driver/mysql v1.9.3 // indirect
+	github.com/google/go-dap v0.12.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/kayrus/putty v1.0.5 // indirect
 	github.com/kr/fs v0.1.0 // indirect

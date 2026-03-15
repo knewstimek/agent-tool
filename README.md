@@ -14,7 +14,7 @@ Built-in tools in AI coding agents (Claude Code, Cursor, Codex, etc.) have known
 
 - **Tab indentation breaks**: LLMs output spaces, but your project uses tabs. The built-in Edit tool writes spaces as-is, corrupting your indentation style.
 - **Encoding corruption**: Editing EUC-KR, Shift-JIS, or GB18030 files silently converts them to UTF-8, breaking legacy projects.
-- **Too many separate tools**: Making the agent find, install, and configure Redis CLI, MySQL client, SSH client, etc. is tedious and error-prone. agent-tool bundles 43 tools into a single binary — one install, everything works.
+- **Too many separate tools**: Making the agent find, install, and configure Redis CLI, MySQL client, SSH client, etc. is tedious and error-prone. agent-tool bundles 44 tools into a single binary — one install, everything works.
 - **Network censorship**: In some countries, government-level web filtering breaks plain `curl`/`wget` requests. agent-tool uses ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) by default to work around these restrictions.
 
 **agent-tool** solves these by providing drop-in replacement tools that respect your project's conventions.
@@ -53,7 +53,7 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **SSH** | Execute commands on remote servers via SSH. Password & key auth (PEM, OpenSSH, PuTTY PPK), session pooling, host key verification (strict/tofu/none), ProxyJump, IPv6 | ✅ |
 | **SFTP** | Transfer files and manage remote filesystems over SSH. Upload, download, ls, stat, mkdir, rm, chmod, rename. Reuses SSH session pool. Max 2 GB per transfer | ✅ |
 | **Bash** | Persistent shell sessions with working directory and environment variable retention. Session pooling (max 5, idle timeout 30 min). Unix: bash/sh, Windows: PowerShell/git-bash/cmd (auto-detected, best available). PowerShell sessions include UTF-8 encoding and PATH enhancement | ✅ |
-| **WebFetch** | Fetch web content as text/Markdown. ECH (Encrypted Client Hello) + DoH (DNS over HTTPS) by default. HTML→Markdown auto-conversion. SSRF protection. HTTP/SOCKS5 proxy. Chrome User-Agent | ✅ |
+| **WebFetch** | Fetch web content as text/Markdown. ECH (Encrypted Client Hello) + DoH (DNS over HTTPS) by default. HTML→Markdown auto-conversion. SSRF protection. HTTP/SOCKS5 proxy. Chrome User-Agent. **Note:** Returns full page content (default 100K chars) which consumes context window tokens — use `max_length` to limit, or prefer your agent's built-in web tools for simple searches | ✅ |
 | **WebSearch** | Web search via Brave Search or Naver API. Requires API key env vars (`BRAVE_SEARCH_API_KEY` or `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`). Auto-selects engine, Brave preferred | ✅ |
 | **Download** | Download files from URLs to disk. ECH + DoH by default. SSRF protection. HTTP/SOCKS5 proxy. Atomic write. Max 2 GB | ✅ |
 | **HTTPReq** | Execute HTTP requests with any method (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS). API testing with custom headers, body, proxy. SSRF protection | ✅ |
@@ -71,6 +71,7 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 | **PortCheck** | Check if a TCP port is open on a host. Returns OPEN/CLOSED with response time. Supports hostname, IPv4, IPv6 | ✅ |
 | **ExternalIP** | Get your external (public) IP address. Multiple providers with automatic fallback (ipify, ifconfig.me, icanhazip) | ✅ |
 | **SLOC** | Count source lines of code per language. 70+ language detection, per-file/language breakdown, blank line stats, max_depth control | ✅ |
+| **Debug** | Interactive debugger via DAP (Debug Adapter Protocol). Full DAP coverage: breakpoints (source/function/data/instruction/exception), stepping (forward/backward), variable inspection and modification, expression evaluation, disassembly, memory read/write, stack traces, modules, goto, completions. Tested with dlv (Go), debugpy (Python), codelldb (C/C++/Rust). Works with any DAP-compatible adapter. Stdio and TCP modes. Note: vsdbg (Microsoft) requires VS Code licensing and is not usable standalone — use codelldb or netcoredbg as open-source alternatives | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 
