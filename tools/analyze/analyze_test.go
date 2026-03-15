@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+// Local-only test: requires a pre-built PE binary at this path.
+// These tests are not meant for CI — they validate against the local build output.
 const testBinary = `d:\News\Business\AgentTool\agent-tool.exe`
 
 func TestPEInfo(t *testing.T) {
