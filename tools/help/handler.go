@@ -497,7 +497,9 @@ It works with any language that has a DAP-compatible debug adapter.
 - Go: dlv (Delve) — fully tested
 - Python: debugpy — fully tested
 - C/C++: codelldb (recommended, open source) — LLDB-based, reads PDB on Windows
-  - NOTE: vsdbg (VS Code C++ extension) is VS Code-only (license-locked)
+- C/C++: vsdbg — UNSTABLE. Handshake signing works, but vsdbg enforces a
+  secondary runtime license check that blocks non-VS Code clients.
+  Use codelldb instead unless you specifically need MSVC-native debugging.
 
 ## Workflow
 
@@ -544,7 +546,11 @@ It works with any language that has a DAP-compatible debug adapter.
         adapter_args=["--port", "0"],
         launch_args='{"type":"lldb","program":"/path/to/binary","cwd":"/path/to/project","stopOnEntry":true}')
 
-### C/C++ (vsdbg — requires VS Code C++ extension installed)
+### C/C++ (vsdbg — UNSTABLE, requires VS Code C++ extension installed)
+  WARNING: vsdbg may reject connections with "C/C++ Debugging is supported only
+  in Microsoft versions of VS Code" even after successful handshake signing.
+  This is a secondary license check beyond the handshake. Use codelldb instead.
+
   vsdbg requires adapterID="cppvsdbg" and clientID="vscode".
   Set "type":"cppvsdbg" and "__clientID":"vscode" in launch_args.
 
