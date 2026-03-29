@@ -24,6 +24,10 @@ Built-in tools in AI coding agents (Claude Code, Cursor, Codex, etc.) have known
 
 Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compatible agent.
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/knewstimek-agent-tool).
+
 ## Features
 
 | Tool | Description | Status |
