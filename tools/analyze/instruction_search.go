@@ -33,6 +33,8 @@ type instructionSearchSpec struct {
 	hasRegister  bool
 	immediate    uint64
 	hasImmediate bool
+	callTarget   string
+	findings     string
 }
 
 type instructionHit struct {
@@ -47,6 +49,7 @@ type valueTraceHit struct {
 	rva      uint32
 	text     string
 	possible bool
+	kind     string
 }
 
 func opInstructionSearch(input AnalyzeInput) (string, error) {
@@ -80,16 +83,19 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 	}
 
 	reachable, interiors, traces, budgetComplete := analyzeInstructionFlows(bin, spec, traceValues, maxResults)
-	hits, totalMatches := exhaustiveInstructionMatches(bin, spec, reachable, interiors, maxResults)
+	var hits []instructionHit
+	var totalMatches int
+	showDirect := spec.findings != "call"
+	if showDirect {
+		hits, totalMatches = exhaustiveInstructionMatches(bin, spec, reachable, interiors, maxResults)
+	}
 
 	var sb strings.Builder
-	sb.WriteString("Semantic instruction search (x86/x64 executable sections):\n")
-	sb.WriteString("  filter: " + formatInstructionFilter(spec) + "\n")
-	sb.WriteString("  confidence: confirmed = CFG-reachable from a known function start; candidate = valid executable-section decode found only by exhaustive byte-offset recovery (may be indirectly reached code or embedded data)\n\n")
+	sb.WriteString("Instruction search: " + formatInstructionFilter(spec) + "\n")
 
-	if len(hits) == 0 {
+	if showDirect && len(hits) == 0 {
 		sb.WriteString("Direct instruction matches: none\n")
-	} else {
+	} else if showDirect {
 		sb.WriteString(fmt.Sprintf("Direct instruction matches (%d shown", len(hits)))
 		if totalMatches > len(hits) {
 			sb.WriteString(fmt.Sprintf(", %d total", totalMatches))
@@ -103,10 +109,19 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 			}
 			sb.WriteString(fmt.Sprintf("  [%s] VA 0x%x RVA 0x%x%s: %s\n", hit.confidence, va, hit.rva, fn, hit.text))
 		}
+		for _, hit := range hits {
+			if hit.confidence == "candidate" {
+				sb.WriteString("  candidate = exhaustive executable-byte recovery; may be indirect code or embedded data\n")
+				break
+			}
+		}
 	}
 
 	if traceValues {
-		sb.WriteString("\nBounded value-flow findings:\n")
+		if showDirect {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("Value-flow findings:\n")
 		if len(traces) == 0 {
 			sb.WriteString(fmt.Sprintf("  none for 0x%x\n", spec.immediate))
 		} else {
@@ -119,10 +134,13 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 					bin.imageBase+uint64(hit.rva), hit.rva, hit.text))
 			}
 		}
-		sb.WriteString("  scope: function-local registers, simple stack slots, read-only static constant loads, branches/joins, MOV/MOVX, LEA, basic arithmetic/bitwise/shift operations, and PE Windows or ELF/Mach-O SysV call arguments\n")
 	}
 	if !budgetComplete {
-		sb.WriteString("\n** partial analysis: the bounded CFG/value-flow decode budget was exhausted; direct exhaustive matches are complete up to max_results, but confidence/value traces may be incomplete **\n")
+		sb.WriteString("\n** partial analysis: CFG confidence/value traces may be incomplete (decode budget exhausted)")
+		if showDirect {
+			sb.WriteString("; direct exhaustive matches remain complete up to max_results")
+		}
+		sb.WriteString(" **\n")
 	}
 	if totalMatches > maxResults {
 		sb.WriteString(fmt.Sprintf("\n(direct results truncated at max_results=%d; %d matches found)\n", maxResults, totalMatches))
@@ -131,7 +149,20 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 }
 
 func parseInstructionSearchSpec(input AnalyzeInput) (instructionSearchSpec, error) {
-	spec := instructionSearchSpec{mnemonic: strings.ToUpper(strings.TrimSpace(input.Mnemonic))}
+	spec := instructionSearchSpec{
+		mnemonic:   strings.ToUpper(strings.TrimSpace(input.Mnemonic)),
+		callTarget: strings.ToLower(strings.TrimSpace(input.CallTarget)),
+		findings:   strings.ToLower(strings.TrimSpace(input.Findings)),
+	}
+	if spec.findings == "" {
+		spec.findings = "all"
+		if spec.callTarget != "" {
+			spec.findings = "call"
+		}
+	}
+	if spec.findings != "all" && spec.findings != "call" && spec.findings != "producer" {
+		return spec, fmt.Errorf("findings must be all, call, or producer")
+	}
 	if input.Register != "" {
 		family, width, ok := parseGPRName(input.Register)
 		if !ok {
@@ -151,6 +182,15 @@ func parseInstructionSearchSpec(input AnalyzeInput) (instructionSearchSpec, erro
 	}
 	if input.TraceValues != nil && *input.TraceValues && !spec.hasImmediate {
 		return spec, fmt.Errorf("trace_values requires immediate")
+	}
+	if spec.callTarget != "" && !spec.hasImmediate {
+		return spec, fmt.Errorf("call_target requires immediate")
+	}
+	if spec.callTarget != "" && input.TraceValues != nil && !*input.TraceValues {
+		return spec, fmt.Errorf("call_target requires trace_values")
+	}
+	if spec.findings == "call" && !spec.hasImmediate {
+		return spec, fmt.Errorf("findings=call requires immediate")
 	}
 	return spec, nil
 }
@@ -192,6 +232,12 @@ func formatInstructionFilter(spec instructionSearchSpec) string {
 	}
 	if spec.hasImmediate {
 		parts = append(parts, fmt.Sprintf("immediate=0x%x", spec.immediate))
+	}
+	if spec.callTarget != "" {
+		parts = append(parts, "call_target="+spec.callTarget)
+	}
+	if spec.findings != "all" {
+		parts = append(parts, "findings="+spec.findings)
 	}
 	return strings.Join(parts, ", ")
 }
@@ -439,7 +485,10 @@ func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bo
 	interiors := make(map[uint32]bool)
 	var traces []valueTraceHit
 	traceIndex := make(map[string]int)
-	addTrace := func(rva uint32, text string, possible bool) {
+	addTrace := func(rva uint32, text string, possible bool, kind string) {
+		if (spec.findings == "call" && kind != "call") || (spec.findings == "producer" && kind != "producer") {
+			return
+		}
 		key := fmt.Sprintf("%x:%s", rva, text)
 		if index, exists := traceIndex[key]; exists {
 			// A later CFG merge may reveal alternative values that were not
@@ -451,7 +500,7 @@ func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bo
 			return
 		}
 		traceIndex[key] = len(traces)
-		traces = append(traces, valueTraceHit{rva: rva, text: text, possible: possible})
+		traces = append(traces, valueTraceHit{rva: rva, text: text, possible: possible, kind: kind})
 	}
 	starts := make(map[uint32]bool, len(bin.funcTable))
 	for _, fn := range bin.funcTable {
@@ -507,8 +556,13 @@ func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bo
 			after := before.clone()
 
 			if trace && spec.hasImmediate && (inst.Op == x86asm.CALL || inst.Op == x86asm.LCALL) {
-				for _, fact := range callArgumentFacts(inst, before, bin, rva, spec.immediate) {
-					addTrace(rva, fact.text, fact.possible)
+				for _, fact := range callArgumentFacts(inst, before, bin, rva, spec.immediate, "call", spec.callTarget) {
+					addTrace(rva, fact.text, fact.possible, "call")
+				}
+			}
+			if trace && spec.hasImmediate && inst.Op == x86asm.JMP && isTailCall(inst, before, bin, rva, fn) {
+				for _, fact := range callArgumentFacts(inst, before, bin, rva, spec.immediate, "tail-call", spec.callTarget) {
+					addTrace(rva, fact.text, fact.possible, "call")
 				}
 			}
 
@@ -518,7 +572,7 @@ func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bo
 				if now.contains(spec.immediate) && !beforeWritten.contains(spec.immediate) {
 					text := fmt.Sprintf("%s produced %s=0x%x", x86asm.IntelSyntax(inst, bin.imageBase+uint64(rva), nil),
 						gprDisplayName(writtenFamily, writtenWidth), spec.immediate)
-					addTrace(rva, text, now.possible(spec.immediate))
+					addTrace(rva, text, now.possible(spec.immediate), "producer")
 				}
 			}
 
@@ -655,8 +709,11 @@ type callArgFact struct {
 	possible bool
 }
 
-func callArgumentFacts(inst x86asm.Inst, state abstractState, bin *cgBinary, rva uint32, target uint64) []callArgFact {
+func callArgumentFacts(inst x86asm.Inst, state abstractState, bin *cgBinary, rva uint32, target uint64, callKind, targetFilter string) []callArgFact {
 	callTarget := describeCallTarget(inst, state, bin, rva)
+	if targetFilter != "" && !strings.Contains(strings.ToLower(callTarget), targetFilter) {
+		return nil
+	}
 	var facts []callArgFact
 	if bin.is64 {
 		families := []int{1, 2, 8, 9} // Windows x64: RCX, RDX, R8, R9
@@ -667,7 +724,7 @@ func callArgumentFacts(inst x86asm.Inst, state abstractState, bin *cgBinary, rva
 			v := state.regs[family]
 			if v.contains(target) {
 				facts = append(facts, callArgFact{
-					text:     fmt.Sprintf("call %s with arg%d %s/%s=0x%x", callTarget, i+1, gprDisplayName(family, 64), gprDisplayName(family, 32), target),
+					text:     fmt.Sprintf("%s %s with arg%d %s/%s=0x%x", callKind, callTarget, i+1, gprDisplayName(family, 64), gprDisplayName(family, 32), target),
 					possible: v.possible(target),
 				})
 			}
@@ -682,7 +739,7 @@ func callArgumentFacts(inst x86asm.Inst, state abstractState, bin *cgBinary, rva
 			for i := 0; i < 8; i++ {
 				if v, ok := state.stack[sp.stack+stackBase+int64(i*8)]; ok && v.contains(target) {
 					facts = append(facts, callArgFact{
-						text:     fmt.Sprintf("call %s with stack arg%d=0x%x", callTarget, i+firstStackArg, target),
+						text:     fmt.Sprintf("%s %s with stack arg%d=0x%x", callKind, callTarget, i+firstStackArg, target),
 						possible: v.possible(target),
 					})
 				}
@@ -694,7 +751,7 @@ func callArgumentFacts(inst x86asm.Inst, state abstractState, bin *cgBinary, rva
 			for i := 0; i < 12; i++ {
 				if v, ok := state.stack[sp.stack+int64(i*4)]; ok && v.contains(target) {
 					facts = append(facts, callArgFact{
-						text:     fmt.Sprintf("call %s with stack arg%d=0x%x", callTarget, i+1, target),
+						text:     fmt.Sprintf("%s %s with stack arg%d=0x%x", callKind, callTarget, i+1, target),
 						possible: v.possible(target),
 					})
 				}
@@ -702,6 +759,27 @@ func callArgumentFacts(inst x86asm.Inst, state abstractState, bin *cgBinary, rva
 		}
 	}
 	return facts
+}
+
+func isTailCall(inst x86asm.Inst, state abstractState, bin *cgBinary, rva uint32, fn funcRange) bool {
+	if inst.Op != x86asm.JMP || len(inst.Args) == 0 {
+		return false
+	}
+	switch arg := inst.Args[0].(type) {
+	case x86asm.Rel:
+		target := int64(rva) + int64(inst.Len) + int64(arg)
+		return target < int64(fn.begin) || target >= int64(fn.end)
+	case x86asm.Reg:
+		value := readRegister(state, arg)
+		return value.kind == 1 && len(value.consts) == 1
+	case x86asm.Mem:
+		if bin.is64 && arg.Base == x86asm.RIP {
+			va := bin.imageBase + uint64(rva) + uint64(inst.Len) + uint64(arg.Disp)
+			_, known := bin.symbols[va]
+			return known
+		}
+	}
+	return false
 }
 
 func describeCallTarget(inst x86asm.Inst, state abstractState, bin *cgBinary, rva uint32) string {
@@ -761,6 +839,10 @@ func executeAbstractInstruction(state *abstractState, inst x86asm.Inst, bin *cgB
 		}
 		writeRegister(state, dstReg, v)
 		return family, width, before, true
+	}
+	if strings.HasPrefix(op, "CMOV") && len(inst.Args) >= 2 && hasDst {
+		selected := readOperandWithStatic(*state, inst.Args[1], is64, va, inst.Len, width, bin)
+		return writeDst(mergeAbstractValue(before, selected))
 	}
 
 	switch op {
@@ -864,7 +946,7 @@ func executeAbstractInstruction(state *abstractState, inst x86asm.Inst, bin *cgB
 			return writeDst(value)
 		}
 	case "CALL", "LCALL":
-		clobberCallRegisters(state, is64)
+		clobberCallRegisters(state, bin)
 		return 0, 0, unknownValue(), false
 	case "XCHG":
 		if len(inst.Args) >= 2 && hasDst {
@@ -899,9 +981,13 @@ func instructionUsuallyWritesFirst(op string) bool {
 	return true
 }
 
-func clobberCallRegisters(state *abstractState, is64 bool) {
-	if is64 {
-		for _, family := range []int{0, 1, 2, 8, 9, 10, 11} {
+func clobberCallRegisters(state *abstractState, bin *cgBinary) {
+	if bin.is64 {
+		families := []int{0, 1, 2, 8, 9, 10, 11} // Windows x64 volatile GPRs
+		if bin.format != "PE" {
+			families = []int{0, 1, 2, 6, 7, 8, 9, 10, 11} // SysV x64 caller-saved GPRs
+		}
+		for _, family := range families {
 			state.regs[family] = unknownValue()
 		}
 	} else {

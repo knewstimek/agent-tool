@@ -229,6 +229,93 @@ func TestInstructionSearchResolvesConstantRegisterCallTarget(t *testing.T) {
 	}
 }
 
+func TestInstructionSearchCallTargetFilterDefaultsToCalls(t *testing.T) {
+	spec, err := parseInstructionSearchSpec(AnalyzeInput{Immediate: "0x327", CallTarget: "DeviceApi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.callTarget != "deviceapi" || spec.findings != "call" {
+		t.Fatalf("unexpected filtered spec: %+v", spec)
+	}
+
+	code := []byte{
+		0x41, 0xB9, 0x27, 0x03, 0x00, 0x00,
+		0xE8, 0xF5, 0x0F, 0x00, 0x00, // call RVA 0x2000
+		0x41, 0xB9, 0x27, 0x03, 0x00, 0x00,
+		0xE8, 0xEA, 0x1F, 0x00, 0x00, // call RVA 0x3000
+		0xC3,
+	}
+	bin := testSearchBinary(code, funcRange{begin: 0x1000, end: 0x1017})
+	bin.symbols[bin.imageBase+0x2000] = "DeviceApi"
+	bin.symbols[bin.imageBase+0x3000] = "OtherApi"
+	_, _, traces, _ := analyzeInstructionFlows(bin, spec, true, 20)
+	joined := traceText(traces)
+	if !strings.Contains(joined, "DeviceApi") || strings.Contains(joined, "OtherApi") || strings.Contains(joined, "produced") {
+		t.Fatalf("call target/result filtering failed:\n%s", joined)
+	}
+}
+
+func TestInstructionSearchTracesExternalTailCall(t *testing.T) {
+	code := []byte{
+		0x41, 0xB9, 0x27, 0x03, 0x00, 0x00,
+		0xE9, 0xF5, 0x0F, 0x00, 0x00, // jmp RVA 0x2000
+	}
+	bin := testSearchBinary(code, funcRange{begin: 0x1000, end: 0x100B})
+	bin.symbols[bin.imageBase+0x2000] = "DeviceApi"
+	spec := instructionSearchSpec{immediate: 0x327, hasImmediate: true, callTarget: "deviceapi", findings: "call"}
+
+	_, _, traces, _ := analyzeInstructionFlows(bin, spec, true, 20)
+	joined := traceText(traces)
+	if !strings.Contains(joined, "tail-call") || !strings.Contains(joined, "DeviceApi") || !strings.Contains(joined, "arg4 R9/R9D=0x327") {
+		t.Fatalf("external tail-call argument missing:\n%s", joined)
+	}
+}
+
+func TestInstructionSearchTracksKnownCMOVAlternatives(t *testing.T) {
+	code := []byte{
+		0x41, 0xB9, 0x00, 0x03, 0x00, 0x00, // mov r9d,0x300
+		0xB8, 0x27, 0x03, 0x00, 0x00, // mov eax,0x327
+		0x85, 0xC9, // test ecx,ecx
+		0x44, 0x0F, 0x45, 0xC8, // cmovne r9d,eax
+		0xE8, 0x00, 0x00, 0x00, 0x00,
+		0xC3,
+	}
+	bin := testSearchBinary(code, funcRange{begin: 0x1000, end: 0x1017})
+	spec := instructionSearchSpec{immediate: 0x327, hasImmediate: true, findings: "all"}
+
+	_, _, traces, _ := analyzeInstructionFlows(bin, spec, true, 20)
+	var possibleCall bool
+	for _, hit := range traces {
+		if hit.kind == "call" && hit.possible && strings.Contains(hit.text, "arg4 R9/R9D=0x327") {
+			possibleCall = true
+		}
+	}
+	if !possibleCall {
+		t.Fatalf("CMOV alternative did not reach call as possible:\n%s", traceText(traces))
+	}
+}
+
+func TestInstructionSearchSysVCallClobbersRSIAndRDI(t *testing.T) {
+	state := newAbstractState(true)
+	state.regs[6] = constantValue(0x327)
+	state.regs[7] = constantValue(0x327)
+	bin := testSearchBinary(nil)
+	bin.format = "ELF"
+	clobberCallRegisters(&state, bin)
+	if state.regs[6].kind != 0 || state.regs[7].kind != 0 {
+		t.Fatalf("SysV caller-saved RSI/RDI survived a call: %+v %+v", state.regs[6], state.regs[7])
+	}
+}
+
+func TestInstructionSearchRejectsInvalidFindingCombinations(t *testing.T) {
+	if _, err := parseInstructionSearchSpec(AnalyzeInput{Mnemonic: "CALL", Findings: "call"}); err == nil {
+		t.Fatal("findings=call without an immediate was accepted")
+	}
+	if _, err := parseInstructionSearchSpec(AnalyzeInput{Immediate: "1", Findings: "unknown"}); err == nil {
+		t.Fatal("unknown findings mode was accepted")
+	}
+}
+
 func TestInstructionSearchImmediateLeadingZeroIsDecimal(t *testing.T) {
 	v, err := parseInstructionImmediate("0807")
 	if err != nil || v != 807 {

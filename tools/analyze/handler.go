@@ -55,6 +55,8 @@ type AnalyzeInput struct {
 	Register    string `json:"register,omitempty" jsonschema:"Optional explicit register operand filter such as R9D, EAX, or RCX. For instruction_search"`
 	Immediate   string `json:"immediate,omitempty" jsonschema:"Optional immediate value filter in hex or decimal, e.g. 0x327 or 807. For instruction_search"`
 	TraceValues *bool  `json:"trace_values,omitempty" jsonschema:"Trace the immediate through bounded function-local register and stack data flow and report matching call arguments. Default: true when immediate is set. For instruction_search"`
+	CallTarget  string `json:"call_target,omitempty" jsonschema:"Optional case-insensitive call target symbol/address substring, e.g. DeviceApi or 0x140002000. Requires immediate value tracing. Defaults findings to call. For instruction_search"`
+	Findings    string `json:"findings,omitempty" jsonschema:"Result kind: all (default), call (CALL/tail-call value arguments only), or producer (direct instructions and value producers only). For instruction_search"`
 
 	// xref parameters
 	TargetVA    string `json:"target_va,omitempty" jsonschema:"Target virtual address to find references to, or inclusive range start when target_end_va is set (hex). For xref operation."`
@@ -231,8 +233,8 @@ func Register(server *mcp.Server) {
 		Name: "analyze",
 		Description: `Static binary analysis tool for reverse engineering and debugging.
 Operations: disassemble (x86/x64/ARM/ARM64 disassembly, stop_at_ret for function-scoped),
-instruction_search (semantic x86/x64 mnemonic/register/immediate search across executable sections, CFG confidence, bounded value tracing to call arguments),
-Use instruction_search instead of pattern_search when the request names assembly instructions, registers, operands, constants, producers, or values passed to a CALL; no byte encoding is needed. Example: operation="instruction_search", mnemonic="MOV", register="R9D", immediate="0x327".
+instruction_search (semantic x86/x64 mnemonic/register/immediate search across executable sections, CFG confidence, bounded value tracing to CALL/tail-call arguments),
+Use instruction_search instead of pattern_search when the request names assembly instructions, registers, operands, constants, producers, or values passed to a call; no byte encoding is needed. Filter a consumer compactly with immediate="0x327", call_target="DeviceApi" (defaults findings="call").
 pe_info (PE header/sections/imports/exports),
 elf_info (ELF header/sections/symbols), macho_info (Mach-O header/segments/symbols),
 strings (extract printable strings from binary), hexdump (hex+ASCII view),

@@ -22,7 +22,7 @@ var connectionFields = []string{
 var compactOperationShapes = map[string]map[string]operationShape{
 	"analyze": {
 		"instruction_search": {
-			fields:   []string{"operation", "file_path", "mnemonic", "register", "immediate", "trace_values", "max_results"},
+			fields:   []string{"operation", "file_path", "mnemonic", "register", "immediate", "call_target", "findings", "trace_values", "max_results"},
 			required: []string{"operation", "file_path"},
 		},
 	},

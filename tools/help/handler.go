@@ -619,7 +619,7 @@ Parameters: session_id, operation, adapter_command, adapter_args, address, launc
 ## analyze
 Static binary analysis tool with 22 operations:
 - disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped)
-- instruction_search: Semantic x86/x64 mnemonic/register/immediate search with exhaustive executable-offset recovery, CFG confidence, and bounded value tracing to call arguments
+- instruction_search: Semantic x86/x64 mnemonic/register/immediate search with exhaustive executable-offset recovery, CFG confidence, target/result filters, and bounded value tracing to call/tail-call arguments
 - pe_info: PE header parsing with RWX section warnings
 - elf_info: ELF header/sections/segments/symbols with RWX warnings
 - macho_info: Mach-O header/segments/sections/symbols (fat binary support)
@@ -701,6 +701,8 @@ immediate value without requiring a byte encoding.
           mnemonic="MOV", register="R9D", immediate="0x327")
   analyze(operation="instruction_search", file_path="/path/to/module.dll",
           immediate="0x327", trace_values=true, max_results=300)
+  analyze(operation="instruction_search", file_path="/path/to/module.dll",
+          immediate="0x327", call_target="DeviceApi")
 
   The search scans every executable-section byte offset so a desynchronized linear
   sweep cannot hide a valid instruction. A function-start-anchored CFG walk labels
@@ -710,7 +712,8 @@ immediate value without requiring a byte encoding.
   With immediate set, trace_values defaults to true. Bounded function-local analysis
   propagates small constant sets through branches and joins, x86/x64 general-purpose
   registers, simple stack stores/loads, read-only static constant loads, MOV/MOVX, LEA,
-  basic arithmetic, bitwise and shift operations. At CALL instructions it reports
+  CMOV, basic arithmetic, bitwise and shift operations. At CALL and confirmed
+  external tail-call instructions it reports
   matching PE Windows x64, ELF/Mach-O SysV x64, or x86 stack arguments and resolves
   constant-register indirect call targets. Unsupported writes invalidate facts;
   unknown memory aliases and inter-procedural return values are not guessed.
@@ -719,6 +722,9 @@ immediate value without requiring a byte encoding.
     mnemonic: Optional mnemonic such as MOV, ADD, or CALL (case-insensitive)
     register: Optional explicit GPR operand such as R9D, EAX, or RCX
     immediate: Optional hex or decimal value such as 0x327 or 807
+    call_target: Optional case-insensitive target symbol/address substring; when set,
+                 findings defaults to call to keep results compact
+    findings: all (default), call, or producer
     trace_values: Trace immediate values into computed results and call arguments
                   (default true when immediate is supplied)
     max_results: Maximum direct and trace results (default 200, max 1000)
