@@ -129,7 +129,7 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - externalip: Get your external (public) IP address
 - sloc: Count source lines of code (SLOC) with per-language summary
 - debug: Interactive debugger via DAP (breakpoints, stepping, variables, stack traces)
-- analyze: Static binary analysis (21 operations: disassemble, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
+- analyze: Static binary analysis (22 operations: disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
 - set_config: Change runtime settings (encoding, file size, SSRF policy, DoH/ECH toggle)
 - agent_tool_help: This help tool
 - toolbox: Describe/call any tool through one stable gateway; optionally manage direct bindings
@@ -617,8 +617,9 @@ Parameters: session_id, operation, adapter_command, adapter_args, address, launc
   max_output_chars, variable_filter, start_module, module_count
 
 ## analyze
-Static binary analysis tool with 21 operations:
+Static binary analysis tool with 22 operations:
 - disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped)
+- instruction_search: Semantic x86/x64 mnemonic/register/immediate search with exhaustive executable-offset recovery, CFG confidence, and bounded value tracing to call arguments
 - pe_info: PE header parsing with RWX section warnings
 - elf_info: ELF header/sections/segments/symbols with RWX warnings
 - macho_info: Mach-O header/segments/sections/symbols (fat binary support)
@@ -640,8 +641,9 @@ Static binary analysis tool with 21 operations:
 - struct_layout: Dump memory as structured layout with annotations (PE)
 - vtable_scan: Scan PE .rdata for all MSVC vtables with RTTI (auto-discovers C++ classes)
 Parameters: operation, file_path, offset, count, mode, arch (x86/arm),
-  base_addr, min_length, max_results, length, section, pattern, file_path_b,
-  va, target_va, target_end_va, stop_at_ret, result_offset, max_output_chars
+  base_addr, min_length, max_results, length, section, pattern, mnemonic,
+  register, immediate, trace_values, file_path_b, va, target_va,
+  target_end_va, stop_at_ret, result_offset, max_output_chars
 Use topic='analyze' for detailed guide with examples.
 
 ## set_config
@@ -691,6 +693,34 @@ Disassemble machine code. Supports x86 (16/32/64-bit) and ARM (32/64-bit).
 
   Output: address: hex_bytes    assembly  [; symbol]
   x86 uses Intel syntax. Failed decodes show "db 0xNN" / ".word" and skip.
+
+### instruction_search
+Search decoded x86/x64 instructions by mnemonic, explicit register operand, and/or
+immediate value without requiring a byte encoding.
+  analyze(operation="instruction_search", file_path="/path/to/module.dll",
+          mnemonic="MOV", register="R9D", immediate="0x327")
+  analyze(operation="instruction_search", file_path="/path/to/module.dll",
+          immediate="0x327", trace_values=true, max_results=300)
+
+  The search scans every executable-section byte offset so a desynchronized linear
+  sweep cannot hide a valid instruction. A function-start-anchored CFG walk labels
+  reachable instruction starts as "confirmed", excludes decodes that begin inside
+  those instructions, and labels remaining valid executable decodes as "candidate".
+
+  With immediate set, trace_values defaults to true. Bounded function-local analysis
+  propagates small constant sets through branches and joins, x86/x64 general-purpose
+  registers, simple stack stores/loads, MOV/MOVX, LEA, basic arithmetic, bitwise and
+  shift operations. At CALL instructions it reports matching Windows x64 RCX/RDX/R8/R9
+  and stack arguments, or x86 stack arguments. Unsupported writes invalidate facts;
+  unknown memory aliases and inter-procedural return values are not guessed.
+
+  Parameters:
+    mnemonic: Optional mnemonic such as MOV, ADD, or CALL (case-insensitive)
+    register: Optional explicit GPR operand such as R9D, EAX, or RCX
+    immediate: Optional hex or decimal value such as 0x327 or 807
+    trace_values: Trace immediate values into computed results and call arguments
+                  (default true when immediate is supplied)
+    max_results: Maximum direct and trace results (default 200, max 1000)
 
 ### pe_info
 Parse PE (Portable Executable) headers -- Windows EXE, DLL, .node files.
@@ -1019,15 +1049,16 @@ Scan PE .rdata for all MSVC vtables with RTTI. Auto-discovers C++ classes with v
 7. pattern_search -- Locate specific byte sequences (signatures, opcodes)
 8. hexdump -- Examine specific data regions at file offsets
 9. disassemble -- Decode machine code (use va= for PE virtual addresses)
-10. function_at -- Find function boundaries (.pdata or heuristic fallback)
-11. xref -- Find all call/jump/data references to an address (PE/ELF/Mach-O)
-12. call_graph -- Build static call graph from a root function (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
-13. follow_ptr -- Follow pointer chains (vtable inspection, data structure traversal)
-14. rtti_dump -- Parse MSVC RTTI from vtable (identify C++ class hierarchy)
-15. vtable_scan -- Discover all C++ vtables with RTTI in PE (class mapping)
-16. struct_layout -- Dump memory as structured layout (vtable, object layout analysis)
-17. dwarf_info -- Extract debug symbols and function names
-18. bin_diff -- Compare original vs patched versions
+10. instruction_search -- Find decoded instructions/constants and trace bounded values into call arguments
+11. function_at -- Find function boundaries (.pdata or heuristic fallback)
+12. xref -- Find all call/jump/data references to an address (PE/ELF/Mach-O)
+13. call_graph -- Build static call graph from a root function (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
+14. follow_ptr -- Follow pointer chains (vtable inspection, data structure traversal)
+15. rtti_dump -- Parse MSVC RTTI from vtable (identify C++ class hierarchy)
+16. vtable_scan -- Discover all C++ vtables with RTTI in PE (class mapping)
+17. struct_layout -- Dump memory as structured layout (vtable, object layout analysis)
+18. dwarf_info -- Extract debug symbols and function names
+19. bin_diff -- Compare original vs patched versions
 
 ### Example: Analyzing a DLL
   # Step 1: Get PE layout
@@ -1051,7 +1082,7 @@ Scan PE .rdata for all MSVC vtables with RTTI. Auto-discovers C++ classes with v
 - x86 disassembly: golang.org/x/arch/x86/x86asm (Intel syntax)
 - ARM disassembly: golang.org/x/arch/arm/armasm + arm64/arm64asm
 - Binary parsing: Go standard library (debug/pe, debug/elf, debug/macho, debug/dwarf)
-- All 14 operations are read-only — the target file is never modified
+- All 22 operations are read-only — the target file is never modified
 - Zero external dependencies beyond golang.org/x/arch`
 }
 

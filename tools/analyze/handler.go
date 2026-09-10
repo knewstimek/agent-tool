@@ -20,7 +20,7 @@ const (
 
 // AnalyzeInput defines parameters for the static binary analysis tool.
 type AnalyzeInput struct {
-	Operation string `json:"operation" jsonschema:"Operation: disassemble, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan,required"`
+	Operation string `json:"operation" jsonschema:"Operation: disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan,required"`
 	FilePath  string `json:"file_path,omitempty" jsonschema:"Binary file path. Relative paths use workspace/MCP root,required"`
 	Path      string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 
@@ -50,6 +50,12 @@ type AnalyzeInput struct {
 	// pattern_search parameters
 	Pattern string `json:"pattern,omitempty" jsonschema:"Hex byte pattern with ?? wildcards (e.g. '4D 5A ?? ?? 50 45'). For pattern_search"`
 
+	// instruction_search parameters
+	Mnemonic    string `json:"mnemonic,omitempty" jsonschema:"Optional assembly mnemonic filter such as MOV, ADD, or CALL. For instruction_search"`
+	Register    string `json:"register,omitempty" jsonschema:"Optional explicit register operand filter such as R9D, EAX, or RCX. For instruction_search"`
+	Immediate   string `json:"immediate,omitempty" jsonschema:"Optional immediate value filter in hex or decimal, e.g. 0x327 or 807. For instruction_search"`
+	TraceValues *bool  `json:"trace_values,omitempty" jsonschema:"Trace the immediate through bounded function-local register and stack data flow and report matching call arguments. Default: true when immediate is set. For instruction_search"`
+
 	// xref parameters
 	TargetVA    string `json:"target_va,omitempty" jsonschema:"Target virtual address to find references to, or inclusive range start when target_end_va is set (hex). For xref operation."`
 	TargetEndVA string `json:"target_end_va,omitempty" jsonschema:"Optional inclusive end of the target address range (hex). Omit for an exact-address xref."`
@@ -68,33 +74,34 @@ type AnalyzeOutput struct {
 }
 
 var validOperations = map[string]bool{
-	"disassemble":    true,
-	"pe_info":        true,
-	"elf_info":       true,
-	"macho_info":     true,
-	"strings":        true,
-	"hexdump":        true,
-	"pattern_search": true,
-	"entropy":        true,
-	"bin_diff":       true,
-	"resource_info":  true,
-	"imphash":        true,
-	"rich_header":    true,
-	"overlay_detect": true,
-	"dwarf_info":     true,
-	"xref":           true,
-	"function_at":    true,
-	"call_graph":     true,
-	"follow_ptr":     true,
-	"rtti_dump":      true,
-	"struct_layout":  true,
-	"vtable_scan":    true,
+	"disassemble":        true,
+	"instruction_search": true,
+	"pe_info":            true,
+	"elf_info":           true,
+	"macho_info":         true,
+	"strings":            true,
+	"hexdump":            true,
+	"pattern_search":     true,
+	"entropy":            true,
+	"bin_diff":           true,
+	"resource_info":      true,
+	"imphash":            true,
+	"rich_header":        true,
+	"overlay_detect":     true,
+	"dwarf_info":         true,
+	"xref":               true,
+	"function_at":        true,
+	"call_graph":         true,
+	"follow_ptr":         true,
+	"rtti_dump":          true,
+	"struct_layout":      true,
+	"vtable_scan":        true,
 }
 
 // Handle dispatches to the appropriate operation.
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (*mcp.CallToolResult, AnalyzeOutput, error) {
 	op := strings.ToLower(strings.TrimSpace(input.Operation))
-	allOps := "disassemble, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan"
+	allOps := "disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan"
 	if op == "" {
 		return errorResult("operation is required (" + allOps + ")")
 	}
@@ -165,6 +172,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 	switch op {
 	case "disassemble":
 		result, err = opDisassemble(input)
+	case "instruction_search":
+		result, err = opInstructionSearch(input)
 	case "pe_info":
 		result, err = opPEInfo(input)
 	case "elf_info":
@@ -222,6 +231,7 @@ func Register(server *mcp.Server) {
 		Name: "analyze",
 		Description: `Static binary analysis tool for reverse engineering and debugging.
 Operations: disassemble (x86/x64/ARM/ARM64 disassembly, stop_at_ret for function-scoped),
+instruction_search (semantic x86/x64 mnemonic/register/immediate search across executable sections, CFG confidence, bounded value tracing to call arguments),
 pe_info (PE header/sections/imports/exports),
 elf_info (ELF header/sections/symbols), macho_info (Mach-O header/segments/symbols),
 strings (extract printable strings from binary), hexdump (hex+ASCII view),
