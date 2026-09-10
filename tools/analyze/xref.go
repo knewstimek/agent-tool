@@ -522,12 +522,13 @@ func collectXref64(data []byte, secRVA uint32, targetRange xrefTargetRange, maxR
 			}
 		}
 
-		// MOV reg, [rip+disp32] (load) -- REX.W only (64-bit operand).
-		// REX.W=1 && REX.B=0 required: B=1 changes rm=5 from RIP-relative to r13-base.
+		// REX MOV reg, [rip+disp32] (load).  REX.W selects a 64-bit
+		// destination; a non-W REX can still select r8d-r15d.  REX.B=0 is
+		// required because B=1 changes rm=5 from RIP-relative to r13-base.
 		// REX.X (bit 1) is irrelevant for non-SIB addressing.
 		if i+7 <= dataLen {
 			rex := data[i]
-			if (rex&0x49) == 0x48 && data[i+1] == 0x8B {
+			if rex >= 0x40 && rex <= 0x4F && rex&0x01 == 0 && data[i+1] == 0x8B {
 				modrm := data[i+2]
 				mod := modrm >> 6
 				rm := modrm & 0x07
@@ -536,7 +537,11 @@ func collectXref64(data []byte, secRVA uint32, targetRange xrefTargetRange, maxR
 					decodedRVA := int64(instrRVA) + 7 + int64(disp)
 					if decodedVA, ok := targetRange.containsRVA(decodedRVA); ok {
 						regIdx := ((rex & 0x04) << 1) | ((modrm >> 3) & 0x07)
-						refs = append(refs, xrefResult{"MOV", fmt.Sprintf("  0x%x: MOV %s, [0x%x]  (RIP-relative)\n", instrVA, x64RegName(regIdx), decodedVA)})
+						regName := x64RegName32(regIdx)
+						if rex&0x08 != 0 {
+							regName = x64RegName(regIdx)
+						}
+						refs = append(refs, xrefResult{"MOV", fmt.Sprintf("  0x%x: MOV %s, [0x%x]  (RIP-relative)\n", instrVA, regName, decodedVA)})
 						found++
 						continue
 					}
@@ -567,10 +572,11 @@ func collectXref64(data []byte, secRVA uint32, targetRange xrefTargetRange, maxR
 			}
 		}
 
-		// MOV [rip+disp32], reg (store) -- REX.W only, same reasoning as load above.
+		// REX MOV [rip+disp32], reg (store).  As above, a non-W REX is valid
+		// for r8d-r15d and still denotes a RIP-relative data reference.
 		if i+7 <= dataLen {
 			rex := data[i]
-			if (rex&0x49) == 0x48 && data[i+1] == 0x89 {
+			if rex >= 0x40 && rex <= 0x4F && rex&0x01 == 0 && data[i+1] == 0x89 {
 				modrm := data[i+2]
 				mod := modrm >> 6
 				rm := modrm & 0x07
@@ -579,10 +585,32 @@ func collectXref64(data []byte, secRVA uint32, targetRange xrefTargetRange, maxR
 					decodedRVA := int64(instrRVA) + 7 + int64(disp)
 					if decodedVA, ok := targetRange.containsRVA(decodedRVA); ok {
 						regIdx := ((rex & 0x04) << 1) | ((modrm >> 3) & 0x07)
-						refs = append(refs, xrefResult{"MOV", fmt.Sprintf("  0x%x: MOV [0x%x], %s  (RIP-relative store)\n", instrVA, decodedVA, x64RegName(regIdx))})
+						regName := x64RegName32(regIdx)
+						if rex&0x08 != 0 {
+							regName = x64RegName(regIdx)
+						}
+						refs = append(refs, xrefResult{"MOV", fmt.Sprintf("  0x%x: MOV [0x%x], %s  (RIP-relative store)\n", instrVA, decodedVA, regName)})
 						found++
 						continue
 					}
+				}
+			}
+		}
+
+		// MOV [rip+disp32], r32 (store).  This is the prefix-free counterpart
+		// of the REX form above and is as common as MOV r32, [rip+disp32].
+		if i+6 <= dataLen && data[i] == 0x89 && (i == 0 || data[i-1] < 0x40 || data[i-1] > 0x4F) {
+			modrm := data[i+1]
+			mod := modrm >> 6
+			rm := modrm & 0x07
+			if mod == 0x00 && rm == 0x05 {
+				disp := int32(binary.LittleEndian.Uint32(data[i+2:]))
+				decodedRVA := int64(instrRVA) + 6 + int64(disp)
+				if decodedVA, ok := targetRange.containsRVA(decodedRVA); ok {
+					regIdx := (modrm >> 3) & 0x07
+					refs = append(refs, xrefResult{"MOV", fmt.Sprintf("  0x%x: MOV [0x%x], %s  (RIP-relative store)\n", instrVA, decodedVA, x64RegName32(regIdx))})
+					found++
+					continue
 				}
 			}
 		}
@@ -840,7 +868,10 @@ func x64RegName(idx byte) string {
 }
 
 func x64RegName32(idx byte) string {
-	names := [8]string{"eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"}
+	names := [16]string{
+		"eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi",
+		"r8d", "r9d", "r10d", "r11d", "r12d", "r13d", "r14d", "r15d",
+	}
 	if idx < byte(len(names)) {
 		return names[idx]
 	}

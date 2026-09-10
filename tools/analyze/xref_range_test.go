@@ -87,6 +87,36 @@ func TestCollectXref64_RIPRelativeMOV64IsNotDuplicatedAsMOV32(t *testing.T) {
 	}
 }
 
+func TestCollectXref64_RIPRelativeMOV32REXAndStore(t *testing.T) {
+	const (
+		imageBase = uint64(0x140000000)
+		secRVA    = uint32(0x6400)
+		targetRVA = uint32(0x16e9c)
+	)
+	target := testXrefRange(imageBase, targetRVA, targetRVA)
+	tests := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		// 44 8B 05 95 0A 01 00 = mov r8d, [rip+0x10a95]
+		{name: "REX r8d load", data: []byte{0x44, 0x8B, 0x05, 0x95, 0x0A, 0x01, 0x00}, want: "MOV r8d"},
+		// 89 05 96 0A 01 00 = mov [rip+0x10a96], eax
+		{name: "r32 store", data: []byte{0x89, 0x05, 0x96, 0x0A, 0x01, 0x00}, want: "MOV [0x140016e9c], eax"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			refs, found := collectXref64(tt.data, secRVA, target, 10, 0, nil)
+			if found != 1 || len(refs) != 1 {
+				t.Fatalf("found %d references, want 1", found)
+			}
+			if !strings.Contains(refs[0].line, tt.want) {
+				t.Fatalf("xref = %s, want %q", refs[0].line, tt.want)
+			}
+		})
+	}
+}
+
 func TestCollectXref32_OptionalRange(t *testing.T) {
 	const imageBase = uint64(0x400000)
 	const targetRVA = uint32(0x2020)
