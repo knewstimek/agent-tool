@@ -68,6 +68,25 @@ func TestCollectXref64_RIPRelativeMOV32_ExactAndRange(t *testing.T) {
 	}
 }
 
+func TestCollectXref64_RIPRelativeMOV64IsNotDuplicatedAsMOV32(t *testing.T) {
+	const (
+		imageBase = uint64(0x140000000)
+		secRVA    = uint32(0x6400)
+		targetRVA = uint32(0x16e9c)
+	)
+	// 48 8B 05 95 0A 01 00 = mov rax, [rip+0x10a95].  The embedded
+	// 8B 05 must not be scanned again as a six-byte MOV eax instruction.
+	data := []byte{0x48, 0x8B, 0x05, 0x95, 0x0A, 0x01, 0x00}
+
+	refs, found := collectXref64(data, secRVA, testXrefRange(imageBase, targetRVA, targetRVA), 10, 0, nil)
+	if found != 1 || len(refs) != 1 {
+		t.Fatalf("REX.W MOV xref found %d references, want 1", found)
+	}
+	if !strings.Contains(refs[0].line, "MOV rax") || strings.Contains(refs[0].line, "MOV eax") {
+		t.Fatalf("unexpected REX.W MOV xref: %s", refs[0].line)
+	}
+}
+
 func TestCollectXref32_OptionalRange(t *testing.T) {
 	const imageBase = uint64(0x400000)
 	const targetRVA = uint32(0x2020)

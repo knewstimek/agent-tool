@@ -548,7 +548,10 @@ func collectXref64(data []byte, secRVA uint32, targetRange xrefTargetRange, maxR
 		// of operand size, so 8B 05 disp32 (MOV eax, [...]) is a data reference
 		// just like its REX.W form above.  In particular, compiler-generated leaf
 		// blocks outside a .pdata range commonly use this encoding.
-		if i+6 <= dataLen && data[i] == 0x8B {
+		// If 8B is immediately preceded by a REX prefix, the REX.W case above
+		// already decoded the same instruction from its true start.  Do not scan
+		// its opcode byte again as a prefix-free instruction.
+		if i+6 <= dataLen && data[i] == 0x8B && (i == 0 || data[i-1] < 0x40 || data[i-1] > 0x4F) {
 			modrm := data[i+1]
 			mod := modrm >> 6
 			rm := modrm & 0x07
