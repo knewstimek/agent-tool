@@ -523,8 +523,6 @@ func collectXref64(data []byte, secRVA uint32, targetRange xrefTargetRange, maxR
 		}
 
 		// MOV reg, [rip+disp32] (load) -- REX.W only (64-bit operand).
-		// Without REX.W, 8B 05 is MOV eax,[rip+disp32] which still references
-		// the same address, but those are less common for pointer-sized data.
 		// REX.W=1 && REX.B=0 required: B=1 changes rm=5 from RIP-relative to r13-base.
 		// REX.X (bit 1) is irrelevant for non-SIB addressing.
 		if i+7 <= dataLen {
@@ -542,6 +540,26 @@ func collectXref64(data []byte, secRVA uint32, targetRange xrefTargetRange, maxR
 						found++
 						continue
 					}
+				}
+			}
+		}
+
+		// MOV r32, [rip+disp32] (load).  RIP-relative addressing is independent
+		// of operand size, so 8B 05 disp32 (MOV eax, [...]) is a data reference
+		// just like its REX.W form above.  In particular, compiler-generated leaf
+		// blocks outside a .pdata range commonly use this encoding.
+		if i+6 <= dataLen && data[i] == 0x8B {
+			modrm := data[i+1]
+			mod := modrm >> 6
+			rm := modrm & 0x07
+			if mod == 0x00 && rm == 0x05 {
+				disp := int32(binary.LittleEndian.Uint32(data[i+2:]))
+				decodedRVA := int64(instrRVA) + 6 + int64(disp)
+				if decodedVA, ok := targetRange.containsRVA(decodedRVA); ok {
+					regIdx := (modrm >> 3) & 0x07
+					refs = append(refs, xrefResult{"MOV", fmt.Sprintf("  0x%x: MOV %s, [0x%x]  (RIP-relative)\n", instrVA, x64RegName32(regIdx), decodedVA)})
+					found++
+					continue
 				}
 			}
 		}
@@ -816,6 +834,14 @@ func x64RegName(idx byte) string {
 		return names[idx]
 	}
 	return fmt.Sprintf("r%d", idx)
+}
+
+func x64RegName32(idx byte) string {
+	names := [8]string{"eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"}
+	if idx < byte(len(names)) {
+		return names[idx]
+	}
+	return fmt.Sprintf("r%dd", idx)
 }
 
 func arm64CondName(cond uint32) string {

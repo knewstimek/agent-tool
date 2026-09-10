@@ -44,6 +44,30 @@ func TestCollectXref64_OptionalRange(t *testing.T) {
 	}
 }
 
+func TestCollectXref64_RIPRelativeMOV32_ExactAndRange(t *testing.T) {
+	const (
+		imageBase = uint64(0x140000000)
+		secRVA    = uint32(0x6400)
+		targetRVA = uint32(0x16e9c)
+	)
+	// 8B 05 96 0A 01 00 = mov eax, [rip+0x10a96].  This is the
+	// xhunter1.sys encoding reported at RVA 0x6400.
+	data := []byte{0x8B, 0x05, 0x96, 0x0A, 0x01, 0x00}
+
+	for _, target := range []xrefTargetRange{
+		testXrefRange(imageBase, targetRVA, targetRVA),
+		testXrefRange(imageBase, targetRVA-1, targetRVA+1),
+	} {
+		refs, found := collectXref64(data, secRVA, target, 10, 0, nil)
+		if found != 1 || len(refs) != 1 {
+			t.Fatalf("xref to %s found %d references, want 1", target.label(), found)
+		}
+		if !strings.Contains(refs[0].line, "MOV eax") || !strings.Contains(refs[0].line, "0x140006400") || !strings.Contains(refs[0].line, "0x140016e9c") {
+			t.Fatalf("unexpected MOV xref: %s", refs[0].line)
+		}
+	}
+}
+
 func TestCollectXref32_OptionalRange(t *testing.T) {
 	const imageBase = uint64(0x400000)
 	const targetRVA = uint32(0x2020)
