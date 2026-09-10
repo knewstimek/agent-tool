@@ -20,6 +20,12 @@ var connectionFields = []string{
 }
 
 var compactOperationShapes = map[string]map[string]operationShape{
+	"analyze": {
+		"instruction_search": {
+			fields:   []string{"operation", "file_path", "mnemonic", "register", "immediate", "trace_values", "max_results"},
+			required: []string{"operation", "file_path"},
+		},
+	},
 	"ssh": {
 		"execute": {
 			fields:             append(append([]string{}, connectionFields...), "operation", "command", "timeout_sec", "max_output_chars", "output_mode", "quiet", "echo_command", "result_only"),

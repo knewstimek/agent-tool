@@ -709,9 +709,10 @@ immediate value without requiring a byte encoding.
 
   With immediate set, trace_values defaults to true. Bounded function-local analysis
   propagates small constant sets through branches and joins, x86/x64 general-purpose
-  registers, simple stack stores/loads, MOV/MOVX, LEA, basic arithmetic, bitwise and
-  shift operations. At CALL instructions it reports matching Windows x64 RCX/RDX/R8/R9
-  and stack arguments, or x86 stack arguments. Unsupported writes invalidate facts;
+  registers, simple stack stores/loads, read-only static constant loads, MOV/MOVX, LEA,
+  basic arithmetic, bitwise and shift operations. At CALL instructions it reports
+  matching PE Windows x64, ELF/Mach-O SysV x64, or x86 stack arguments and resolves
+  constant-register indirect call targets. Unsupported writes invalidate facts;
   unknown memory aliases and inter-procedural return values are not guessed.
 
   Parameters:

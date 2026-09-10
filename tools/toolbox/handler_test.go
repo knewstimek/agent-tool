@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"agent-tool/common"
+	"agent-tool/tools/analyze"
 	"agent-tool/tools/sftp"
 	"agent-tool/tools/ssh"
 	"agent-tool/tools/sshkey"
@@ -27,6 +28,7 @@ func TestProfilesStayCompactAndComposable(t *testing.T) {
 func TestCompactDescribeFiltersByTargetOperationAndReusesHandle(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "v1"}, nil)
 	m := NewManager(server, []Spec{
+		{Name: "analyze", Group: "analysis", Register: func() { analyze.Register(server) }},
 		{Name: "ssh", Group: "remote", Register: func() { ssh.Register(server) }},
 		{Name: "sftp", Group: "remote", Register: func() { sftp.Register(server) }},
 		{Name: "ssh_key", Group: "remote", Register: func() { sshkey.Register(server) }},
@@ -93,6 +95,24 @@ func TestCompactDescribeFiltersByTargetOperationAndReusesHandle(t *testing.T) {
 	if !strings.Contains(keyText, `"input_path"`) || !strings.Contains(keyText, `"output_format"`) || strings.Contains(keyText, `"connection_id"`) || strings.Contains(keyText, `"anyOf"`) {
 		t.Fatalf("unexpected ssh_key schema: %s", keyText)
 	}
+
+	instructionSearch, _, err := m.Handle(context.Background(), nil, Input{
+		Operation: "describe", Tool: "analyze", Compact: true, ToolOperation: "instruction_search",
+	})
+	if err != nil || instructionSearch.IsError {
+		t.Fatalf("instruction_search describe failed: result=%v err=%v", instructionSearch, err)
+	}
+	instructionText := instructionSearch.Content[0].(*mcp.TextContent).Text
+	for _, want := range []string{`"operation"`, `"file_path"`, `"mnemonic"`, `"register"`, `"immediate"`, `"trace_values"`, `"required":["operation","file_path"]`} {
+		if !strings.Contains(instructionText, want) {
+			t.Fatalf("instruction_search compact schema omitted %s: %s", want, instructionText)
+		}
+	}
+	for _, unwanted := range []string{`"target_va"`, `"pattern"`, `"file_path_b"`} {
+		if strings.Contains(instructionText, unwanted) {
+			t.Fatalf("instruction_search compact schema retained %s: %s", unwanted, instructionText)
+		}
+	}
 }
 
 func TestManagerEnablesOnlyRequestedGroup(t *testing.T) {
@@ -110,6 +130,21 @@ func TestManagerEnablesOnlyRequestedGroup(t *testing.T) {
 	}
 	if err := m.EnableProfile("core"); err != nil || registered["read"] != 1 {
 		t.Fatalf("duplicate enable = %#v, %v", registered, err)
+	}
+}
+
+func TestInventoryShowsConciseDiscoveryHint(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "test"}, nil)
+	m := NewManager(server, []Spec{{
+		Name: "analyze", Group: "analysis", Hint: "binary disassembly and assembly/value search", Register: func() {},
+	}})
+	result, _, err := m.Handle(context.Background(), nil, Input{})
+	if err != nil || result.IsError {
+		t.Fatalf("inventory failed: result=%v err=%v", result, err)
+	}
+	text := result.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "analyze (binary disassembly and assembly/value search)") {
+		t.Fatalf("inventory omitted discovery hint: %s", text)
 	}
 }
 

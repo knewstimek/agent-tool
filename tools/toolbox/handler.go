@@ -19,6 +19,7 @@ const maxRawOutputChunkChars = common.HardOutputChars - 1024
 type Spec struct {
 	Name     string
 	Group    string
+	Hint     string
 	Register func()
 }
 
@@ -131,7 +132,13 @@ func (m *Manager) Handle(ctx context.Context, req *mcp.CallToolRequest, input In
 	}
 	sort.Strings(groups)
 	for _, group := range groups {
-		sb.WriteString(fmt.Sprintf("- %s: %s\n", group, strings.Join(available[group], ", ")))
+		labels := append([]string(nil), available[group]...)
+		for i, name := range labels {
+			if hint := strings.TrimSpace(m.specs[name].Hint); hint != "" {
+				labels[i] = name + " (" + hint + ")"
+			}
+		}
+		sb.WriteString(fmt.Sprintf("- %s: %s\n", group, strings.Join(labels, ", ")))
 	}
 	sb.WriteString("Gateway: use operation=describe with tool=<name>, then operation=call with arguments={...}. This works even if newly enabled direct tools do not appear in the client.\n")
 	result := sb.String()

@@ -179,6 +179,56 @@ func TestInstructionSearchTracesX86PushedArgument(t *testing.T) {
 	}
 }
 
+func TestInstructionSearchTracesReadOnlyRIPRelativeConstant(t *testing.T) {
+	code := []byte{
+		0x44, 0x8B, 0x0D, 0xF9, 0x0F, 0x00, 0x00, // mov r9d,[rip+0xff9] -> RVA 0x2000
+		0xE8, 0x00, 0x00, 0x00, 0x00,
+		0xC3,
+	}
+	bin := testSearchBinary(code, funcRange{begin: 0x1000, end: 0x100D})
+	bin.staticSections = []cgSection{{rva: 0x2000, data: []byte{0x27, 0x03, 0x00, 0x00}}}
+	spec := instructionSearchSpec{immediate: 0x327, hasImmediate: true}
+
+	_, _, traces, _ := analyzeInstructionFlows(bin, spec, true, 20)
+	if joined := traceText(traces); !strings.Contains(joined, "arg4 R9/R9D=0x327") {
+		t.Fatalf("read-only RIP-relative constant did not reach the call:\n%s", joined)
+	}
+}
+
+func TestInstructionSearchUsesSysVX64ArgumentOrder(t *testing.T) {
+	code := []byte{
+		0xBF, 0x27, 0x03, 0x00, 0x00, // mov edi,0x327
+		0xE8, 0x00, 0x00, 0x00, 0x00,
+		0xC3,
+	}
+	bin := testSearchBinary(code, funcRange{begin: 0x1000, end: 0x100B})
+	bin.format = "ELF"
+	spec := instructionSearchSpec{immediate: 0x327, hasImmediate: true}
+
+	_, _, traces, _ := analyzeInstructionFlows(bin, spec, true, 20)
+	if joined := traceText(traces); !strings.Contains(joined, "arg1 RDI/EDI=0x327") {
+		t.Fatalf("SysV x64 register order was not used:\n%s", joined)
+	}
+}
+
+func TestInstructionSearchResolvesConstantRegisterCallTarget(t *testing.T) {
+	code := []byte{
+		0x41, 0xB9, 0x27, 0x03, 0x00, 0x00, // mov r9d,0x327
+		0x48, 0xB8, 0x00, 0x20, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00, // mov rax,0x140002000
+		0xFF, 0xD0, // call rax
+		0xC3,
+	}
+	bin := testSearchBinary(code, funcRange{begin: 0x1000, end: 0x1013})
+	bin.symbols[0x140002000] = "DeviceApi"
+	spec := instructionSearchSpec{immediate: 0x327, hasImmediate: true}
+
+	_, _, traces, _ := analyzeInstructionFlows(bin, spec, true, 20)
+	joined := traceText(traces)
+	if !strings.Contains(joined, "0x140002000 DeviceApi (via RAX)") || !strings.Contains(joined, "arg4 R9/R9D=0x327") {
+		t.Fatalf("constant register call target was not resolved:\n%s", joined)
+	}
+}
+
 func TestInstructionSearchImmediateLeadingZeroIsDecimal(t *testing.T) {
 	v, err := parseInstructionImmediate("0807")
 	if err != nil || v != 807 {

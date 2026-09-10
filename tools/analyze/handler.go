@@ -232,6 +232,7 @@ func Register(server *mcp.Server) {
 		Description: `Static binary analysis tool for reverse engineering and debugging.
 Operations: disassemble (x86/x64/ARM/ARM64 disassembly, stop_at_ret for function-scoped),
 instruction_search (semantic x86/x64 mnemonic/register/immediate search across executable sections, CFG confidence, bounded value tracing to call arguments),
+Use instruction_search instead of pattern_search when the request names assembly instructions, registers, operands, constants, producers, or values passed to a CALL; no byte encoding is needed. Example: operation="instruction_search", mnemonic="MOV", register="R9D", immediate="0x327".
 pe_info (PE header/sections/imports/exports),
 elf_info (ELF header/sections/symbols), macho_info (Mach-O header/segments/symbols),
 strings (extract printable strings from binary), hexdump (hex+ASCII view),

@@ -10,6 +10,7 @@ package analyze
 //     embedded data is never presented as equally trustworthy.
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"strconv"
@@ -118,7 +119,7 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 					bin.imageBase+uint64(hit.rva), hit.rva, hit.text))
 			}
 		}
-		sb.WriteString("  scope: function-local registers, simple stack slots, branches/joins, MOV/MOVX, LEA, basic arithmetic/bitwise/shift operations, and x86/x64 call arguments\n")
+		sb.WriteString("  scope: function-local registers, simple stack slots, read-only static constant loads, branches/joins, MOV/MOVX, LEA, basic arithmetic/bitwise/shift operations, and PE Windows or ELF/Mach-O SysV call arguments\n")
 	}
 	if !budgetComplete {
 		sb.WriteString("\n** partial analysis: the bounded CFG/value-flow decode budget was exhausted; direct exhaustive matches are complete up to max_results, but confidence/value traces may be incomplete **\n")
@@ -511,7 +512,7 @@ func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bo
 				}
 			}
 
-			writtenFamily, writtenWidth, beforeWritten, wrote := executeAbstractInstruction(&after, inst, bin.is64, bin.imageBase+uint64(rva))
+			writtenFamily, writtenWidth, beforeWritten, wrote := executeAbstractInstruction(&after, inst, bin, bin.imageBase+uint64(rva))
 			if trace && spec.hasImmediate && wrote {
 				now := readFamilyWidth(after, writtenFamily, writtenWidth)
 				if now.contains(spec.immediate) && !beforeWritten.contains(spec.immediate) {
@@ -655,10 +656,13 @@ type callArgFact struct {
 }
 
 func callArgumentFacts(inst x86asm.Inst, state abstractState, bin *cgBinary, rva uint32, target uint64) []callArgFact {
-	callTarget := describeCallTarget(inst, bin, rva)
+	callTarget := describeCallTarget(inst, state, bin, rva)
 	var facts []callArgFact
 	if bin.is64 {
-		families := []int{1, 2, 8, 9} // RCX, RDX, R8, R9
+		families := []int{1, 2, 8, 9} // Windows x64: RCX, RDX, R8, R9
+		if bin.format != "PE" {
+			families = []int{7, 6, 2, 1, 8, 9} // SysV x64: RDI, RSI, RDX, RCX, R8, R9
+		}
 		for i, family := range families {
 			v := state.regs[family]
 			if v.contains(target) {
@@ -670,10 +674,15 @@ func callArgumentFacts(inst x86asm.Inst, state abstractState, bin *cgBinary, rva
 		}
 		sp := state.regs[4]
 		if sp.kind == 2 {
+			stackBase := int64(0x20)
+			firstStackArg := len(families) + 1
+			if bin.format != "PE" {
+				stackBase = 0
+			}
 			for i := 0; i < 8; i++ {
-				if v, ok := state.stack[sp.stack+0x20+int64(i*8)]; ok && v.contains(target) {
+				if v, ok := state.stack[sp.stack+stackBase+int64(i*8)]; ok && v.contains(target) {
 					facts = append(facts, callArgFact{
-						text:     fmt.Sprintf("call %s with stack arg%d=0x%x", callTarget, i+5, target),
+						text:     fmt.Sprintf("call %s with stack arg%d=0x%x", callTarget, i+firstStackArg, target),
 						possible: v.possible(target),
 					})
 				}
@@ -695,7 +704,7 @@ func callArgumentFacts(inst x86asm.Inst, state abstractState, bin *cgBinary, rva
 	return facts
 }
 
-func describeCallTarget(inst x86asm.Inst, bin *cgBinary, rva uint32) string {
+func describeCallTarget(inst x86asm.Inst, state abstractState, bin *cgBinary, rva uint32) string {
 	if len(inst.Args) > 0 {
 		switch arg := inst.Args[0].(type) {
 		case x86asm.Rel:
@@ -712,6 +721,15 @@ func describeCallTarget(inst x86asm.Inst, bin *cgBinary, rva uint32) string {
 				}
 				return fmt.Sprintf("[0x%x]", va)
 			}
+		case x86asm.Reg:
+			value := readRegister(state, arg)
+			if value.kind == 1 && len(value.consts) == 1 {
+				va := value.consts[0]
+				if name, ok := bin.symbols[va]; ok {
+					return fmt.Sprintf("0x%x %s (via %s)", va, name, gprDisplayNameFromReg(arg))
+				}
+				return fmt.Sprintf("0x%x (via %s)", va, gprDisplayNameFromReg(arg))
+			}
 		}
 	}
 	return x86asm.IntelSyntax(inst, bin.imageBase+uint64(rva), nil)
@@ -720,7 +738,8 @@ func describeCallTarget(inst x86asm.Inst, bin *cgBinary, rva uint32) string {
 // executeAbstractInstruction updates the bounded register/stack state. It
 // returns the explicit destination register (when any), its value before the
 // instruction, and whether the instruction wrote it.
-func executeAbstractInstruction(state *abstractState, inst x86asm.Inst, is64 bool, va uint64) (int, int, abstractValue, bool) {
+func executeAbstractInstruction(state *abstractState, inst x86asm.Inst, bin *cgBinary, va uint64) (int, int, abstractValue, bool) {
+	is64 := bin.is64
 	op := strings.ToUpper(inst.Op.String())
 	ptrWidth := 32
 	if is64 {
@@ -749,7 +768,7 @@ func executeAbstractInstruction(state *abstractState, inst x86asm.Inst, is64 boo
 		if len(inst.Args) < 2 {
 			break
 		}
-		value := readOperand(*state, inst.Args[1], is64, va, inst.Len)
+		value := readOperandWithStatic(*state, inst.Args[1], is64, va, inst.Len, width, bin)
 		if hasDst {
 			return writeDst(value)
 		}
@@ -765,12 +784,13 @@ func executeAbstractInstruction(state *abstractState, inst x86asm.Inst, is64 boo
 		return 0, 0, unknownValue(), false
 	case "MOVZX":
 		if len(inst.Args) >= 2 && hasDst {
-			return writeDst(readOperand(*state, inst.Args[1], is64, va, inst.Len))
+			srcWidth := operandWidth(inst.Args[1], inst.MemBytes*8)
+			return writeDst(readOperandWithStatic(*state, inst.Args[1], is64, va, inst.Len, srcWidth, bin))
 		}
 	case "MOVSX", "MOVSXD":
 		if len(inst.Args) >= 2 && hasDst {
-			v := readOperand(*state, inst.Args[1], is64, va, inst.Len)
-			srcWidth := operandWidth(inst.Args[1], inst.DataSize)
+			srcWidth := operandWidth(inst.Args[1], inst.MemBytes*8)
+			v := readOperandWithStatic(*state, inst.Args[1], is64, va, inst.Len, srcWidth, bin)
 			return writeDst(mapConstants(v, func(x uint64) uint64 { return signExtend(x, srcWidth) }))
 		}
 	case "LEA":
@@ -782,7 +802,7 @@ func executeAbstractInstruction(state *abstractState, inst x86asm.Inst, is64 boo
 	case "ADD", "SUB", "AND", "OR", "XOR", "SHL", "SAL", "SHR", "SAR":
 		if len(inst.Args) >= 2 && hasDst {
 			left := readRegister(*state, dstReg)
-			right := readOperand(*state, inst.Args[1], is64, va, inst.Len)
+			right := readOperandWithStatic(*state, inst.Args[1], is64, va, inst.Len, width, bin)
 			if op == "XOR" {
 				if src, ok := inst.Args[1].(x86asm.Reg); ok && src == dstReg {
 					return writeDst(constantValue(0))
@@ -793,11 +813,11 @@ func executeAbstractInstruction(state *abstractState, inst x86asm.Inst, is64 boo
 	case "IMUL":
 		if hasDst {
 			if len(inst.Args) >= 3 {
-				return writeDst(binaryAbstract("IMUL", readOperand(*state, inst.Args[1], is64, va, inst.Len),
-					readOperand(*state, inst.Args[2], is64, va, inst.Len), width))
+				return writeDst(binaryAbstract("IMUL", readOperandWithStatic(*state, inst.Args[1], is64, va, inst.Len, width, bin),
+					readOperandWithStatic(*state, inst.Args[2], is64, va, inst.Len, width, bin), width))
 			}
 			if len(inst.Args) >= 2 {
-				return writeDst(binaryAbstract("IMUL", before, readOperand(*state, inst.Args[1], is64, va, inst.Len), width))
+				return writeDst(binaryAbstract("IMUL", before, readOperandWithStatic(*state, inst.Args[1], is64, va, inst.Len, width, bin), width))
 			}
 		}
 	case "INC", "DEC":
@@ -903,6 +923,57 @@ func readOperand(state abstractState, arg x86asm.Arg, is64 bool, va uint64, inst
 		}
 	}
 	return unknownValue()
+}
+
+func readOperandWithStatic(state abstractState, arg x86asm.Arg, is64 bool, va uint64, instLen, width int, bin *cgBinary) abstractValue {
+	value := readOperand(state, arg, is64, va, instLen)
+	if value.kind != 0 {
+		return value
+	}
+	mem, ok := arg.(x86asm.Mem)
+	if !ok {
+		return value
+	}
+	address := effectiveAddress(state, mem, va, instLen)
+	if address.kind != 1 || len(address.consts) != 1 {
+		return value
+	}
+	if loaded, ok := readStaticConstant(bin, address.consts[0], width); ok {
+		return constantValue(loaded)
+	}
+	return value
+}
+
+func readStaticConstant(bin *cgBinary, va uint64, width int) (uint64, bool) {
+	if width != 8 && width != 16 && width != 32 && width != 64 {
+		return 0, false
+	}
+	if va < bin.imageBase || va-bin.imageBase > 0xFFFFFFFF {
+		return 0, false
+	}
+	rva := uint32(va - bin.imageBase)
+	byteCount := width / 8
+	for _, sec := range bin.staticSections {
+		if rva < sec.rva {
+			continue
+		}
+		off := uint64(rva - sec.rva)
+		if off+uint64(byteCount) > uint64(len(sec.data)) {
+			continue
+		}
+		data := sec.data[off : off+uint64(byteCount)]
+		switch width {
+		case 8:
+			return uint64(data[0]), true
+		case 16:
+			return uint64(binary.LittleEndian.Uint16(data)), true
+		case 32:
+			return uint64(binary.LittleEndian.Uint32(data)), true
+		case 64:
+			return binary.LittleEndian.Uint64(data), true
+		}
+	}
+	return 0, false
 }
 
 func effectiveAddress(state abstractState, mem x86asm.Mem, va uint64, instLen int) abstractValue {
@@ -1175,4 +1246,12 @@ func gprDisplayName(family, width int) string {
 	default:
 		return names64[family]
 	}
+}
+
+func gprDisplayNameFromReg(reg x86asm.Reg) string {
+	family, width, _, ok := gprDescriptor(reg)
+	if !ok {
+		return reg.String()
+	}
+	return gprDisplayName(family, width)
 }

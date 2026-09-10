@@ -237,7 +237,7 @@ Toolbox groups: core (essential edit/read/search) | file (file management/config
 		{Name: "redis", Group: "data", Register: func() { redistool.Register(server) }},
 
 		{Name: "debug", Group: "analysis", Register: func() { debug.Register(server) }},
-		{Name: "analyze", Group: "analysis", Register: func() { analyze.Register(server) }},
+		{Name: "analyze", Group: "analysis", Hint: "binary disassembly and assembly/value search", Register: func() { analyze.Register(server) }},
 		{Name: "codegraph", Group: "analysis", Register: func() { codegraph.Register(server) }},
 		{Name: "memtool", Group: "analysis", Register: func() { memtool.Register(server) }},
 		{Name: "wintool", Group: "windows", Register: func() { wintool.Register(server) }},

@@ -111,8 +111,8 @@ func opCallGraph(input AnalyzeInput) (string, error) {
 	}
 
 	// BFS to build call graph
-	visited := make(map[uint64]int)          // VA -> depth at which visited
-	imports := make(map[uint64][]string)     // caller VA -> imported function names (FF 15)
+	visited := make(map[uint64]int)      // VA -> depth at which visited
+	imports := make(map[uint64][]string) // caller VA -> imported function names (FF 15)
 	var edges []cgEdge
 	type bfsItem struct {
 		va    uint64
@@ -674,14 +674,15 @@ func insertFunc(table []funcRange, rva uint32, sections []cgSection) []funcRange
 
 // cgBinary holds parsed binary info for call graph analysis.
 type cgBinary struct {
-	imageBase    uint64
-	is64         bool
-	arch         string // "x86" or "x64"
-	format       string // "PE", "ELF", "Mach-O"
-	symbols      map[uint64]string
-	execSections []cgSection
-	funcTable    []funcRange
-	closer       func()
+	imageBase      uint64
+	is64           bool
+	arch           string // "x86" or "x64"
+	format         string // "PE", "ELF", "Mach-O"
+	symbols        map[uint64]string
+	execSections   []cgSection
+	staticSections []cgSection // mapped, non-writable bytes safe for constant loads
+	funcTable      []funcRange
+	closer         func()
 }
 
 // cgOpenBinary tries PE, ELF, Mach-O in order and returns a cgBinary.
@@ -727,7 +728,13 @@ func cgOpenPE(path string) (*cgBinary, error) {
 
 	// Load executable sections
 	var execSections []cgSection
+	var staticSections []cgSection
 	for _, s := range f.Sections {
+		if s.Characteristics&0x40000000 != 0 && s.Characteristics&0x80000000 == 0 { // readable, not writable
+			if data, dataErr := s.Data(); dataErr == nil && len(data) > 0 {
+				staticSections = append(staticSections, cgSection{rva: s.VirtualAddress, data: data})
+			}
+		}
 		if s.Characteristics&0x20000000 != 0 { // IMAGE_SCN_MEM_EXECUTE
 			data, err := s.Data()
 			if err != nil {
@@ -781,14 +788,15 @@ func cgOpenPE(path string) (*cgBinary, error) {
 	symbols := peSymbolMap(f, imageBase)
 
 	return &cgBinary{
-		imageBase:    imageBase,
-		is64:         is64,
-		arch:         arch,
-		format:       "PE",
-		symbols:      symbols,
-		execSections: execSections,
-		funcTable:    funcTable,
-		closer:       func() { f.Close() },
+		imageBase:      imageBase,
+		is64:           is64,
+		arch:           arch,
+		format:         "PE",
+		symbols:        symbols,
+		execSections:   execSections,
+		staticSections: staticSections,
+		funcTable:      funcTable,
+		closer:         func() { f.Close() },
 	}, nil
 }
 
@@ -832,7 +840,15 @@ func cgOpenELF(path string) (*cgBinary, error) {
 
 	// Executable sections (SHF_EXECINSTR)
 	var execSections []cgSection
+	var staticSections []cgSection
 	for _, s := range f.Sections {
+		if s.Flags&elf.SHF_ALLOC != 0 && s.Flags&elf.SHF_WRITE == 0 && s.Size > 0 && s.Addr >= imageBase {
+			if data, dataErr := s.Data(); dataErr == nil && len(data) > 0 {
+				if rva64 := s.Addr - imageBase; rva64 <= 0xFFFFFFFF {
+					staticSections = append(staticSections, cgSection{rva: uint32(rva64), data: data})
+				}
+			}
+		}
 		if s.Flags&elf.SHF_EXECINSTR != 0 && s.Size > 0 {
 			data, err := s.Data()
 			if err != nil || len(data) == 0 {
@@ -889,14 +905,15 @@ func cgOpenELF(path string) (*cgBinary, error) {
 	}
 
 	return &cgBinary{
-		imageBase:    imageBase,
-		is64:         is64,
-		arch:         arch,
-		format:       "ELF",
-		symbols:      symbols,
-		execSections: execSections,
-		funcTable:    funcTable,
-		closer:       func() { f.Close() },
+		imageBase:      imageBase,
+		is64:           is64,
+		arch:           arch,
+		format:         "ELF",
+		symbols:        symbols,
+		execSections:   execSections,
+		staticSections: staticSections,
+		funcTable:      funcTable,
+		closer:         func() { f.Close() },
 	}, nil
 }
 
@@ -937,7 +954,15 @@ func cgOpenMachO(path string) (*cgBinary, error) {
 
 	// Executable sections (in __TEXT segment)
 	var execSections []cgSection
+	var staticSections []cgSection
 	for _, s := range f.Sections {
+		if (s.Seg == "__TEXT" || s.Seg == "__DATA_CONST") && s.Size > 0 && s.Addr >= imageBase {
+			if data, dataErr := s.Data(); dataErr == nil && len(data) > 0 {
+				if rva64 := s.Addr - imageBase; rva64 <= 0xFFFFFFFF {
+					staticSections = append(staticSections, cgSection{rva: uint32(rva64), data: data})
+				}
+			}
+		}
 		if s.Seg == "__TEXT" && s.Size > 0 {
 			data, err := s.Data()
 			if err != nil || len(data) == 0 {
@@ -992,14 +1017,15 @@ func cgOpenMachO(path string) (*cgBinary, error) {
 	}
 
 	return &cgBinary{
-		imageBase:    imageBase,
-		is64:         is64,
-		arch:         arch,
-		format:       "Mach-O",
-		symbols:      symbols,
-		execSections: execSections,
-		funcTable:    funcTable,
-		closer:       func() { f.Close() },
+		imageBase:      imageBase,
+		is64:           is64,
+		arch:           arch,
+		format:         "Mach-O",
+		symbols:        symbols,
+		execSections:   execSections,
+		staticSections: staticSections,
+		funcTable:      funcTable,
+		closer:         func() { f.Close() },
 	}, nil
 }
 
@@ -1324,4 +1350,3 @@ func findCallersARM32(sections []cgSection, targetRVA uint32, imageBase uint64, 
 	sort.Slice(callers, func(i, j int) bool { return callers[i] < callers[j] })
 	return callers
 }
-
