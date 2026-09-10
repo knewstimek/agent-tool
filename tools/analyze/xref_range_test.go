@@ -102,7 +102,7 @@ func TestCollectXref64_RIPRelativeMOV32REXAndStore(t *testing.T) {
 		// 44 8B 05 95 0A 01 00 = mov r8d, [rip+0x10a95]
 		{name: "REX r8d load", data: []byte{0x44, 0x8B, 0x05, 0x95, 0x0A, 0x01, 0x00}, want: "MOV r8d"},
 		// 89 05 96 0A 01 00 = mov [rip+0x10a96], eax
-		{name: "r32 store", data: []byte{0x89, 0x05, 0x96, 0x0A, 0x01, 0x00}, want: "MOV [0x140016e9c], eax"},
+		{name: "r32 store", data: []byte{0x89, 0x05, 0x96, 0x0A, 0x01, 0x00}, want: "MOV dword ptr [rip+0x10a96], eax"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -114,6 +114,63 @@ func TestCollectXref64_RIPRelativeMOV32REXAndStore(t *testing.T) {
 				t.Fatalf("xref = %s, want %q", refs[0].line, tt.want)
 			}
 		})
+	}
+}
+
+func TestCollectXref64_GeneralRIPRelativeDecoder(t *testing.T) {
+	const (
+		imageBase = uint64(0x140000000)
+		secRVA    = uint32(0x6400)
+		targetRVA = uint32(0x16e9c)
+	)
+	targets := []xrefTargetRange{
+		testXrefRange(imageBase, targetRVA, targetRVA),
+		testXrefRange(imageBase, targetRVA-1, targetRVA+1),
+	}
+	tests := []struct {
+		name string
+		data []byte
+		want string
+		kind string
+	}{
+		// 83 3D 95 0A 01 00 00 = cmp dword ptr [rip+0x10a95], 0
+		{name: "CMP", data: []byte{0x83, 0x3D, 0x95, 0x0A, 0x01, 0x00, 0x00}, want: "CMP", kind: "DATA"},
+		// F3 0F 10 05 94 0A 01 00 = movss xmm0, dword ptr [rip+0x10a94]
+		{name: "prefixed MOVSS", data: []byte{0xF3, 0x0F, 0x10, 0x05, 0x94, 0x0A, 0x01, 0x00}, want: "MOVSS", kind: "DATA"},
+		// 66 8B 05 95 0A 01 00 = mov ax, word ptr [rip+0x10a95]
+		{name: "word MOV", data: []byte{0x66, 0x8B, 0x05, 0x95, 0x0A, 0x01, 0x00}, want: "MOV ax", kind: "MOV"},
+		// 8A 05 96 0A 01 00 = mov al, byte ptr [rip+0x10a96]
+		{name: "byte MOV", data: []byte{0x8A, 0x05, 0x96, 0x0A, 0x01, 0x00}, want: "MOV al", kind: "MOV"},
+		// C7 05 92 0A 01 00 78 56 34 12 = mov dword ptr [rip+0x10a92], 0x12345678
+		{name: "immediate MOV store", data: []byte{0xC7, 0x05, 0x92, 0x0A, 0x01, 0x00, 0x78, 0x56, 0x34, 0x12}, want: "MOV dword ptr", kind: "MOV"},
+		// 0F B6 05 95 0A 01 00 = movzx eax, byte ptr [rip+0x10a95]
+		{name: "MOVZX", data: []byte{0x0F, 0xB6, 0x05, 0x95, 0x0A, 0x01, 0x00}, want: "MOVZX", kind: "DATA"},
+		// 8D 05 96 0A 01 00 = lea eax, [rip+0x10a96]
+		{name: "dword LEA", data: []byte{0x8D, 0x05, 0x96, 0x0A, 0x01, 0x00}, want: "LEA", kind: "LEA"},
+		// FF 15 96 0A 01 00 = call qword ptr [rip+0x10a96]
+		{name: "indirect CALL", data: []byte{0xFF, 0x15, 0x96, 0x0A, 0x01, 0x00}, want: "CALL", kind: "CALL"},
+	}
+	for _, target := range targets {
+		for _, tt := range tests {
+			t.Run(tt.name+"/"+target.label(), func(t *testing.T) {
+				refs, found := collectXref64(tt.data, secRVA, target, 10, 0, nil)
+				if found != 1 || len(refs) != 1 {
+					t.Fatalf("found %d references, want 1: %#v", found, refs)
+				}
+				if refs[0].refType != tt.kind || !strings.Contains(refs[0].line, tt.want) || !strings.Contains(refs[0].line, "0x140016e9c") {
+					t.Fatalf("unexpected decoded xref: %#v", refs[0])
+				}
+			})
+		}
+	}
+}
+
+func TestDecodeXref64RIP_AddressSizeOverrideIsNotRIPRelative(t *testing.T) {
+	// 67 changes ModRM r/m=5 to absolute 32-bit addressing in 64-bit mode.
+	data := []byte{0x67, 0x8B, 0x05, 0x9C, 0x6E, 0x01, 0x00}
+	target := testXrefRange(0x140000000, 0x16e9c, 0x16e9c)
+	if _, _, ok := decodeXref64RIP(data, 0x6400, target); ok {
+		t.Fatal("address-size override was incorrectly treated as RIP-relative")
 	}
 }
 

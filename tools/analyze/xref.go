@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+
+	"golang.org/x/arch/x86/x86asm"
 )
 
 const (
@@ -76,12 +78,13 @@ func (r xrefTargetRange) label() string {
 // Supports PE, ELF, and Mach-O binaries with x86, x64, ARM64, and ARM32 architectures.
 //
 // Performance: full-scans all executable sections on every call (no caching).
-// This is fast enough in practice (10MB binary in ~10ms) because the scan is
-// simple byte-pattern matching, not instruction-level decoding. Unlike call_graph
-// which collects ALL call targets (high false-positive risk from data bytes),
-// Exact xref matches against a specific target address, so false positives are
-// statistically negligible (~1/2^32 chance per byte). Range-match probability
-// grows with the requested span, so callers should keep ranges task-sized.
+// Direct branches use cheap byte-pattern matching. A ModRM prefilter limits
+// x86asm decoding to possible x64 RIP-relative memory forms, with byte-pattern
+// fallbacks for common instructions if decoding fails. Unlike call_graph, which
+// collects ALL call targets (high false-positive risk from data bytes), exact xref
+// matches against a specific target address, so false positives remain
+// statistically unlikely. Range-match probability grows with the requested span,
+// so callers should keep ranges task-sized.
 func opXref(input AnalyzeInput) (string, error) {
 	if input.TargetVA == "" {
 		return "", fmt.Errorf("target_va is required for xref")
@@ -173,7 +176,7 @@ func opXref(input AnalyzeInput) (string, error) {
 			counts[r.refType]++
 		}
 		sb.WriteString(fmt.Sprintf("%d references to %s (%s):", found, target.label(), archLabel))
-		for _, typ := range []string{"CALL", "JMP", "LEA", "MOV", "PUSH", "Jcc", "BL", "B", "ADRP"} {
+		for _, typ := range []string{"CALL", "JMP", "LEA", "MOV", "DATA", "PUSH", "Jcc", "BL", "B", "ADRP"} {
 			if c, ok := counts[typ]; ok {
 				sb.WriteString(fmt.Sprintf(" %d %s,", c, typ))
 			}
@@ -427,10 +430,31 @@ func xrefFromMachO(f *macho.File) (*xrefBinary, error) {
 func collectXref64(data []byte, secRVA uint32, targetRange xrefTargetRange, maxRes, found int, refs []xrefResult) ([]xrefResult, int) {
 	dataLen := len(data)
 	imageBase := targetRange.imageBase
+	// Scanning every byte intentionally finds code after padding or embedded data,
+	// but a prefixed instruction can also decode again from a later byte. Its end
+	// and resolved target remain identical, which gives us a stable deduplication
+	// key without relying on .pdata function boundaries.
+	seenDecoded := make(map[xrefDecodedKey]struct{})
 
 	for i := 0; i < dataLen && found < maxRes; i++ {
 		instrRVA := secRVA + uint32(i)
 		instrVA := imageBase + uint64(instrRVA)
+
+		// Decode RIP-relative memory operands first so all valid opcodes and
+		// operand sizes are covered. The byte patterns below remain as a fallback
+		// for common forms if x86asm cannot decode a particular byte sequence.
+		if mayContainXref64RIP(data[i:]) {
+			ref, key, ok := decodeXref64RIP(data[i:], instrRVA, targetRange)
+			if ok {
+				if _, duplicate := seenDecoded[key]; duplicate {
+					continue
+				}
+				seenDecoded[key] = struct{}{}
+				refs = append(refs, ref)
+				found++
+				continue
+			}
+		}
 
 		// E8 rel32 -- CALL relative
 		if data[i] == 0xE8 && i+5 <= dataLen {
@@ -616,6 +640,73 @@ func collectXref64(data []byte, secRVA uint32, targetRange xrefTargetRange, maxR
 		}
 	}
 	return refs, found
+}
+
+type xrefDecodedKey struct {
+	endRVA   uint64
+	targetVA uint64
+}
+
+// mayContainXref64RIP cheaply identifies the ModRM shape used by RIP-relative
+// addressing (mod=00, r/m=101). A complete x86 instruction is at most 15 bytes,
+// and the ModRM byte must leave room for its four-byte displacement.
+func mayContainXref64RIP(data []byte) bool {
+	limit := len(data)
+	if limit > 15 {
+		limit = 15
+	}
+	for i := 1; i+4 < limit; i++ {
+		if data[i]&0xC7 == 0x05 {
+			return true
+		}
+	}
+	return false
+}
+
+// decodeXref64RIP decodes one possible instruction start and returns a reference
+// when it has a RIP-relative memory operand that resolves into targetRange.
+func decodeXref64RIP(data []byte, instrRVA uint32, targetRange xrefTargetRange) (xrefResult, xrefDecodedKey, bool) {
+	inst, err := x86asm.Decode(data, 64)
+	if err != nil || inst.Len <= 0 {
+		return xrefResult{}, xrefDecodedKey{}, false
+	}
+
+	for _, arg := range inst.Args {
+		mem, ok := arg.(x86asm.Mem)
+		if !ok || mem.Base != x86asm.RIP {
+			continue
+		}
+		decodedRVA := int64(instrRVA) + int64(inst.Len) + mem.Disp
+		decodedVA, matched := targetRange.containsRVA(decodedRVA)
+		if !matched {
+			continue
+		}
+		instrVA := targetRange.imageBase + uint64(instrRVA)
+		asm := x86asm.IntelSyntax(inst, instrVA, nil)
+		if split := strings.IndexByte(asm, ' '); split > 0 {
+			asm = strings.ToUpper(asm[:split]) + asm[split:]
+		} else {
+			asm = strings.ToUpper(asm)
+		}
+		key := xrefDecodedKey{endRVA: uint64(instrRVA) + uint64(inst.Len), targetVA: decodedVA}
+		refType := "DATA"
+		switch inst.Op {
+		case x86asm.CALL:
+			refType = "CALL"
+		case x86asm.JMP:
+			refType = "JMP"
+		case x86asm.LEA:
+			refType = "LEA"
+		case x86asm.MOV:
+			refType = "MOV"
+		}
+		return xrefResult{
+			refType: refType,
+			line:    fmt.Sprintf("  0x%x: %s  (RIP-relative -> 0x%x)\n", instrVA, asm, decodedVA),
+		}, key, true
+	}
+
+	return xrefResult{}, xrefDecodedKey{}, false
 }
 
 // collectXref32 scans x86 32-bit code for references and collects typed results.
