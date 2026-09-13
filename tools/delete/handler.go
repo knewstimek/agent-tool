@@ -13,9 +13,10 @@ import (
 )
 
 type DeleteInput struct {
-	FilePath string      `json:"file_path,omitempty" jsonschema:"File to delete. Relative paths use workspace/MCP root"`
-	Path     string      `json:"path,omitempty" jsonschema:"Alias for file_path"`
-	DryRun   interface{} `json:"dry_run,omitempty" jsonschema:"Preview deletion without actually removing the file: true or false. Default: false"`
+	FilePath  string      `json:"file_path,omitempty" jsonschema:"File or directory to delete. Relative paths use workspace/MCP root"`
+	Path      string      `json:"path,omitempty" jsonschema:"Alias for file_path"`
+	Recursive interface{} `json:"recursive,omitempty" jsonschema:"Delete a directory and all of its contents: true or false. Required for directory deletion. Default: false"`
+	DryRun    interface{} `json:"dry_run,omitempty" jsonschema:"Preview deletion without actually removing the file: true or false. Default: false"`
 }
 
 type DeleteOutput struct {
@@ -66,9 +67,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*
 		return errorResult(fmt.Sprintf("cannot access file: %v", err))
 	}
 
-	// Directory deletion is not allowed
+	// Directory deletion requires explicit recursive opt-in.
 	if info.IsDir() {
-		return errorResult("directory deletion is not allowed. Only individual files can be deleted")
+		if !common.FlexBool(input.Recursive) {
+			return errorResult("path is a directory; directory deletion requires recursive=true. Use dry_run=true with recursive=true to preview the affected files and directories")
+		}
+		return deleteDirectory(ctx, req, cleaned, common.FlexBool(input.DryRun))
 	}
 
 	// Symlink deletion is not allowed
@@ -164,10 +168,169 @@ func checkDangerousPath(cleaned string) error {
 	return nil
 }
 
+const (
+	maxDeleteItems = 10000
+	maxDeleteDepth = 100
+)
+
+type deleteEntry struct {
+	path  string
+	isDir bool
+}
+
+type deletePlan struct {
+	entries []deleteEntry
+	files   int
+	dirs    int
+	bytes   int64
+}
+
+func deleteDirectory(ctx context.Context, req *mcp.CallToolRequest, cleaned string, dryRun bool) (*mcp.CallToolResult, DeleteOutput, error) {
+	if err := checkDangerousDirectory(ctx, req, cleaned); err != nil {
+		return errorResult(err.Error())
+	}
+
+	plan, err := planDirectoryDelete(cleaned)
+	if err != nil {
+		return errorResult(fmt.Sprintf("cannot safely delete directory: %v", err))
+	}
+
+	if dryRun {
+		msg := fmt.Sprintf("[DRY RUN] would recursively delete: %s (%d files, %d directories, %d bytes)", cleaned, plan.files, plan.dirs, plan.bytes)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, DeleteOutput{Result: msg}, nil
+	}
+
+	// Delete children before parents. Re-check every entry immediately before
+	// removal so a path swapped after the safety scan is not followed.
+	for i := len(plan.entries) - 1; i >= 0; i-- {
+		entry := plan.entries[i]
+		info, err := os.Lstat(entry.path)
+		if err != nil {
+			return errorResult(fmt.Sprintf("recursive delete stopped before %s: path changed after safety scan: %v; some earlier entries may already have been deleted", entry.path, err))
+		}
+		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() != entry.isDir {
+			return errorResult(fmt.Sprintf("recursive delete stopped before %s: file type changed after safety scan; some earlier entries may already have been deleted", entry.path))
+		}
+		if err := os.Remove(entry.path); err != nil {
+			return errorResult(fmt.Sprintf("recursive delete stopped at %s: %v; some earlier entries may already have been deleted", entry.path, err))
+		}
+	}
+
+	msg := fmt.Sprintf("OK: recursively deleted %s (%d files, %d directories, %d bytes)", cleaned, plan.files, plan.dirs, plan.bytes)
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, DeleteOutput{Result: msg}, nil
+}
+
+func planDirectoryDelete(root string) (deletePlan, error) {
+	var plan deletePlan
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", path, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symbolic link found at %s; recursive deletion does not follow or remove symlinks", path)
+		}
+
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return fmt.Errorf("resolve relative path for %s: %w", path, err)
+		}
+		depth := 0
+		if rel != "." {
+			depth = len(strings.Split(filepath.ToSlash(rel), "/"))
+		}
+		if depth > maxDeleteDepth {
+			return fmt.Errorf("directory tree exceeds the maximum depth of %d at %s", maxDeleteDepth, path)
+		}
+		if len(plan.entries) >= maxDeleteItems {
+			return fmt.Errorf("directory tree exceeds the maximum of %d items; narrow the target or remove contents in smaller batches", maxDeleteItems)
+		}
+
+		isDir := info.IsDir()
+		plan.entries = append(plan.entries, deleteEntry{path: path, isDir: isDir})
+		if isDir {
+			plan.dirs++
+		} else {
+			plan.files++
+			plan.bytes += info.Size()
+		}
+		return nil
+	})
+	return plan, err
+}
+
+func checkDangerousDirectory(ctx context.Context, req *mcp.CallToolRequest, target string) error {
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return fmt.Errorf("cannot resolve directory path: %w", err)
+	}
+	absTarget = filepath.Clean(absTarget)
+
+	volumeRoot := string(filepath.Separator)
+	if volume := filepath.VolumeName(absTarget); volume != "" {
+		volumeRoot = volume + string(filepath.Separator)
+	}
+	if samePath(absTarget, volumeRoot) {
+		return fmt.Errorf("refusing to recursively delete filesystem root %s; choose a specific child directory", absTarget)
+	}
+
+	if workspace, err := filepath.Abs(common.RequestWorkspace(ctx, req)); err == nil && pathIsSameOrAncestor(absTarget, workspace) {
+		return fmt.Errorf("refusing to recursively delete the workspace or one of its parents: %s; choose a child directory", absTarget)
+	}
+	if home, err := os.UserHomeDir(); err == nil && pathIsSameOrAncestor(absTarget, home) {
+		return fmt.Errorf("refusing to recursively delete the user home directory or one of its parents: %s; choose a child directory", absTarget)
+	}
+
+	for _, protected := range protectedSystemDirectories() {
+		if pathsOverlap(absTarget, protected) {
+			return fmt.Errorf("refusing to recursively delete protected system path %s (conflicts with %s); choose a non-system directory", absTarget, protected)
+		}
+	}
+	return nil
+}
+
+func protectedSystemDirectories() []string {
+	if runtime.GOOS == "windows" {
+		paths := []string{os.Getenv("WINDIR"), os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)"), os.Getenv("ProgramData")}
+		if paths[0] == "" {
+			paths[0] = `C:\Windows`
+		}
+		return paths
+	}
+	return []string{"/etc", "/boot", "/sbin", "/usr", "/proc", "/sys", "/dev", "/var", "/run", "/lib", "/lib64", "/root"}
+}
+
+func pathsOverlap(a, b string) bool {
+	if b == "" {
+		return false
+	}
+	return pathIsSameOrAncestor(a, b) || pathIsSameOrAncestor(b, a)
+}
+
+func pathIsSameOrAncestor(candidate, path string) bool {
+	candidate = filepath.Clean(candidate)
+	path = filepath.Clean(path)
+	if samePath(candidate, path) {
+		return true
+	}
+	rel, err := filepath.Rel(candidate, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+func samePath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name:        "delete",
-		Description: "Deletes a single file. Safety: no directory/symlink deletion, no path traversal, no system files, TOCTOU protection. Use dry_run=true to preview.",
+		Description: "Deletes a file or directory. Directory deletion requires recursive=true and is limited to 10,000 items/100 levels. Safety: no symlinks, path traversal, workspace roots, home directories, or system paths. Use dry_run=true to preview.",
 	}, Handle)
 }
 

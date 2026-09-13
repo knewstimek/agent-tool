@@ -97,7 +97,7 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - file_info: File metadata (size, encoding, mixed line-ending counts, indentation, line count)
 - diff: Compare two files (unified diff output)
 - patch: Apply unified diff patch to a file (supports dry_run)
-- delete: Delete a single file (no directories, no symlinks, supports dry_run)
+- delete: Delete a file or directory (directories require recursive=true; supports dry_run)
 - rename: Rename or move a file/directory (atomic, supports dry_run)
 - sysinfo: System information (OS, CPU, RAM, disk, uptime, CPU usage measurement)
 - find_tools: Discover installed dev tools (compilers, runtimes, build systems)
@@ -355,10 +355,13 @@ take the ending of the line they replace.
 Parameters: file_path, patch, dry_run
 
 ## delete
-Delete a single file safely.
-Safety: no directory deletion, no symlinks, no path traversal (..).
-Use dry_run=true to preview what would be deleted.
-Parameters: file_path, dry_run
+Delete a file or directory safely. Directory deletion requires recursive=true.
+Recursive deletion is limited to 10,000 items and 100 directory levels. It
+refuses filesystem roots, the workspace root, the user home directory, system
+paths, and trees containing symlinks. Errors explain why deletion stopped and
+whether a partial deletion may have occurred.
+Use dry_run=true with recursive=true to preview file/directory counts and bytes.
+Parameters: file_path, recursive, dry_run
 
 ## rename
 Rename or move a file/directory. Uses os.Rename (atomic operation).

@@ -59,7 +59,7 @@ Local relative paths resolve against an explicit workspace, then the MCP client 
 | **Decompress** | Extract zip / tar.gz archives (Zip Slip/Bomb protection) | ✅ |
 | **Backup** | Timestamped zip backup with exclude patterns. dry_run preview with directory stats, pattern match counts, and largest files | ✅ |
 | **ConvertEncoding** | Convert file encoding (EUC-KR ↔ UTF-8, add/remove BOM, etc.) | ✅ |
-| **Delete** | Safe single-file deletion (no directories, no symlinks, system path protection, dry_run) | ✅ |
+| **Delete** | Safe file/directory deletion. Directories require `recursive=true`; 10,000-item/100-level limits, protected roots, symlink blocking, and dry_run preview | ✅ |
 | **Rename** | Atomic file/directory rename or move (dry_run) | ✅ |
 | **SysInfo** | System information — OS, CPU, RAM, disk, uptime, CPU usage measurement | ✅ |
 | **FindTools** | Discover installed dev tools — compilers, runtimes, build systems (Go, .NET, Node, Python, Java, Rust, C/C++, etc.). Searches PATH, env vars, and known locations (~/bin, snap, scoop, Homebrew, SDKMAN, nvm, fnm, pyenv) | ✅ |
