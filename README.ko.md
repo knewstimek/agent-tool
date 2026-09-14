@@ -58,7 +58,7 @@ tool_operation="execute")`로 한 operation에 필요한 필드와 required 목�
 | **Decompress** | zip / tar.gz 해제 (Zip Slip/Bomb 보호) | ✅ |
 | **Backup** | 타임스탬프 zip 백업 (제외 패턴 지원). dry_run 미리보기 — 디렉토리별 집계, 패턴별 매칭 수, 큰 파일 목록 | ✅ |
 | **ConvertEncoding** | 파일 인코딩 변환 (EUC-KR ↔ UTF-8, BOM 추가/제거 등) | ✅ |
-| **Delete** | 안전한 파일/디렉토리 삭제. 디렉토리는 `recursive=true` 필요, 10,000개/100단계 제한, 보호 경로·심볼릭링크 차단, dry_run 미리보기 | ✅ |
+| **Delete** | 안전한 파일/디렉토리 삭제와 최대 100개 `file_paths` 일괄 처리. 디렉토리는 `recursive=true` 필요, 보호 경로·심볼릭링크 차단, 오류 제한, dry_run 미리보기 | ✅ |
 | **Rename** | 원자적 파일/디렉토리 이름 변경 및 이동 (dry_run) | ✅ |
 | **SysInfo** | 시스템 정보 — OS, CPU, RAM, 디스크, 업타임, CPU 사용률 측정 | ✅ |
 | **FindTools** | 설치된 개발 도구 탐색 — 컴파일러, 런타임, 빌드 시스템 (Go, .NET, Node, Python, Java, Rust, C/C++ 등). PATH, 환경변수, 알려진 경로 탐색 (~/bin, snap, scoop, Homebrew, SDKMAN, nvm, fnm, pyenv) | ✅ |

@@ -14,6 +14,7 @@ import (
 
 type DeleteInput struct {
 	FilePath  string      `json:"file_path,omitempty" jsonschema:"File or directory to delete. Relative paths use workspace/MCP root"`
+	FilePaths []string    `json:"file_paths,omitempty" jsonschema:"Files or directories to delete in one batch. Maximum 100. Cannot be combined with file_path or path"`
 	Path      string      `json:"path,omitempty" jsonschema:"Alias for file_path"`
 	Recursive interface{} `json:"recursive,omitempty" jsonschema:"Delete a directory and all of its contents: true or false. Required for directory deletion. Default: false"`
 	DryRun    interface{} `json:"dry_run,omitempty" jsonschema:"Preview deletion without actually removing the file: true or false. Default: false"`
@@ -21,9 +22,19 @@ type DeleteInput struct {
 
 type DeleteOutput struct {
 	Result string `json:"result"`
+	files  int
+	dirs   int
+	bytes  int64
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*mcp.CallToolResult, DeleteOutput, error) {
+	if len(input.FilePaths) > 0 {
+		return handleBatch(ctx, req, input)
+	}
+	return handleSingle(ctx, req, input)
+}
+
+func handleSingle(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*mcp.CallToolResult, DeleteOutput, error) {
 	if input.FilePath == "" {
 		input.FilePath = input.Path
 	}
@@ -85,7 +96,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*
 		msg := fmt.Sprintf("[DRY RUN] would delete: %s (%d bytes)", cleaned, info.Size())
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: msg}},
-		}, DeleteOutput{Result: msg}, nil
+		}, DeleteOutput{Result: msg, files: 1, bytes: info.Size()}, nil
 	}
 
 	// [FIX #1] TOCTOU mitigation: re-check file state right before deletion
@@ -105,7 +116,108 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*
 	msg := fmt.Sprintf("OK: deleted %s (%d bytes)", cleaned, info.Size())
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
-	}, DeleteOutput{Result: msg}, nil
+	}, DeleteOutput{Result: msg, files: 1, bytes: info.Size()}, nil
+}
+
+const (
+	maxBatchPaths  = 100
+	maxBatchErrors = 10
+)
+
+func handleBatch(ctx context.Context, req *mcp.CallToolRequest, input DeleteInput) (*mcp.CallToolResult, DeleteOutput, error) {
+	if input.FilePath != "" || input.Path != "" {
+		return errorResult("file_paths cannot be combined with file_path or path; use either one single-path field or file_paths")
+	}
+	if len(input.FilePaths) > maxBatchPaths {
+		return errorResult(fmt.Sprintf("file_paths contains %d paths; maximum is %d. Split the request into smaller batches", len(input.FilePaths), maxBatchPaths))
+	}
+
+	resolved := make([]string, len(input.FilePaths))
+	seen := make(map[string]int, len(input.FilePaths))
+	for i, path := range input.FilePaths {
+		if strings.TrimSpace(path) == "" {
+			return errorResult(fmt.Sprintf("file_paths[%d] is empty; provide a file or directory path", i))
+		}
+		cleaned, err := common.ResolveRequestPath(ctx, req, path)
+		if err != nil {
+			return errorResult(fmt.Sprintf("cannot resolve file_paths[%d] %q: %v", i, path, err))
+		}
+		key := filepath.Clean(cleaned)
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if previous, ok := seen[key]; ok {
+			return errorResult(fmt.Sprintf("file_paths[%d] duplicates file_paths[%d]: %s; remove the duplicate and retry", i, previous, cleaned))
+		}
+		seen[key] = i
+		resolved[i] = cleaned
+	}
+
+	for i := 0; i < len(resolved); i++ {
+		for j := i + 1; j < len(resolved); j++ {
+			if pathIsSameOrAncestor(resolved[i], resolved[j]) || pathIsSameOrAncestor(resolved[j], resolved[i]) {
+				return errorResult(fmt.Sprintf("file_paths[%d] and file_paths[%d] overlap (%s and %s); remove the parent or child target to avoid deleting the same tree twice", i, j, resolved[i], resolved[j]))
+			}
+		}
+	}
+
+	var succeeded, files, dirs int
+	var bytes int64
+	failures := make([]string, 0)
+	for i, path := range resolved {
+		result, out, err := handleSingle(ctx, req, DeleteInput{
+			FilePath:  path,
+			Recursive: input.Recursive,
+			DryRun:    input.DryRun,
+		})
+		if err != nil || result.IsError {
+			if len(failures) < maxBatchErrors {
+				reason := out.Result
+				if err != nil {
+					reason = err.Error()
+				}
+				failures = append(failures, fmt.Sprintf("- file_paths[%d] %s: %s", i, input.FilePaths[i], reason))
+			}
+			continue
+		}
+		succeeded++
+		files += out.files
+		dirs += out.dirs
+		bytes += out.bytes
+	}
+
+	failed := len(input.FilePaths) - succeeded
+	dryRun := common.FlexBool(input.DryRun)
+	var summary string
+	if dryRun {
+		summary = fmt.Sprintf("[DRY RUN] %d/%d targets passed validation (%d files, %d directories, %s); %d errors", succeeded, len(input.FilePaths), files, dirs, formatBatchBytes(bytes), failed)
+	} else if failed == 0 {
+		summary = fmt.Sprintf("OK: deleted %d/%d targets (%d files, %d directories, %s); 0 errors", succeeded, len(input.FilePaths), files, dirs, formatBatchBytes(bytes))
+	} else {
+		summary = fmt.Sprintf("PARTIAL: deleted %d/%d targets (%d files, %d directories, %s); %d errors", succeeded, len(input.FilePaths), files, dirs, formatBatchBytes(bytes), failed)
+	}
+	if len(failures) > 0 {
+		summary += "\n" + strings.Join(failures, "\n")
+	}
+	if failed > len(failures) {
+		summary += fmt.Sprintf("\n... %d additional errors omitted; retry them in a smaller batch for details", failed-len(failures))
+	}
+
+	output := DeleteOutput{Result: summary, files: files, dirs: dirs, bytes: bytes}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: summary}},
+		IsError: failed > 0,
+	}, output, nil
+}
+
+func formatBatchBytes(bytes int64) string {
+	if bytes >= 1024*1024 {
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+	}
+	if bytes >= 1024 {
+		return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
+	}
+	return fmt.Sprintf("%d bytes", bytes)
 }
 
 // checkWindowsReserved blocks Windows reserved device names and ADS paths.
@@ -197,7 +309,7 @@ func deleteDirectory(ctx context.Context, req *mcp.CallToolRequest, cleaned stri
 
 	if dryRun {
 		msg := fmt.Sprintf("[DRY RUN] would recursively delete: %s (%d files, %d directories, %d bytes)", cleaned, plan.files, plan.dirs, plan.bytes)
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, DeleteOutput{Result: msg}, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, DeleteOutput{Result: msg, files: plan.files, dirs: plan.dirs, bytes: plan.bytes}, nil
 	}
 
 	// Delete children before parents. Re-check every entry immediately before
@@ -217,7 +329,7 @@ func deleteDirectory(ctx context.Context, req *mcp.CallToolRequest, cleaned stri
 	}
 
 	msg := fmt.Sprintf("OK: recursively deleted %s (%d files, %d directories, %d bytes)", cleaned, plan.files, plan.dirs, plan.bytes)
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, DeleteOutput{Result: msg}, nil
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, DeleteOutput{Result: msg, files: plan.files, dirs: plan.dirs, bytes: plan.bytes}, nil
 }
 
 func planDirectoryDelete(root string) (deletePlan, error) {
@@ -330,7 +442,7 @@ func samePath(a, b string) bool {
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name:        "delete",
-		Description: "Deletes a file or directory. Directory deletion requires recursive=true and is limited to 10,000 items/100 levels. Safety: no symlinks, path traversal, workspace roots, home directories, or system paths. Use dry_run=true to preview.",
+		Description: "Deletes one file/directory or up to 100 targets with file_paths. Directory deletion requires recursive=true and is limited to 10,000 items/100 levels per target. Batch results are compactly aggregated. Safety: no symlinks, path traversal, workspace roots, home directories, or system paths. Use dry_run=true to preview.",
 	}, Handle)
 }
 
