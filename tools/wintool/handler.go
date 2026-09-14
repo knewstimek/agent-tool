@@ -33,9 +33,9 @@ type WintoolInput struct {
 	Text string `json:"text,omitempty" jsonschema:"Text for type/settext operations"`
 
 	// send (raw SendMessage/PostMessage)
-	Msg    uint32 `json:"msg,omitempty" jsonschema:"Window message ID (e.g. 16 for WM_CLOSE, 274 for WM_SYSCOMMAND). For send"`
-	WParam uint64 `json:"wparam,omitempty" jsonschema:"WPARAM value for send operation"`
-	LParam int64  `json:"lparam,omitempty" jsonschema:"LPARAM value for send operation"`
+	Msg    uint32      `json:"msg,omitempty" jsonschema:"Window message ID (e.g. 16 for WM_CLOSE, 274 for WM_SYSCOMMAND). For send"`
+	WParam uint64      `json:"wparam,omitempty" jsonschema:"WPARAM value for send operation"`
+	LParam int64       `json:"lparam,omitempty" jsonschema:"LPARAM value for send operation"`
 	Post   interface{} `json:"post,omitempty" jsonschema:"Use PostMessage instead of SendMessage (async): true or false. Default: false"`
 
 	// show
@@ -123,15 +123,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WintoolInput) (
 // Register adds the wintool to the MCP server.
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
-		Name: "wintool",
-		Description: `Windows GUI automation tool for finding, inspecting, and controlling windows.
-Find windows by title/class/PID, enumerate child controls, capture screenshots (base64 PNG),
-read clipboard images, read/set text, click, type, send raw messages, show/hide/minimize/maximize, move/resize, close, focus.
-Windows only. macOS and Linux are not supported.
-Operations: list, tree, find, inspect, screenshot, clipboard, gettext, settext, click, type, send, show, move, close, focus.
-clipboard: reads image from system clipboard and saves as PNG temp file. Use after Win+Shift+S or Copy.
-type: sends keyboard input. Auto-detects console windows (ConsoleWindowClass) and uses WriteConsoleInput.
-Tip: type + send(msg=WM_KEYDOWN, wparam=VK_RETURN) can inject commands into other terminal/IDE sessions. Works with Electron (VSCode) too.`,
+		Name:        "wintool",
+		Description: `Windows-only GUI automation: find/inspect windows, screenshots, clipboard images, text, mouse/keyboard input, messages, visibility, geometry, close, and focus. clipboard saves the current image as PNG; screenshot returns base64 PNG unless save_path is set.`,
 	}, Handle)
 }
 

@@ -72,7 +72,8 @@ func helpOverview() string {
 
 agent-tool provides encoding-aware and indentation-aware file tools.
 It auto-detects file encoding and indentation style, preserving them across edits.
-The compact core profile is loaded by default. Use toolbox operation=describe to
+The compact core profile is loaded by default; core-lite exposes only
+read/write/edit/grep/toolbox. Use toolbox operation=describe to
 load one non-core tool's instructions/schema, then operation=call to invoke it.
 compact=true with tool_operation limits describe to one operation; reuse its
 schema_handle to receive only an unchanged acknowledgement.

@@ -37,16 +37,16 @@ const maxImageSize = 20 * 1024 * 1024
 const readHashThreshold = 10 * 1024 * 1024 // 10MB
 
 type ReadInput struct {
-	FilePath       string `json:"file_path,omitempty" jsonschema:"Absolute or workspace-relative path to the file to read"`
-	Path           string `json:"path,omitempty" jsonschema:"Compatibility alias for file_path; prefer file_path"`
-	Offset         any    `json:"offset,omitempty" jsonschema:"Line offset. Integer (1-based, negative=from end), string range 'start-end', or [start,end] array. Default: 1"`
-	Limit          *int   `json:"limit,omitempty" jsonschema:"Maximum lines to return. Default: 400. Set 0 or all=true to remove the line limit; the character budget still applies"`
-	StartLine      *int   `json:"start_line,omitempty" jsonschema:"Compatibility alias for offset; prefer offset"`
-	EndLine        *int   `json:"end_line,omitempty" jsonschema:"Inclusive end line used with start_line"`
-	All            bool   `json:"all,omitempty" jsonschema:"Remove the default line limit. The max_output_chars safety budget still applies. Default: false"`
-	MaxOutputChars int    `json:"max_output_chars,omitempty" jsonschema:"Maximum returned text characters. Default: 32768, Max: 131072"`
-	MaxLineChars   int    `json:"max_line_chars,omitempty" jsonschema:"Maximum characters returned from one line. Default: 4000, Max: 32768"`
-	IncludeHash    *bool  `json:"include_hash,omitempty" jsonschema:"Include SHA-256 for optimistic edit concurrency. Default: true"`
+	FilePath       string `json:"file_path,omitempty" jsonschema:"Absolute or workspace/MCP-root-relative file path"`
+	Path           string `json:"path,omitempty" jsonschema:"Alias for file_path"`
+	Offset         any    `json:"offset,omitempty" jsonschema:"Start line: 1-based integer, negative from end, 'start-end', or [start,end]; default 1"`
+	Limit          *int   `json:"limit,omitempty" jsonschema:"Line limit; default 400. Use 0 or all=true for no line cap"`
+	StartLine      *int   `json:"start_line,omitempty" jsonschema:"Alias for offset"`
+	EndLine        *int   `json:"end_line,omitempty" jsonschema:"Inclusive end with start_line"`
+	All            bool   `json:"all,omitempty" jsonschema:"Disable line cap; character cap remains"`
+	MaxOutputChars int    `json:"max_output_chars,omitempty" jsonschema:"Output character cap; default 32768, max 131072"`
+	MaxLineChars   int    `json:"max_line_chars,omitempty" jsonschema:"Per-line character cap; default 4000, max 32768"`
+	IncludeHash    *bool  `json:"include_hash,omitempty" jsonschema:"Include SHA-256; default true"`
 }
 
 type ReadOutput struct {
@@ -369,16 +369,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
-		Name: "read",
-		Description: `Reads a file and returns its contents with line numbers.
-Encoding-aware: auto-detects file encoding (UTF-8, EUC-KR, Shift-JIS, etc.).
-Image files (PNG, JPG, GIF, BMP, WebP, TIFF, ICO) are returned as ImageContent (base64).
-SVG files are returned as text. Supports offset/limit for reading specific line ranges.
-Text defaults to 400 lines and 32768 characters; use offset/limit to continue.
-Every text result ends with total line count, truncation state, and next_offset when more is available.
-Negative offset reads from end (e.g. offset=-5 reads last 5 lines).
-Offset accepts integer, string range "100-200", or [start, end] array.
-Accepts "path" as alias for "file_path". Relative paths use the configured workspace, MCP client root, or server CWD in that order.`,
+		Name:        "read",
+		Description: `Read text with line numbers or return raster images as ImageContent. Detects common encodings; SVG stays text. Text is bounded and reports truncation/next_offset. Use offset/limit to page; relative paths use the workspace or MCP root.`,
 	}, Handle)
 }
 

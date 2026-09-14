@@ -312,14 +312,8 @@ func handleJobOperation(op string, input SSHInput) (*mcp.CallToolResult, SSHOutp
 
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
-		Name: "ssh",
-		Description: `Execute commands on a remote server via SSH.
-Supports password and key-based authentication. SSH agent is used as fallback on Unix.
-Sessions are pooled only when host, user, authentication identity, host-key policy, and jump route all match.
-Idle sessions expire after 30 minutes. Foreground output defaults to 32768 bytes and reports truncation explicitly; output_mode selects head_tail, head, or tail retention.
-Use connection_profile for a named local profile or reuse the returned connection_id for 30 minutes. quiet suppresses banners, echo_command controls command echoing, and result_only returns compact stdout/stderr/exit_code JSON.
-For long commands, use background=true (or operation=start), then poll with operation=status/tail and job_id; operation=cancel stops the job.
-Supports IPv6 addresses and ProxyJump (jump_host) for reaching servers through bastion hosts.`,
+		Name:        "ssh",
+		Description: `Execute SSH commands with password, key, agent, IPv6, and ProxyJump support. Prefer a local connection_profile or reuse connection_id; matching sessions pool for 30 minutes. Output is bounded. For long commands use start/background, then status/tail/cancel with job_id.`,
 	}, Handle)
 }
 

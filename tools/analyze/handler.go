@@ -230,31 +230,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 // Register adds the analyze tool to the MCP server.
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
-		Name: "analyze",
-		Description: `Static binary analysis tool for reverse engineering and debugging.
-Operations: disassemble (x86/x64/ARM/ARM64 disassembly, stop_at_ret for function-scoped),
-instruction_search (semantic x86/x64 mnemonic/register/immediate search across executable sections, CFG confidence, bounded value tracing to CALL/tail-call arguments),
-Use instruction_search instead of pattern_search when the request names assembly instructions, registers, operands, constants, producers, or values passed to a call; no byte encoding is needed. Filter a consumer compactly with immediate="0x327", call_target="DeviceApi" (defaults findings="call").
-pe_info (PE header/sections/imports/exports),
-elf_info (ELF header/sections/symbols), macho_info (Mach-O header/segments/symbols),
-strings (extract printable strings from binary), hexdump (hex+ASCII view),
-pattern_search (hex byte pattern with ?? wildcards, shows section names for PE),
-entropy (Shannon entropy per section),
-bin_diff (two-file byte comparison), resource_info (PE resources and version info),
-imphash (PE import hash for malware classification), rich_header (PE build tool fingerprint),
-overlay_detect (detect appended data after last section), dwarf_info (debug symbol info),
-xref (find all code references to a target address or optional inclusive range in PE/ELF/Mach-O; supports x86/x64/ARM64/ARM32),
-function_at (find function boundaries via PE .pdata or heuristic prologue/epilogue scan),
-call_graph (static call graph from a root function; PE/ELF/Mach-O, x86/x64/ARM64/ARM32),
-follow_ptr (follow pointer chain in PE with symbol annotation, circular reference detection),
-rtti_dump (parse MSVC RTTI from vtable: demangled class name + base classes, pSelf validation),
-struct_layout (dump memory region as structured layout with symbol/section annotation),
-vtable_scan (scan PE .rdata for all vtables with RTTI -- auto-discovers C++ classes).
-Pure Go implementation -- no external tools needed. Supports x86, x64, ARM, ARM64.
-For PE files: use 'va' parameter instead of 'offset' for auto VA display, symbol annotation, and function boundary detection.
-PE strings/pattern_search automatically show VA alongside file offsets.
-PE import output supports result_offset/max_results paging and max_output_chars bounding.
-For runtime debugging, use the debug tool instead.`,
+		Name:        "analyze",
+		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, and vtables. Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Prefer va for PE addresses. Use debug for runtime inspection.`,
 	}, Handle)
 }
 

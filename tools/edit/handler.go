@@ -15,16 +15,16 @@ import (
 
 // EditInput is the input parameter for the Edit tool.
 type EditInput struct {
-	FilePath     string      `json:"file_path,omitempty" jsonschema:"File to edit. Relative paths use the configured workspace or MCP client root"`
+	FilePath     string      `json:"file_path,omitempty" jsonschema:"File path; relative to workspace/MCP root"`
 	Path         string      `json:"path,omitempty" jsonschema:"Alias for file_path"`
 	OldString    string      `json:"old_string,omitempty" jsonschema:"Exact text to find in the file"`
-	NewString    string      `json:"new_string,omitempty" jsonschema:"Replacement text (must differ from old_string)"`
+	NewString    string      `json:"new_string,omitempty" jsonschema:"Replacement text; must differ from old_string"`
 	OldContent   string      `json:"old_content,omitempty" jsonschema:"Alias for old_string"`
 	NewContent   string      `json:"new_content,omitempty" jsonschema:"Alias for new_string"`
-	ReplaceAll   interface{} `json:"replace_all,omitempty" jsonschema:"Replace all occurrences instead of just the first: true or false. Default: false"`
-	DryRun       interface{} `json:"dry_run,omitempty" jsonschema:"Preview changes without modifying the file: true or false. Default: false"`
-	IndentStyle  string      `json:"indent_style,omitempty" jsonschema:"Override indentation style. Values: tabs or spaces-N (e.g. spaces-4). Empty = auto-detect (default)"`
-	ExpectedHash string      `json:"expected_hash,omitempty" jsonschema:"Optional SHA-256 hash of the file. If provided and mismatched, edit is rejected (optimistic concurrency)."`
+	ReplaceAll   interface{} `json:"replace_all,omitempty" jsonschema:"Replace every match; default false"`
+	DryRun       interface{} `json:"dry_run,omitempty" jsonschema:"Preview only; default false"`
+	IndentStyle  string      `json:"indent_style,omitempty" jsonschema:"tabs or spaces-N; default auto-detect"`
+	ExpectedHash string      `json:"expected_hash,omitempty" jsonschema:"Expected SHA-256; mismatch rejects edit"`
 }
 
 // EditOutput is the output of the Edit tool.
@@ -145,13 +145,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 // Register registers the Edit tool with the MCP server.
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
-		Name: "edit",
-		Description: `Replaces old_string with new_string in the specified file.
-Smart indentation: auto-converts between tabs and spaces to match the file's style.
-Encoding-aware: preserves original file encoding (UTF-8, EUC-KR, Shift-JIS, UTF-8 BOM, etc.).
-Line-ending aware: matches old_string regardless of CRLF/LF, and inserted lines follow the newline style of the region being edited (mixed-newline files stay intact).
-Reads .editorconfig for indentation settings.
-Use dry_run=true to preview changes without modifying the file.`,
+		Name:        "edit",
+		Description: `Replace exact text in a file. Preserves encoding and local line endings, adapts indentation using the file and .editorconfig, and supports dry-run plus hash-guarded edits.`,
 	}, Handle)
 }
 

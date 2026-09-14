@@ -33,18 +33,18 @@ type Manager struct {
 }
 
 type Input struct {
-	Operation      string         `json:"operation,omitempty" jsonschema:"Operation: list (default), describe, call, output, enable, disable, profile. Prefer describe/call because they work even when the MCP client ignores dynamic tool-list changes"`
-	Tools          []string       `json:"tools,omitempty" jsonschema:"Individual tool names to enable or disable"`
-	Groups         []string       `json:"groups,omitempty" jsonschema:"Tool groups to enable or disable: core, file, coding, system, remote, data, analysis, windows"`
-	Profile        string         `json:"profile,omitempty" jsonschema:"Profile for operation=profile: core, coding, remote, analysis, full"`
-	Tool           string         `json:"tool,omitempty" jsonschema:"Single tool name for operation=describe or call"`
-	Arguments      map[string]any `json:"arguments,omitempty" jsonschema:"Target tool arguments for operation=call. Use operation=describe first when the schema is unknown"`
-	OutputID       string         `json:"output_id,omitempty" jsonschema:"Preserved raw command output ID for operation=output"`
-	OutputOffset   int            `json:"output_offset,omitempty" jsonschema:"Character offset for operation=output paging. Default: 0"`
-	OutputMaxChars int            `json:"output_max_chars,omitempty" jsonschema:"Maximum raw-output characters returned by operation=output. Default: 32768, Max: 130048"`
-	Compact        bool           `json:"compact,omitempty" jsonschema:"Return a reduced input schema: true or false. Pair with tool_operation for operation-specific fields"`
-	ToolOperation  string         `json:"tool_operation,omitempty" jsonschema:"Target tool operation for compact describe, for example execute or upload"`
-	SchemaHandle   string         `json:"schema_handle,omitempty" jsonschema:"Handle returned by an earlier describe; matching handles return only an unchanged acknowledgement"`
+	Operation      string         `json:"operation,omitempty" jsonschema:"list (default), describe, call, output, enable, disable, or profile"`
+	Tools          []string       `json:"tools,omitempty" jsonschema:"Tool names for enable/disable"`
+	Groups         []string       `json:"groups,omitempty" jsonschema:"Groups for enable/disable: core, file, coding, system, remote, data, analysis, windows"`
+	Profile        string         `json:"profile,omitempty" jsonschema:"Profile to add; core-lite, core, coding, remote, analysis, or full. core-lite is smallest at startup"`
+	Tool           string         `json:"tool,omitempty" jsonschema:"Target tool for describe/call"`
+	Arguments      map[string]any `json:"arguments,omitempty" jsonschema:"Target arguments for call; describe first if unknown"`
+	OutputID       string         `json:"output_id,omitempty" jsonschema:"Raw output ID for output"`
+	OutputOffset   int            `json:"output_offset,omitempty" jsonschema:"Output character offset; default 0"`
+	OutputMaxChars int            `json:"output_max_chars,omitempty" jsonschema:"Output character limit; default 32768, max 130048"`
+	Compact        bool           `json:"compact,omitempty" jsonschema:"Return a reduced describe schema"`
+	ToolOperation  string         `json:"tool_operation,omitempty" jsonschema:"Operation-specific compact schema, e.g. execute"`
+	SchemaHandle   string         `json:"schema_handle,omitempty" jsonschema:"Prior handle; short acknowledgement if unchanged"`
 }
 
 type Output struct {
@@ -66,23 +66,18 @@ func NewManager(server *mcp.Server, specs []Spec, version ...string) *Manager {
 }
 
 func (m *Manager) EnableProfile(profile string) error {
-	groups, ok := profileGroups(strings.ToLower(strings.TrimSpace(profile)))
+	names, groups, ok := profileSelection(strings.ToLower(strings.TrimSpace(profile)))
 	if !ok {
-		return fmt.Errorf("unknown profile %q (use core, coding, remote, analysis, or full)", profile)
+		return fmt.Errorf("unknown profile %q (use core-lite, core, coding, remote, analysis, or full)", profile)
 	}
-	_, err := m.change(true, nil, groups)
+	_, err := m.change(true, names, groups)
 	return err
 }
 
 func (m *Manager) RegisterTool() {
 	common.SafeAddTool(m.server, &mcp.Tool{
-		Name: "toolbox",
-		Description: `Discover and call any AgentTool capability without loading every tool schema into the model context.
-Use operation=describe with tool=<name> to fetch one tool's instructions and input schema, then operation=call with tool=<name> and arguments={...} to invoke it. This gateway works even when the MCP client ignores tools/list_changed.
-For smaller descriptions, set compact=true and tool_operation=<target operation>. Re-send the returned schema_handle to get a short acknowledgement when that tool/version schema is unchanged.
-Use operation=output with output_id=<raw_output_id> to retrieve bounded raw command output preserved after diagnostic compaction. Large records report next_offset for paging and expire after 30 minutes.
-Use operation=list to see active and available tools. enable/disable/profile also expose direct tool bindings on clients that refresh dynamically.
-Profiles: core (compact file/search tools), coding, remote, analysis, full.`,
+		Name:        "toolbox",
+		Description: `Discover and call tools without loading every schema. Use describe, preferably compact with tool_operation, then call with arguments. Reuse schema_handle. output retrieves preserved paged command output. list shows tools; enable/disable/profile manage direct bindings. Profiles: core-lite, core, coding, remote, analysis, full.`,
 	}, m.Handle)
 }
 
@@ -106,12 +101,12 @@ func (m *Manager) Handle(ctx context.Context, req *mcp.CallToolRequest, input In
 	case "disable":
 		changed, err = m.change(false, input.Tools, input.Groups)
 	case "profile":
-		groups, ok := profileGroups(strings.ToLower(strings.TrimSpace(input.Profile)))
+		names, groups, ok := profileSelection(strings.ToLower(strings.TrimSpace(input.Profile)))
 		if !ok {
-			err = fmt.Errorf("unknown profile %q (use core, coding, remote, analysis, or full)", input.Profile)
+			err = fmt.Errorf("unknown profile %q (use core-lite, core, coding, remote, analysis, or full)", input.Profile)
 			break
 		}
-		changed, err = m.change(true, nil, groups)
+		changed, err = m.change(true, names, groups)
 	default:
 		err = fmt.Errorf("operation must be list, describe, call, output, enable, disable, or profile")
 	}
@@ -353,4 +348,12 @@ func profileGroups(profile string) ([]string, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func profileSelection(profile string) ([]string, []string, bool) {
+	if profile == "core-lite" {
+		return []string{"edit", "grep", "read", "write"}, nil, true
+	}
+	groups, ok := profileGroups(profile)
+	return nil, groups, ok
 }

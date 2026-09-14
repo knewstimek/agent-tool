@@ -7,13 +7,20 @@ import (
 
 	"agent-tool/common"
 	"agent-tool/tools/analyze"
+	copytool "agent-tool/tools/copy"
+	mysqltool "agent-tool/tools/mysql"
 	"agent-tool/tools/sftp"
 	"agent-tool/tools/ssh"
 	"agent-tool/tools/sshkey"
+	"agent-tool/tools/wintool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestProfilesStayCompactAndComposable(t *testing.T) {
+	names, groups, ok := profileSelection("core-lite")
+	if !ok || len(groups) != 0 || strings.Join(names, ",") != "edit,grep,read,write" {
+		t.Fatalf("core-lite profile = names:%v groups:%v ok:%v", names, groups, ok)
+	}
 	if groups, ok := profileGroups("core"); !ok || len(groups) != 1 || groups[0] != "core" {
 		t.Fatalf("core profile = %v, %v", groups, ok)
 	}
@@ -22,6 +29,30 @@ func TestProfilesStayCompactAndComposable(t *testing.T) {
 	}
 	if _, ok := profileGroups("everything-ish"); ok {
 		t.Fatal("unknown profile was accepted")
+	}
+}
+
+func TestCoreLiteEnablesOnlyFrequentTools(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "test"}, nil)
+	registered := map[string]int{}
+	specs := []Spec{
+		{Name: "edit", Group: "core", Register: func() { registered["edit"]++ }},
+		{Name: "grep", Group: "core", Register: func() { registered["grep"]++ }},
+		{Name: "read", Group: "core", Register: func() { registered["read"]++ }},
+		{Name: "write", Group: "core", Register: func() { registered["write"]++ }},
+		{Name: "glob", Group: "core", Register: func() { registered["glob"]++ }},
+	}
+	m := NewManager(server, specs)
+	if err := m.EnableProfile("core-lite"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"edit", "grep", "read", "write"} {
+		if registered[name] != 1 {
+			t.Fatalf("%s registration count = %d", name, registered[name])
+		}
+	}
+	if registered["glob"] != 0 {
+		t.Fatalf("core-lite unexpectedly registered glob: %#v", registered)
 	}
 }
 
@@ -111,6 +142,77 @@ func TestCompactDescribeFiltersByTargetOperationAndReusesHandle(t *testing.T) {
 	for _, unwanted := range []string{`"target_va"`, `"pattern"`, `"file_path_b"`} {
 		if strings.Contains(instructionText, unwanted) {
 			t.Fatalf("instruction_search compact schema retained %s: %s", unwanted, instructionText)
+		}
+	}
+}
+
+func TestCompactDescribeSupportsFrequentDeferredOperations(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "v1"}, nil)
+	m := NewManager(server, []Spec{
+		{Name: "analyze", Group: "analysis", Register: func() { analyze.Register(server) }},
+		{Name: "copy", Group: "file", Register: func() { copytool.Register(server) }},
+		{Name: "mysql", Group: "data", Register: func() { mysqltool.Register(server) }},
+		{Name: "wintool", Group: "windows", Register: func() { wintool.Register(server) }},
+	}, "v1")
+
+	tests := []struct {
+		tool      string
+		operation string
+		want      []string
+		unwanted  []string
+	}{
+		{tool: "copy", operation: "copy", want: []string{`"source"`, `"destination"`, `"overwrite"`, `"required":["source","destination"]`}, unwanted: []string{`"src"`, `"dst"`}},
+		{tool: "mysql", operation: "query", want: []string{`"host"`, `"user"`, `"query"`, `"max_rows"`, `"required":["host","user","query"]`}},
+		{tool: "analyze", operation: "disassemble", want: []string{`"operation"`, `"const":"disassemble"`, `Fixed operation: disassemble`, `"file_path"`, `"va"`, `"stop_at_ret"`}, unwanted: []string{`"pattern"`, `"file_path_b"`, `"target_va"`}},
+		{tool: "wintool", operation: "screenshot", want: []string{`"operation"`, `"const":"screenshot"`, `Fixed operation: screenshot`, `"hwnd"`, `"save_path"`}, unwanted: []string{`"text"`, `"msg"`, `"move_x"`}},
+		{tool: "wintool", operation: "clipboard", want: []string{`"operation"`, `"const":"clipboard"`, `Fixed operation: clipboard`, `"save_path"`, `"required":["operation"]`}, unwanted: []string{`"hwnd"`, `"text"`, `"msg"`}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tool+"/"+tt.operation, func(t *testing.T) {
+			result, _, err := m.Handle(context.Background(), nil, Input{
+				Operation: "describe", Tool: tt.tool, Compact: true, ToolOperation: tt.operation,
+			})
+			if err != nil || result.IsError {
+				t.Fatalf("compact describe failed: result=%v err=%v", result, err)
+			}
+			text := result.Content[0].(*mcp.TextContent).Text
+			for _, want := range tt.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("schema omitted %s: %s", want, text)
+				}
+			}
+			for _, unwanted := range tt.unwanted {
+				if strings.Contains(text, unwanted) {
+					t.Fatalf("schema retained %s: %s", unwanted, text)
+				}
+			}
+		})
+	}
+}
+
+func TestEveryCompactShapeReferencesRegisteredFields(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "v1"}, nil)
+	m := NewManager(server, []Spec{
+		{Name: "analyze", Group: "analysis", Register: func() { analyze.Register(server) }},
+		{Name: "copy", Group: "file", Register: func() { copytool.Register(server) }},
+		{Name: "mysql", Group: "data", Register: func() { mysqltool.Register(server) }},
+		{Name: "sftp", Group: "remote", Register: func() { sftp.Register(server) }},
+		{Name: "ssh", Group: "remote", Register: func() { ssh.Register(server) }},
+		{Name: "ssh_key", Group: "remote", Register: func() { sshkey.Register(server) }},
+		{Name: "wintool", Group: "windows", Register: func() { wintool.Register(server) }},
+	}, "v1")
+
+	for tool, operations := range compactOperationShapes {
+		for operation := range operations {
+			t.Run(tool+"/"+operation, func(t *testing.T) {
+				result, _, err := m.Handle(context.Background(), nil, Input{
+					Operation: "describe", Tool: tool, Compact: true, ToolOperation: operation,
+				})
+				if err != nil || result.IsError {
+					t.Fatalf("invalid compact shape: result=%v err=%v", result, err)
+				}
+			})
 		}
 	}
 }

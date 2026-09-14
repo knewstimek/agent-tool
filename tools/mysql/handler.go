@@ -496,17 +496,8 @@ func sanitizeError(err error, password string) string {
 
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
-		Name: "mysql",
-		Description: `Execute SQL queries on a MySQL/MariaDB database.
-Supports SELECT, INSERT, UPDATE, DELETE, SHOW, DESCRIBE, and other SQL statements.
-SELECT-like queries return formatted table output with column alignment.
-Non-SELECT queries return affected row count and last insert ID.
-Connection is closed after each call (no session pooling).
-Each connection uses utf8mb4 for client, connection, and result text.
-Verified TLS connections are available with tls=true.
-Defaults: 1000 rows, 100 columns, 200 characters per cell, and 32768 total output characters.
-Use max_rows/max_columns/max_value_chars/max_output_chars to tune bounded output;
-use SQL LIMIT/OFFSET for deterministic paging.`,
+		Name:        "mysql",
+		Description: `Run MySQL/MariaDB SQL over an utf8mb4 connection. SELECT-like statements return bounded tables; others return affected rows and insert ID. Connections close after each call. tls=true verifies TLS; use SQL LIMIT/OFFSET for deterministic paging.`,
 	}, Handle)
 }
 

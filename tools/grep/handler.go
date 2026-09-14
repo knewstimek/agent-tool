@@ -36,24 +36,24 @@ const (
 )
 
 type GrepInput struct {
-	Pattern        string `json:"pattern" jsonschema:"Regular expression pattern to search for"`
-	Path           string `json:"path,omitempty" jsonschema:"File or directory to search. Defaults to configured workspace, MCP client root, or current directory"`
+	Pattern        string `json:"pattern" jsonschema:"Regular expression"`
+	Path           string `json:"path,omitempty" jsonschema:"File or directory; defaults to workspace/MCP root/CWD"`
 	FilePath       string `json:"file_path,omitempty" jsonschema:"Alias for path"`
-	Glob           string `json:"glob,omitempty" jsonschema:"Glob pattern to filter files (e.g. *.go). Only used when path is a directory"`
-	IgnoreCase     bool   `json:"ignore_case,omitempty" jsonschema:"Case-insensitive search. Default: false"`
-	Recursive      *bool  `json:"recursive,omitempty" jsonschema:"Recurse into subdirectories. Default: true"`
-	MaxResults     int    `json:"max_results,omitempty" jsonschema:"Maximum matching lines/files per page. Default: 100, Max: 100000"`
-	OutputMode     string `json:"output_mode,omitempty" jsonschema:"Output mode: content (default), files_with_matches, or count"`
-	OutputFormat   string `json:"output_format,omitempty" jsonschema:"Content layout: compact (group matches by file, default) or classic (path:line:text on every line)"`
-	Context        int    `json:"context,omitempty" jsonschema:"Lines before and after each match (like grep -C). Default: 0, Max: 1000"`
-	Before         int    `json:"before,omitempty" jsonschema:"Lines before each match. Overrides context. Default: 0, Max: 1000"`
-	After          int    `json:"after,omitempty" jsonschema:"Lines after each match. Overrides context. Default: 0, Max: 1000"`
-	MaxLineChars   int    `json:"max_line_chars,omitempty" jsonschema:"Maximum characters per matching/context line. Default: 4000, Max: 32768"`
-	MaxOutputChars int    `json:"max_output_chars,omitempty" jsonschema:"Maximum total result characters. Default: 32768, Max: 131072"`
-	RelativePaths  *bool  `json:"relative_paths,omitempty" jsonschema:"Return paths relative to the search root. Default: true for directory searches"`
-	IncludeHidden  bool   `json:"include_hidden,omitempty" jsonschema:"Search hidden directories. Explicitly provided hidden roots are always searched. Default: false"`
-	IncludeIgnored bool   `json:"include_ignored,omitempty" jsonschema:"Search paths excluded by .gitignore/.ignore or the common generated/vendor policy. Default: false"`
-	Cursor         string `json:"cursor,omitempty" jsonschema:"Opaque continuation cursor returned by a previous grep call. Not supported with context lines"`
+	Glob           string `json:"glob,omitempty" jsonschema:"Directory file filter, e.g. *.go"`
+	IgnoreCase     bool   `json:"ignore_case,omitempty" jsonschema:"Ignore case"`
+	Recursive      *bool  `json:"recursive,omitempty" jsonschema:"Recurse; default true"`
+	MaxResults     int    `json:"max_results,omitempty" jsonschema:"Matches per page; default 100, max 100000"`
+	OutputMode     string `json:"output_mode,omitempty" jsonschema:"content (default), files_with_matches, or count"`
+	OutputFormat   string `json:"output_format,omitempty" jsonschema:"compact (default) or classic path:line:text"`
+	Context        int    `json:"context,omitempty" jsonschema:"Lines before/after; max 1000"`
+	Before         int    `json:"before,omitempty" jsonschema:"Lines before; overrides context"`
+	After          int    `json:"after,omitempty" jsonschema:"Lines after; overrides context"`
+	MaxLineChars   int    `json:"max_line_chars,omitempty" jsonschema:"Per-line cap; default 4000, max 32768"`
+	MaxOutputChars int    `json:"max_output_chars,omitempty" jsonschema:"Output cap; default 32768, max 131072"`
+	RelativePaths  *bool  `json:"relative_paths,omitempty" jsonschema:"Paths relative to root; directory default true"`
+	IncludeHidden  bool   `json:"include_hidden,omitempty" jsonschema:"Include hidden directories"`
+	IncludeIgnored bool   `json:"include_ignored,omitempty" jsonschema:"Include ignored/generated/vendor paths"`
+	Cursor         string `json:"cursor,omitempty" jsonschema:"Continuation cursor; incompatible with context lines"`
 }
 
 type GrepOutput struct {
@@ -712,19 +712,8 @@ func searchDir(dir, globPattern string, re *regexp.Regexp, maxResults int, opts 
 
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
-		Name: "grep",
-		Description: `Searches file contents for a regex pattern.
-Encoding-aware: auto-detects file encoding.
-Can search a single file or recursively search a directory.
-Output modes: content (default), files_with_matches, count. Compact content groups
-matches under one file header by default; use output_format=classic for path:line:text.
-A CRLF ending is a terminator, not content: "^foo$" matches in a CRLF file and returned lines carry no stray CR. A lone CR is not a line break (same as read), so a CR-only file is one line.
-Context: use before/after/context to include surrounding lines (like grep -B/-A/-C).
-Large result sets stay usable: max_results supports up to 100000, while max_line_chars
-and max_output_chars bound the text returned to the agent. has_more and a visible
-continuation hint report when additional grep output exists.
-Directory search skips binary files (extension list + NUL-byte sniff); pass a binary file
-directly as path to search it anyway.`,
+		Name:        "grep",
+		Description: `Regex-search encoding-aware files or directories. Supports context, glob filters, content/file/count modes, ignored-path controls, and bounded pageable output. Directory searches skip detected binaries; explicit files are searched.`,
 	}, Handle)
 }
 

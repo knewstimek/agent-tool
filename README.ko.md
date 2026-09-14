@@ -27,14 +27,17 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI 및 모든 MCP 호�
 ## LLM 친화적 기본 동작
 
 기본 `core` 프로필은 55개 전체 스키마 대신 `toolbox`를 포함한 11개만 노출합니다.
-실제 MCP 프로토콜 측정에서 직렬화된 도구 목록은 `full` 약 84KB에서 약 18KB로
-줄었습니다. `toolbox(operation="describe", tool="ssh", compact=true,
+실제 MCP 프로토콜 측정에서 직렬화된 도구 목록은 `full` 약 84KB에서 약 15KB로
+줄었습니다. 상시 컨텍스트를 최소화하려면 `--profile core-lite`로 약 6.4KB인
+`read`, `write`, `edit`, `grep`, `toolbox`만 노출할 수 있습니다. `toolbox(operation="describe", tool="ssh", compact=true,
 tool_operation="execute")`로 한 operation에 필요한 필드와 required 목록만 확인한 뒤
 `toolbox(operation="call", tool="ssh", arguments={...})`로
 호출할 수 있습니다. 이 gateway는 동적 도구 목록 갱신에 의존하지 않아 Codex 같은
 고정 binding 클라이언트에서도 동작합니다. describe가 반환한 tool/version 기반
-`schema_handle`을 다음 describe에 전달하면 스키마가 그대로일 때 짧은 확인만 반환합니다. 또는
-`--profile coding|remote|analysis|full`로 시작할 수 있습니다.
+`schema_handle`을 다음 describe에 전달하면 스키마가 그대로일 때 짧은 확인만 반환합니다.
+SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이미지, 정적 분석의
+주요 operation은 compact 스키마를 지원합니다. 또는
+`--profile core-lite|coding|remote|analysis|full`로 시작할 수 있습니다.
 
 대용량 텍스트 결과는 기본 32K자, 절대 상한 128K이며 잘림을 숨기지 않습니다.
 페이지 가능 도구는 `next_offset` 또는 `next_cursor`를 반환합니다. 로컬 상대경로는
@@ -274,13 +277,14 @@ command = "/path/to/agent-tool"
 
 ```bash
 # 초기 스키마 프로필 선택 (기본: core)
-agent-tool --profile coding
+agent-tool --profile core-lite
 
 # UTF-8이 아닌 프로젝트에서 폴백 인코딩 지정
 agent-tool --fallback-encoding EUC-KR
 ```
 
-프로필: `core`(11개 스키마), `coding`, `remote`, `analysis`, `full`.
+프로필: `core-lite`(read/write/edit/grep/toolbox), `core`(11개 스키마),
+`coding`, `remote`, `analysis`, `full`.
 실행 중에는 클라이언트와 무관하게 동작하는 `toolbox` gateway를 우선 사용합니다.
 `operation=describe`는 한 도구의 스키마를 반환하며 `compact=true`와
 `tool_operation`을 함께 쓰면 한 operation으로 제한합니다. 반환된 `schema_handle`을

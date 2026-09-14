@@ -347,12 +347,8 @@ func windowsLockedFileFallback(newTmpPath, dst string) (string, error) {
 
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
-		Name: "copy",
-		Description: `Copies a file or directory to a new location.
-File copy uses atomic write (temp file + rename) and preserves permissions.
-Directory copy recreates the full directory structure recursively.
-Use dry_run=true to preview what would be copied without doing it.
-On Windows, handles locked files (running executables, loaded DLLs) by renaming the locked file aside before replacing it. Use overwrite=true when updating a running binary.`,
+		Name:        "copy",
+		Description: `Copy a file or directory recursively with preserved permissions and atomic file replacement. dry_run previews. On Windows, overwrite=true can replace locked executables/DLLs by moving the old file aside.`,
 	}, Handle)
 }
 

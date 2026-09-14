@@ -18,7 +18,7 @@ import (
 const smallLocaleFileRunes = 200
 
 type WriteInput struct {
-	FilePath string `json:"file_path,omitempty" jsonschema:"File to write. Relative paths use the configured workspace or MCP client root"`
+	FilePath string `json:"file_path,omitempty" jsonschema:"File path; relative to workspace/MCP root"`
 	Path     string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 	Content  string `json:"content" jsonschema:"Content to write to the file"`
 }
@@ -100,10 +100,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WriteInput) (*m
 
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
-		Name: "write",
-		Description: `Creates or overwrites a file with the given content.
-Encoding-aware: preserves original encoding for existing files, uses .editorconfig hints for new files.
-Auto-creates parent directories if they don't exist.`,
+		Name:        "write",
+		Description: `Create or overwrite a file. Preserves existing encoding, uses .editorconfig for new files, and creates parent directories.`,
 	}, Handle)
 }
 

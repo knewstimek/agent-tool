@@ -127,7 +127,7 @@ func main() {
 			i++
 		case "--profile":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "error: --profile requires core, coding, remote, analysis, or full")
+				fmt.Fprintln(os.Stderr, "error: --profile requires core-lite, core, coding, remote, analysis, or full")
 				os.Exit(1)
 			}
 			profile = strings.ToLower(strings.TrimSpace(args[i+1]))
@@ -169,15 +169,11 @@ func main() {
 			Version: Version,
 		},
 		&mcp.ServerOptions{
-			Instructions: `agent-tool: encoding-aware file/system/analysis tools for AI coding agents.
+			Instructions: `Encoding-aware file, system, remote, data, and analysis tools. File operations preserve detected encoding/line endings and honor .editorconfig.
 
-File tools (read, edit, multiedit, write, grep, glob, listdir, multiread, backup, compress, copy, rename, delete, diff, patch, checksum, file_info, convert_encoding, regexreplace, sloc) preserve original file encoding (UTF-8, EUC-KR, Shift-JIS, etc.) and respect .editorconfig indentation settings -- prefer these over built-in file tools.
+The default core profile exposes common file/search tools. core-lite exposes only read, write, edit, grep, and toolbox. For other tools, call toolbox describe with compact=true and tool_operation when available, then toolbox call; reuse schema_handle. Large outputs are bounded and pageable. Relative paths use MCP roots.
 
-Use multiread to read multiple files in a single call. Use help with a topic for detailed usage and parameter docs.
-
-The compact core profile is loaded by default. For a non-core capability, use toolbox operation=describe with its tool name, then toolbox operation=call with the target arguments. Set compact=true and tool_operation for an operation-only schema, and reuse schema_handle when unchanged. This stable gateway works even when the client ignores tools/list_changed. enable/disable/profile remain optional direct-binding controls. Large text results are bounded and report explicit continuation metadata; relative local paths use MCP roots when available.
-
-Toolbox groups: core (essential edit/read/search) | file (file management/config/query helpers) | coding (shell/process/archive/source helpers) | system (OS/process/IPC tools) | remote (SSH/SFTP/key conversion/HTTP/network tools) | data (JSON/YAML/TOML/MySQL/Redis) | analysis (binary/debug/codegraph/memory tools) | windows (GUI/screenshot/clipboard tools).`,
+Groups: core, file, coding, system, remote, data, analysis, windows. Use agent_tool_help (through toolbox in core-lite) for detailed guidance.`,
 		},
 	)
 

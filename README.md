@@ -28,14 +28,18 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 
 The default `core` profile exposes only 11 schemas (including `toolbox`) instead of
 all 55. In a protocol-level measurement this reduced the serialized tool list from
-about 84 KB (`full`) to 18 KB. Use
+about 84 KB (`full`) to 15 KB. For the smallest steady-state context, start with
+`--profile core-lite`; its five schemas are about 6.4 KB and expose only `read`,
+`write`, `edit`, `grep`, and `toolbox`. Use
 `toolbox(operation="describe", tool="ssh", compact=true, tool_operation="execute")`
 to load only one operation's fields and required list, then invoke it through
 `toolbox(operation="call", tool="ssh", arguments={...})`. The gateway does not
 depend on dynamic tool-list refresh, so it works with fixed-binding clients such as
 Codex. Describe returns a tool/version-bound `schema_handle`; sending it on a later
 describe returns a short unchanged acknowledgement when the schema is still current.
-You can also start with `--profile coding|remote|analysis|full`.
+Common compact operations include SSH execution, MySQL queries, file copy, Windows
+screenshots/clipboard images, and static-analysis operations. You can also start
+with `--profile core-lite|coding|remote|analysis|full`.
 
 Potentially large text responses default to 32K characters with a 128K hard ceiling.
 Truncation is always visible and pageable tools return `next_offset` or `next_cursor`.
@@ -277,14 +281,15 @@ command = "/path/to/agent-tool"
 
 ```bash
 # Select the initial schema profile (default: core)
-agent-tool --profile coding
+agent-tool --profile core-lite
 
 # Set fallback encoding for projects with non-UTF-8 files
 agent-tool --fallback-encoding EUC-KR
 ```
 
-Profiles are additive presets: `core` (11 schemas), `coding` (core plus broader
-file/build/shell tools), `remote`, `analysis`, and `full`. At runtime, prefer the
+Profiles are presets: `core-lite` (read/write/edit/grep/toolbox), `core` (11
+schemas), `coding` (core plus broader file/build/shell tools), `remote`, `analysis`,
+and `full`. At runtime, prefer the
 client-independent `toolbox` gateway: `operation=describe` returns one tool's schema
 (`compact=true` plus `tool_operation` limits it to one operation), and
 `operation=call` invokes it through the stable toolbox binding. Re-send a returned
