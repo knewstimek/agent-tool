@@ -393,6 +393,24 @@ GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o agent-tool .
 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o agent-tool.exe .
 ```
 
+## 릴리스
+
+보호된 GitHub workflow가 테스트, 선언된 전체 asset 빌드, MCPB/checksum 생성 및 업로드된
+바이트 검증을 수행합니다. clean 상태로 push된 `master`에서 먼저 build-only dry-run을 실행합니다.
+
+```powershell
+.\scripts\release.ps1
+```
+
+dry-run 성공 후 `main.go`에 선언된 버전을 게시합니다.
+
+```powershell
+.\scripts\release.ps1 -Publish
+```
+
+workflow는 `docs/releases/vVERSION.md`의 추적된 릴리스 노트를 요구합니다. 게시 시 annotated
+tag와 GitHub Release를 만들고, 최종 MCPB hash로 `server.json`을 갱신합니다.
+
 ## 트러블슈팅
 
 ### 한글/일본어가 깨져 보일 때 (인코딩 문제)

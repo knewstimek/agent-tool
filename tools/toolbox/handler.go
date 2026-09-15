@@ -24,12 +24,11 @@ type Spec struct {
 }
 
 type Manager struct {
-	mu          sync.Mutex
-	server      *mcp.Server
-	specs       map[string]Spec
-	active      map[string]bool
-	schemaCache map[string][]byte
-	version     string
+	mu      sync.Mutex
+	server  *mcp.Server
+	specs   map[string]Spec
+	active  map[string]bool
+	version string
 }
 
 type Input struct {
@@ -55,7 +54,7 @@ type Output struct {
 }
 
 func NewManager(server *mcp.Server, specs []Spec, version ...string) *Manager {
-	m := &Manager{server: server, specs: make(map[string]Spec), active: make(map[string]bool), schemaCache: make(map[string][]byte)}
+	m := &Manager{server: server, specs: make(map[string]Spec), active: make(map[string]bool)}
 	if len(version) > 0 {
 		m.version = strings.TrimSpace(version[0])
 	}
@@ -205,9 +204,6 @@ func (m *Manager) describe(name string, compact bool, toolOperation, knownHandle
 	}
 	digest := sha256.Sum256(append([]byte(name+"\x00"+m.version+"\x00"+toolOperation+"\x00"), schema...))
 	handle := fmt.Sprintf("schema_%s_%x", name, digest[:8])
-	m.mu.Lock()
-	m.schemaCache[handle] = append([]byte(nil), schema...)
-	m.mu.Unlock()
 	if strings.TrimSpace(knownHandle) == handle {
 		result := fmt.Sprintf("Schema unchanged: %s. Call through toolbox with operation=call, tool=%s, arguments={...}\n", handle, name)
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: result}}}, Output{Result: result, Changed: changed, SchemaHandle: handle}, nil

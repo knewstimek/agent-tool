@@ -399,6 +399,24 @@ GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o agent-tool .
 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o agent-tool.exe .
 ```
 
+## Release
+
+The guarded GitHub workflow runs tests, builds all declared assets, creates the MCPB and checksums,
+and verifies uploaded bytes. From a clean, pushed `master` branch, dispatch a build-only dry run:
+
+```powershell
+.\scripts\release.ps1
+```
+
+After the dry run succeeds, publish the version declared in `main.go`:
+
+```powershell
+.\scripts\release.ps1 -Publish
+```
+
+The workflow requires tracked notes at `docs/releases/vVERSION.md`. Publication creates an
+annotated tag and GitHub Release, then updates `server.json` with the released MCPB hash.
+
 ## Troubleshooting
 
 ### Garbled text (encoding issues)

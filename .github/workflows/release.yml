@@ -1,47 +1,91 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable SemVer with or without the leading v
+        required: true
+        type: string
+      publish:
+        description: Create the tag and public release; false is a build-only dry run
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: true
 
-      - name: Verify version matches tag
+      - name: Validate release inputs and tracked notes
+        id: inputs
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          VERSION=$(grep 'const Version' main.go | grep -o '"v[^"]*"' | tr -d '"')
-          if [ "$TAG" != "$VERSION" ]; then
-            echo "ERROR: tag ($TAG) does not match Version in main.go ($VERSION)"
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/master" ]]; then
+            echo "Release dispatch must target master." >&2
             exit 1
           fi
+          version="${INPUT_VERSION#v}"
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "version must be stable SemVer MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          tag="v$version"
+          source_version="$(grep 'const Version' main.go | grep -o '"v[^"]*"' | tr -d '"')"
+          if [[ "$tag" != "$source_version" ]]; then
+            echo "requested tag ($tag) does not match main.go ($source_version)" >&2
+            exit 1
+          fi
+          notes_file="docs/releases/$tag.md"
+          git ls-files --error-unmatch -- "$notes_file" >/dev/null
+          grep -Fqx "# agent-tool $tag" "$notes_file"
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "release checkout must be clean" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
 
-      - name: Cross-compile
+      - name: Test
+        run: go test . ./common ./install ./internal/... ./tools/...
+
+      - name: Build release assets
+        id: build
+        shell: bash
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+          TAG: ${{ steps.inputs.outputs.tag }}
         run: |
+          set -euo pipefail
           mkdir -p dist
-          GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/agent-tool-linux-amd64 .
-          GOOS=linux   GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/agent-tool-linux-arm64 .
-          GOOS=darwin  GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/agent-tool-darwin-amd64 .
-          GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/agent-tool-darwin-arm64 .
-          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/agent-tool-windows-amd64.exe .
+          GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/agent-tool-linux-amd64 .
+          GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/agent-tool-linux-arm64 .
+          GOOS=darwin  GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/agent-tool-darwin-amd64 .
+          GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/agent-tool-darwin-arm64 .
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/agent-tool-windows-amd64.exe .
+          [[ "$(dist/agent-tool-linux-amd64 --version)" == "agent-tool $TAG" ]]
 
-      - name: Build mcpb
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="${TAG#v}"
           cat > dist/manifest.json << MEOF
           {
             "mcpb": "1.0",
@@ -56,56 +100,118 @@ jobs:
             }
           }
           MEOF
-          cd dist && zip agent-tool.mcpb manifest.json \
+          (cd dist && zip -q agent-tool.mcpb manifest.json \
             agent-tool-linux-amd64 agent-tool-linux-arm64 \
             agent-tool-darwin-amd64 agent-tool-darwin-arm64 \
-            agent-tool-windows-amd64.exe
+            agent-tool-windows-amd64.exe)
 
-      - name: Compute mcpb SHA256
-        id: sha
-        run: |
-          SHA=$(sha256sum dist/agent-tool.mcpb | awk '{print $1}')
-          echo "mcpb_sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "mcpb SHA256: ${SHA}"
+          (cd dist && sha256sum \
+            agent-tool-linux-amd64 \
+            agent-tool-linux-arm64 \
+            agent-tool-darwin-amd64 \
+            agent-tool-darwin-arm64 \
+            agent-tool-windows-amd64.exe \
+            agent-tool.mcpb > SHA256SUMS.txt)
+          mcpb_sha="$(sha256sum dist/agent-tool.mcpb | awk '{print $1}')"
+          echo "mcpb_sha=$mcpb_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Update server.json
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="${TAG#v}"
-          SHA="${{ steps.sha.outputs.mcpb_sha }}"
+      - name: Retain dry-run assets
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dry-run-${{ steps.inputs.outputs.tag }}
+          path: |
+            dist/agent-tool-linux-amd64
+            dist/agent-tool-linux-arm64
+            dist/agent-tool-darwin-amd64
+            dist/agent-tool-darwin-arm64
+            dist/agent-tool-windows-amd64.exe
+            dist/agent-tool.mcpb
+            dist/SHA256SUMS.txt
+          retention-days: 3
 
-          # Update version
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" server.json
-
-          # Update mcpb URL
-          sed -i "s|releases/download/v[^/]*/agent-tool.mcpb|releases/download/${TAG}/agent-tool.mcpb|" server.json
-
-          # Update SHA256
-          sed -i "s/\"fileSha256\": \"[^\"]*\"/\"fileSha256\": \"${SHA}\"/" server.json
-
-          echo "Updated server.json:"
-          cat server.json
-
-      - name: Create release
+      - name: Create or validate annotated tag
+        if: inputs.publish
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.inputs.outputs.tag }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          gh release create "${TAG}" \
-            dist/agent-tool-linux-amd64 \
-            dist/agent-tool-linux-arm64 \
-            dist/agent-tool-darwin-amd64 \
-            dist/agent-tool-darwin-arm64 \
-            dist/agent-tool-windows-amd64.exe \
-            dist/agent-tool.mcpb \
-            --title "${TAG}" \
-            --generate-notes
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            [[ "$(git cat-file -t "$TAG")" == "tag" ]]
+            [[ "$(git rev-list -n 1 "$TAG")" == "$GITHUB_SHA" ]]
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "$TAG" -m "agent-tool $TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG"
+          fi
 
-      - name: Commit server.json
+      - name: Publish or repair GitHub Release
+        if: inputs.publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.inputs.outputs.tag }}
+          NOTES_FILE: ${{ steps.inputs.outputs.notes_file }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
+          assets=(
+            dist/agent-tool-linux-amd64
+            dist/agent-tool-linux-arm64
+            dist/agent-tool-darwin-amd64
+            dist/agent-tool-darwin-arm64
+            dist/agent-tool-windows-amd64.exe
+            dist/agent-tool.mcpb
+            dist/SHA256SUMS.txt
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" --title "$TAG" --notes-file "$NOTES_FILE" --latest
+          else
+            gh release create "$TAG" "${assets[@]}" --verify-tag \
+              --title "$TAG" --notes-file "$NOTES_FILE" --latest
+          fi
+
+      - name: Verify published assets
+        if: inputs.publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.inputs.outputs.tag }}
+        run: |
+          set -euo pipefail
+          verify_dir="$(mktemp -d)"
+          gh release download "$TAG" --dir "$verify_dir"
+          (cd "$verify_dir" && sha256sum -c SHA256SUMS.txt)
+          release_json="$(gh release view "$TAG" --json tagName,name,isDraft,isPrerelease,assets)"
+          [[ "$(jq -r .tagName <<<"$release_json")" == "$TAG" ]]
+          [[ "$(jq -r .isDraft <<<"$release_json")" == "false" ]]
+          [[ "$(jq -r .isPrerelease <<<"$release_json")" == "false" ]]
+          expected="$(printf '%s\n' SHA256SUMS.txt agent-tool-linux-amd64 agent-tool-linux-arm64 agent-tool-darwin-amd64 agent-tool-darwin-arm64 agent-tool-windows-amd64.exe agent-tool.mcpb | sort)"
+          actual="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
+          [[ "$actual" == "$expected" ]]
+
+      - name: Update server metadata
+        if: inputs.publish
+        shell: bash
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+          TAG: ${{ steps.inputs.outputs.tag }}
+          SHA: ${{ steps.build.outputs.mcpb_sha }}
+        run: |
+          set -euo pipefail
           git checkout master
+          git pull --ff-only origin master
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" server.json
+          sed -i "s|releases/download/v[^/]*/agent-tool.mcpb|releases/download/${TAG}/agent-tool.mcpb|" server.json
+          sed -i "s/\"fileSha256\": \"[^\"]*\"/\"fileSha256\": \"${SHA}\"/" server.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add server.json
-          git commit -m "chore: update server.json for ${GITHUB_REF#refs/tags/} release [skip ci]"
-          git push
+          if git diff --cached --quiet; then
+            echo "server.json already matches $TAG"
+          else
+            git commit -m "chore: update server.json for $TAG release [skip ci]"
+            git push origin master
+          fi
