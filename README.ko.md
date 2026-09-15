@@ -410,6 +410,8 @@ dry-run 성공 후 `main.go`에 선언된 버전을 게시합니다.
 
 workflow는 `docs/releases/vVERSION.md`의 추적된 릴리스 노트를 요구합니다. 게시 시 annotated
 tag와 GitHub Release를 만들고, 최종 MCPB hash로 `server.json`을 갱신합니다.
+RepoPlane이 이 저장소를 workspace로 사용할 때는 저장소 로컬 `catalog/` manifest를 통해 같은
+dry-run, publish, status 작업을 검색하고 실행할 수 있습니다.
 
 ## 트러블슈팅
 

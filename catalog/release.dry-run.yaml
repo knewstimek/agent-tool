@@ -1,0 +1,34 @@
+id: release.dry-run
+revision: 1
+summary: Dispatch the guarded AgentTool release workflow without publishing a tag or release
+use_when:
+  - validating tests, release assets, MCPB packaging, and checksums before publication
+tags: [release, github, verification]
+execution:
+  kind: cli
+  executable_ref: gh
+  cwd: .
+  argv_template:
+    - workflow
+    - run
+    - release.yml
+    - --ref
+    - master
+    - --field
+    - version={version}
+    - --field
+    - publish=false
+  trusted_for_run: true
+  timeout_sec: 30
+  artifact_mode: metadata
+  preflight:
+    - {id: gh.version, kind: executable, ref: gh, requirement: required, argv: [--version]}
+    - {id: git.repository, kind: git, requirement: required}
+arguments:
+  version:
+    type: string
+    required: true
+    description: Stable SemVer with or without the leading v
+inputs: [.github/workflows/release.yml, main.go, server.json, docs/releases/**]
+docs: [README.md, docs/releases/v0.9.7.md]
+cache_policy: disabled

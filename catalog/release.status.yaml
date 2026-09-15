@@ -1,0 +1,24 @@
+id: release.status
+revision: 1
+summary: Query recent published AgentTool releases with a bounded supported field set
+use_when:
+  - checking whether a version is published, draft, prerelease, or latest
+tags: [release, github, status]
+execution:
+  kind: cli
+  executable_ref: gh
+  cwd: .
+  argv_template:
+    - release
+    - list
+    - --limit
+    - "20"
+    - --json
+    - tagName,name,isDraft,isPrerelease,publishedAt,isLatest
+  trusted_for_run: true
+  timeout_sec: 30
+  artifact_mode: metadata
+  preflight:
+    - {id: gh.version, kind: executable, ref: gh, requirement: required, argv: [--version]}
+docs: [README.md, docs/releases/v0.9.7.md]
+cache_policy: disabled

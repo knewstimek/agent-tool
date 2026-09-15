@@ -1,0 +1,34 @@
+id: release.dispatch
+revision: 1
+summary: Publish one prepared AgentTool version through the guarded GitHub release workflow
+use_when:
+  - publishing a stable release after its build-only dry run succeeds
+tags: [release, github, publish]
+execution:
+  kind: cli
+  executable_ref: gh
+  cwd: .
+  argv_template:
+    - workflow
+    - run
+    - release.yml
+    - --ref
+    - master
+    - --field
+    - version={version}
+    - --field
+    - publish=true
+  trusted_for_run: true
+  timeout_sec: 30
+  artifact_mode: metadata
+  preflight:
+    - {id: gh.version, kind: executable, ref: gh, requirement: required, argv: [--version]}
+    - {id: git.repository, kind: git, requirement: required}
+arguments:
+  version:
+    type: string
+    required: true
+    description: Stable SemVer with or without the leading v
+inputs: [.github/workflows/release.yml, main.go, server.json, docs/releases/**]
+docs: [README.md, docs/releases/v0.9.7.md]
+cache_policy: disabled

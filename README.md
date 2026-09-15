@@ -416,6 +416,8 @@ After the dry run succeeds, publish the version declared in `main.go`:
 
 The workflow requires tracked notes at `docs/releases/vVERSION.md`. Publication creates an
 annotated tag and GitHub Release, then updates `server.json` with the released MCPB hash.
+When RepoPlane uses this repository as its workspace, the same dry-run, publish, and status
+operations are discoverable through the repository-local `catalog/` manifests.
 
 ## Troubleshooting
 
