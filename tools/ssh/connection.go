@@ -38,6 +38,19 @@ type ConnectionProfile struct {
 	Trusted        bool        `json:"trusted,omitempty"`
 }
 
+// UnmarshalJSON treats local connection profiles as trusted unless they
+// explicitly opt out. Profiles are user-maintained local configuration, while
+// ad-hoc connection requests remain untrusted.
+func (p *ConnectionProfile) UnmarshalJSON(data []byte) error {
+	type profileAlias ConnectionProfile
+	decoded := profileAlias{Trusted: true}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*p = ConnectionProfile(decoded)
+	return nil
+}
+
 type connectionProfileFile struct {
 	Connections map[string]ConnectionProfile `json:"connections"`
 	Profiles    map[string]ConnectionProfile `json:"profiles"`

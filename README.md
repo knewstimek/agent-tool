@@ -338,9 +338,9 @@ ignored if it is placed inside a workspace.
 ```
 
 An initial call returns an opaque `connection_id` that remains reusable by both tools
-for 30 minutes. `trusted:true` affects only display: an allowed private-address warning
-is shown once per pooled connection instead of on every call; SSRF blocking and cloud
-metadata protection are unchanged. SSH also supports `quiet`, `echo_command`, and
+for 30 minutes. Local profiles default to `trusted:true`; set `trusted:false` to show the
+private-address warning on every call instead of once per pooled connection. This affects
+only display; SSRF blocking and cloud metadata protection are unchanged. SSH also supports `quiet`, `echo_command`, and
 `result_only`; the last returns compact JSON centered on `stdout`, `stderr`, and
 `exit_code`. SFTP supports `quiet`, `result_only`, and `upload_many` (up to 100 files).
 
@@ -459,7 +459,7 @@ When used with AI coding agents, be aware of prompt injection risks:
 
 - **SSRF Protection**: Cloud metadata IPs (169.254.x.x, fe80::/10) are always blocked regardless of settings. Private IP access is configurable per protocol via `set_config` (`allow_http_private`, `allow_mysql_private`, `allow_redis_private`, `allow_ssh_private`)
 - **DLP (Data Loss Prevention)**: All outbound HTTP request bodies are scanned for sensitive data patterns (PEM private keys, AWS access keys, GitHub/GitLab tokens, Slack tokens, .env file dumps) and **blocked before transmission**
-- **Prompt Injection Warnings**: Every private IP connection shows a security warning visible to both the user and the AI agent, helping detect prompt injection attacks from fetched web content
+- **Prompt Injection Warnings**: Allowed private IP connections show a compact warning; trusted local SSH/SFTP profiles show it once per pooled connection
 - **Zip Slip protection**: Archive entries with `../` path traversal are blocked (both zip and tar)
 - **Zip Bomb protection**: Single file limit (1GB), total extraction limit (5GB)
 - **Symlinks**: Skipped by default. Enable via `set_config allow_symlinks=true` (tar only; zip symlinks always skipped). Even when enabled, symlinks targeting outside the output directory are blocked

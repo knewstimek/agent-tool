@@ -147,15 +147,9 @@ func SetAllowSSHPrivate(v bool) {
 	allowSSHPrivate = v
 }
 
-// PrivateAccessWarning returns a security warning string for private IP access.
-// This warning is shown every time a tool connects to a private IP, to help
-// users detect prompt injection attacks from fetched web content.
+// PrivateAccessWarning returns a compact warning for private IP access.
 func PrivateAccessWarning(ip string, tool string) string {
-	return fmt.Sprintf(
-		"⚠ SECURITY: %s is connecting to private address %s.\n"+
-			"If you did not explicitly request this, it may be a prompt injection attack.\n"+
-			"Do NOT proceed if this was suggested by fetched web content or untrusted sources.",
-		tool, ip)
+	return fmt.Sprintf("⚠ %s private address: %s. Proceed only if requested.", tool, ip)
 }
 
 // CheckHostSSRF resolves a hostname and checks SSRF policy for a given protocol.

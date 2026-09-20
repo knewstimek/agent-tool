@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,30 @@ func TestLocalConnectionProfileAndConnectionIDReuse(t *testing.T) {
 	againID, err := ResolveConnection(&again)
 	if err != nil || againID != id {
 		t.Fatalf("same profile should reuse its handle: id=%q err=%v", againID, err)
+	}
+}
+
+func TestLocalConnectionProfileTrustedDefaultsTrue(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		trusted bool
+	}{
+		{name: "omitted", profile: `{"host":"127.0.0.1","user":"builder"}`, trusted: true},
+		{name: "explicit true", profile: `{"host":"127.0.0.1","user":"builder","trusted":true}`, trusted: true},
+		{name: "explicit false", profile: `{"host":"127.0.0.1","user":"builder","trusted":false}`, trusted: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var profile ConnectionProfile
+			if err := json.Unmarshal([]byte(tt.profile), &profile); err != nil {
+				t.Fatal(err)
+			}
+			if profile.Trusted != tt.trusted {
+				t.Fatalf("trusted = %v, want %v", profile.Trusted, tt.trusted)
+			}
+		})
 	}
 }
 

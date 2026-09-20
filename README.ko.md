@@ -332,8 +332,9 @@ key, jump host 필드 반복을 없앨 수 있습니다. 프로필은 OS 사용�
 ```
 
 첫 호출이 반환한 opaque `connection_id`는 두 도구에서 30분간 재사용할 수 있습니다.
-`trusted:true`는 표시만 바꿉니다. 허용된 사설 주소 경고를 pooled connection당 한 번만
-표시하며 SSRF 차단과 cloud metadata 보호는 그대로 유지합니다. SSH는 `quiet`,
+로컬 프로필은 기본적으로 `trusted:true`이며, `trusted:false`를 지정하면 사설 주소 경고를
+pooled connection당 한 번이 아닌 매 호출마다 표시합니다. 표시 방식만 바뀌며 SSRF 차단과
+cloud metadata 보호는 그대로 유지합니다. SSH는 `quiet`,
 `echo_command`, `result_only`도 지원하며 마지막 옵션은 `stdout`, `stderr`, `exit_code`
 중심의 compact JSON을 반환합니다. SFTP는 `quiet`, `result_only`, 최대 100개 파일의
 `upload_many`를 지원합니다.
@@ -447,7 +448,7 @@ AI 코딩 에이전트와 함께 사용할 때 프롬프트 인젝션 위험에 
 
 - **SSRF 보호**: 클라우드 메타데이터 IP (169.254.x.x, fe80::/10)는 설정과 무관하게 항상 차단됩니다. 사설 IP 접근은 프로토콜별로 `set_config`로 설정 가능 (`allow_http_private`, `allow_mysql_private`, `allow_redis_private`, `allow_ssh_private`)
 - **DLP (데이터 유출 방지)**: 모든 HTTP 요청 본문에서 민감 데이터 패턴(PEM 개인키, AWS 액세스 키, GitHub/GitLab 토큰, Slack 토큰, .env 파일 덤프)을 스캔하고 **전송 전 차단**합니다
-- **프롬프트 인젝션 경고**: 사설 IP 접속 시 마다 보안 경고를 표시하여 웹 콘텐츠에서 주입된 프롬프트 인젝션 공격을 탐지할 수 있도록 합니다 (사용자와 AI 에이전트 모두에게 표시)
+- **프롬프트 인젝션 경고**: 허용된 사설 IP 접속에는 짧은 경고를 표시하며, 신뢰된 로컬 SSH/SFTP 프로필은 pooled connection당 한 번만 표시합니다
 - **Zip Slip 보호**: `../` 경로 조작을 통한 Path Traversal 차단 (zip, tar 모두)
 - **Zip Bomb 보호**: 단일 파일 1GB, 총 추출 크기 5GB 제한
 - **Symlink**: 기본 스킵 (보안). `set_config allow_symlinks=true`로 활성화 (tar만 지원). 활성화해도 outputDir 밖을 가리키는 symlink는 차단
