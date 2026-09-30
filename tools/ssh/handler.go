@@ -32,23 +32,24 @@ type SSHInput struct {
 	TimeoutSecInt int `json:"-"`
 	JumpPortInt   int `json:"-"`
 
-	Host           string      `json:"host,omitempty" jsonschema:"SSH server hostname or IP address (IPv4 or IPv6). Required for execute/start/disconnect; omit for status/tail/cancel"`
-	Port           interface{} `json:"port,omitempty" jsonschema:"SSH port number. Default: 22"`
-	User           string      `json:"user,omitempty" jsonschema:"SSH username. Required for execute/start/disconnect; omit for status/tail/cancel"`
-	Password       string      `json:"password,omitempty" jsonschema:"Password for authentication"`
-	KeyFile        string      `json:"key_file,omitempty" jsonschema:"Path to SSH private key file (e.g. ~/.ssh/id_rsa)"`
-	Passphrase     string      `json:"passphrase,omitempty" jsonschema:"Passphrase for encrypted private key"`
-	UseAgent       interface{} `json:"use_agent,omitempty" jsonschema:"Use SSH agent for authentication: true or false. Default: true if no other auth method specified"`
-	Command        string      `json:"command,omitempty" jsonschema:"Command to execute on the remote server"`
-	Operation      string      `json:"operation,omitempty" jsonschema:"Operation: execute (default), start, status, tail, cancel"`
-	Background     bool        `json:"background,omitempty" jsonschema:"Start a background SSH job and return job_id immediately. Alias for operation=start"`
-	JobID          string      `json:"job_id,omitempty" jsonschema:"Background SSH job ID for status, tail, or cancel"`
-	TailLines      int         `json:"tail_lines,omitempty" jsonschema:"Lines returned by operation=tail. Default: 50, Max: 1000"`
-	Disconnect     interface{} `json:"disconnect,omitempty" jsonschema:"Close the SSH session for this host (no command needed): true or false. Default: false"`
-	HostKeyCheck   string      `json:"host_key_check,omitempty" jsonschema:"Host key verification: strict (requires known_hosts), tofu (trust on first use, default), none (insecure)"`
-	TimeoutSec     interface{} `json:"timeout_sec,omitempty" jsonschema:"Command execution timeout in seconds. Default: 30, Max: 300"`
-	MaxOutputChars int         `json:"max_output_chars,omitempty" jsonschema:"Maximum combined stdout/stderr bytes retained. Default: 32768, Max: 131072. Head and tail are preserved"`
-	OutputMode     string      `json:"output_mode,omitempty" jsonschema:"Retained portion for large output: head_tail (default), head, or tail"`
+	Host             string      `json:"host,omitempty" jsonschema:"SSH server hostname or IP address (IPv4 or IPv6). Required for execute/start/disconnect; omit for status/tail/cancel"`
+	Port             interface{} `json:"port,omitempty" jsonschema:"SSH port number. Default: 22"`
+	User             string      `json:"user,omitempty" jsonschema:"SSH username. Required for execute/start/disconnect; omit for status/tail/cancel"`
+	Password         string      `json:"password,omitempty" jsonschema:"Password for authentication"`
+	KeyFile          string      `json:"key_file,omitempty" jsonschema:"Path to SSH private key file (e.g. ~/.ssh/id_rsa)"`
+	Passphrase       string      `json:"passphrase,omitempty" jsonschema:"Passphrase for encrypted private key"`
+	UseAgent         interface{} `json:"use_agent,omitempty" jsonschema:"Use SSH agent for authentication: true or false. Default: true if no other auth method specified"`
+	Command          string      `json:"command,omitempty" jsonschema:"Command to execute on the remote server"`
+	PowerShellScript string      `json:"powershell_script,omitempty" jsonschema:"Windows PowerShell script text (UTF-8, max 4 MiB), mutually exclusive with command. Uploaded through SSH stdin and deleted after execution; avoids Windows command-line length limits"`
+	Operation        string      `json:"operation,omitempty" jsonschema:"Operation: execute (default), start, status, tail, cancel"`
+	Background       bool        `json:"background,omitempty" jsonschema:"Start a background SSH job and return job_id immediately. Alias for operation=start"`
+	JobID            string      `json:"job_id,omitempty" jsonschema:"Background SSH job ID for status, tail, or cancel"`
+	TailLines        int         `json:"tail_lines,omitempty" jsonschema:"Lines returned by operation=tail. Default: 50, Max: 1000"`
+	Disconnect       interface{} `json:"disconnect,omitempty" jsonschema:"Close the SSH session for this host (no command needed): true or false. Default: false"`
+	HostKeyCheck     string      `json:"host_key_check,omitempty" jsonschema:"Host key verification: strict (requires known_hosts), tofu (trust on first use, default), none (insecure)"`
+	TimeoutSec       interface{} `json:"timeout_sec,omitempty" jsonschema:"Command execution timeout in seconds. Default: 30, Max: 300"`
+	MaxOutputChars   int         `json:"max_output_chars,omitempty" jsonschema:"Maximum combined stdout/stderr bytes retained. Default: 32768, Max: 131072. Head and tail are preserved"`
+	OutputMode       string      `json:"output_mode,omitempty" jsonschema:"Retained portion for large output: head_tail (default), head, or tail"`
 
 	// Proxy Jump — connect through a bastion/jump host (like ssh -J).
 	// Useful for reaching IPv6-only servers via an IPv4 bastion, or accessing
@@ -71,16 +72,17 @@ type SSHInput struct {
 }
 
 type SSHOutput struct {
-	Result       string `json:"result"`
-	Stdout       string `json:"stdout,omitempty"`
-	Stderr       string `json:"stderr,omitempty"`
-	ExitCode     int    `json:"exit_code"`
-	Truncated    bool   `json:"truncated"`
-	StdoutBytes  int64  `json:"stdout_bytes,omitempty"`
-	StderrBytes  int64  `json:"stderr_bytes,omitempty"`
-	JobID        string `json:"job_id,omitempty"`
-	Status       string `json:"status,omitempty"`
-	ConnectionID string `json:"connection_id,omitempty"`
+	Result         string `json:"result"`
+	Stdout         string `json:"stdout,omitempty"`
+	Stderr         string `json:"stderr,omitempty"`
+	ExitCode       int    `json:"exit_code"`
+	Truncated      bool   `json:"truncated"`
+	StdoutBytes    int64  `json:"stdout_bytes,omitempty"`
+	StderrBytes    int64  `json:"stderr_bytes,omitempty"`
+	JobID          string `json:"job_id,omitempty"`
+	Status         string `json:"status,omitempty"`
+	ConnectionID   string `json:"connection_id,omitempty"`
+	CleanupWarning string `json:"cleanup_warning,omitempty"`
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp.CallToolResult, SSHOutput, error) {
@@ -105,6 +107,11 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	}
 	// 2. Validate input
 	if err := validateInput(&input); err != nil {
+		return errorResult(err.Error())
+	}
+
+	plan, err := planPowerShell(input)
+	if err != nil {
 		return errorResult(err.Error())
 	}
 
@@ -146,8 +153,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	}
 
 	// 3. Command is required for non-disconnect calls
-	if input.Command == "" {
-		return errorResult("command is required (use disconnect=true to close session)")
+	if input.Command == "" && plan == nil {
+		return errorResult("command or powershell_script is required (use disconnect=true to close session)")
 	}
 
 	// 4. Get or create SSH connection
@@ -159,10 +166,33 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	if err != nil {
 		return errorResult(fmt.Sprintf("SSH connection failed: %s", sanitizeError(err, input)))
 	}
-	if op == "start" {
-		job, err := startSSHJob(client, input.Command, input.MaxOutputChars, input.OutputMode)
+	timeout := time.Duration(input.TimeoutSecInt) * time.Second
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	command := input.Command
+	var staged *stagedPowerShell
+	if plan != nil {
+		staged, err = stagePowerShell(execCtx, client, plan)
 		if err != nil {
-			return errorResult(fmt.Sprintf("failed to start SSH job: %s", sanitizeError(err, input)))
+			return errorResult(fmt.Sprintf("PowerShell preparation failed: %s", sanitizeError(err, input)))
+		}
+		command = staged.command
+	}
+	if op == "start" {
+		if err := execCtx.Err(); err != nil {
+			warning := ""
+			if staged != nil {
+				warning = cleanupStagedPowerShell(client, staged.remotePath, staged.executable)
+			}
+			return errorResult(fmt.Sprintf("SSH job preparation failed: %s%s", err, warningSuffix(warning)))
+		}
+		job, err := startSSHJobPrepared(client, command, input.MaxOutputChars, input.OutputMode, staged)
+		if err != nil {
+			warning := ""
+			if staged != nil {
+				warning = cleanupStagedPowerShell(client, staged.remotePath, staged.executable)
+			}
+			return errorResult(fmt.Sprintf("failed to start SSH job: %s%s", sanitizeError(err, input), warningSuffix(warning)))
 		}
 		msg := fmt.Sprintf("SSH background job started.\njob_id: %s\nstatus: running\nUse operation=status or operation=tail with this job_id; use operation=cancel to stop it.", job.id)
 		if !input.Quiet && !input.ResultOnly {
@@ -174,30 +204,30 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, SSHOutput{Result: msg, JobID: job.id, Status: "running", ConnectionID: connectionID}, nil
 	}
 
-	// 5. Execute command with timeout
-	timeout := time.Duration(input.TimeoutSecInt) * time.Second
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	result, err := executeCommand(execCtx, client, input.Command, input.MaxOutputChars, input.OutputMode)
+	// 5. Execute command with the remaining preparation/execution timeout.
+	result, err := executeCommand(execCtx, client, command, input.MaxOutputChars, input.OutputMode)
+	cleanupWarning := finishStagedPowerShell(client, staged, err)
 	if err != nil {
 		// If connection is broken, remove from pool
 		if isConnectionError(err) {
 			pool.remove(key)
 		}
-		return errorResult(fmt.Sprintf("command execution failed: %s", sanitizeError(err, input)))
+		toolResult, output, handleErr := errorResult(fmt.Sprintf("command execution failed: %s%s", sanitizeError(err, input), warningSuffix(cleanupWarning)))
+		output.CleanupWarning = cleanupWarning
+		return toolResult, output, handleErr
 	}
 
 	// 6. Format output
 	truncated := result.StdoutTruncated || result.StderrTruncated
 	if input.ResultOnly {
 		compact, marshalErr := json.Marshal(struct {
-			Stdout       string `json:"stdout"`
-			Stderr       string `json:"stderr"`
-			ExitCode     int    `json:"exit_code"`
-			ConnectionID string `json:"connection_id,omitempty"`
-			Warning      string `json:"warning,omitempty"`
-		}{result.Stdout, result.Stderr, result.ExitCode, connectionID, PrivateWarningForConnection(input, ssrfWarning)})
+			Stdout         string `json:"stdout"`
+			Stderr         string `json:"stderr"`
+			ExitCode       int    `json:"exit_code"`
+			ConnectionID   string `json:"connection_id,omitempty"`
+			Warning        string `json:"warning,omitempty"`
+			CleanupWarning string `json:"cleanup_warning,omitempty"`
+		}{result.Stdout, result.Stderr, result.ExitCode, connectionID, PrivateWarningForConnection(input, ssrfWarning), cleanupWarning})
 		if marshalErr != nil {
 			return errorResult(fmt.Sprintf("cannot encode SSH result: %v", marshalErr))
 		}
@@ -207,7 +237,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 			}, SSHOutput{
 				Result: output, Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: result.ExitCode,
 				Truncated: truncated, StdoutBytes: result.StdoutBytes, StderrBytes: result.StderrBytes,
-				ConnectionID: connectionID,
+				ConnectionID: connectionID, CleanupWarning: cleanupWarning,
 			}, nil
 	}
 	var sb strings.Builder
@@ -224,6 +254,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 		sb.WriteString(fmt.Sprintf("[connection_id: %s]\n", connectionID))
 		if input.EchoCommand == nil || common.FlexBool(input.EchoCommand) {
 			displayCommand, _ := common.TruncateRunes(input.Command, 500, "… [command abbreviated]")
+			if input.PowerShellScript != "" {
+				displayCommand = "[PowerShell script via temporary file]"
+			}
 			sb.WriteString(fmt.Sprintf("$ %s\n\n", displayCommand))
 		}
 	}
@@ -248,6 +281,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 		sb.WriteString(fmt.Sprintf("\n[output truncated: stdout_bytes=%d; stderr_bytes=%d; retained_bytes=%d; output_mode=%s]", result.StdoutBytes, result.StderrBytes, input.MaxOutputChars, input.OutputMode))
 	}
 
+	if cleanupWarning != "" {
+		sb.WriteString("\n[cleanup_warning: " + cleanupWarning + "]")
+	}
 	output := sb.String()
 	if ssrfWarning != "" && (!input.TrustedProfile || pool.consumePrivateWarning(key)) {
 		output = ssrfWarning + "\n\n" + output
@@ -255,7 +291,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: output}},
 		IsError: result.ExitCode != 0,
-	}, SSHOutput{Result: output, Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: result.ExitCode, Truncated: truncated, StdoutBytes: result.StdoutBytes, StderrBytes: result.StderrBytes, ConnectionID: connectionID}, nil
+	}, SSHOutput{Result: output, Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: result.ExitCode, Truncated: truncated, StdoutBytes: result.StdoutBytes, StderrBytes: result.StderrBytes, ConnectionID: connectionID, CleanupWarning: cleanupWarning}, nil
 }
 
 func handleJobOperation(op string, input SSHInput) (*mcp.CallToolResult, SSHOutput, error) {
@@ -281,6 +317,9 @@ func handleJobOperation(op string, input SSHInput) (*mcp.CallToolResult, SSHOutp
 	if snap.StdoutTruncated || snap.StderrTruncated {
 		sb.WriteString("truncated: true (head and tail retained)\n")
 	}
+	if snap.CleanupWarning != "" {
+		sb.WriteString("cleanup_warning: " + snap.CleanupWarning + "\n")
+	}
 	if snap.Error != "" {
 		sb.WriteString("error: " + snap.Error + "\n")
 	}
@@ -304,7 +343,7 @@ func handleJobOperation(op string, input SSHInput) (*mcp.CallToolResult, SSHOutp
 			Content: []mcp.Content{&mcp.TextContent{Text: result}},
 			IsError: snap.Status == "failed",
 		}, SSHOutput{
-			Result: result, JobID: snap.ID, Status: snap.Status, ExitCode: snap.ExitCode,
+			Result: result, JobID: snap.ID, Status: snap.Status, ExitCode: snap.ExitCode, CleanupWarning: snap.CleanupWarning,
 			Truncated:   snap.StdoutTruncated || snap.StderrTruncated,
 			StdoutBytes: snap.StdoutBytes, StderrBytes: snap.StderrBytes,
 		}, nil
@@ -313,7 +352,7 @@ func handleJobOperation(op string, input SSHInput) (*mcp.CallToolResult, SSHOutp
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name:        "ssh",
-		Description: `Execute SSH commands with password, key, agent, IPv6, and ProxyJump support. Prefer a local connection_profile or reuse connection_id; matching sessions pool for 30 minutes. Output is bounded. For long commands use start/background, then status/tail/cancel with job_id.`,
+		Description: `Execute SSH commands with password, key, agent, IPv6, and ProxyJump support. Prefer a local connection_profile or reuse connection_id; matching sessions pool for 30 minutes. Output is bounded. For long-running commands use start/background, then status/tail/cancel with job_id. On Windows use powershell_script to upload, execute, and clean up a temporary script via SSH stdin. Long standalone EncodedCommand invocations are staged automatically.`,
 	}, Handle)
 }
 

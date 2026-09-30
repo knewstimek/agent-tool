@@ -16,17 +16,19 @@ import (
 const sshJobRetention = time.Hour
 
 type sshJob struct {
-	mu         sync.Mutex
-	id         string
-	command    string
-	createdAt  time.Time
-	finishedAt time.Time
-	status     string
-	exitCode   int
-	err        string
-	stdout     *common.BoundedCapture
-	stderr     *common.BoundedCapture
-	session    *gossh.Session
+	mu             sync.Mutex
+	id             string
+	command        string
+	createdAt      time.Time
+	finishedAt     time.Time
+	status         string
+	exitCode       int
+	err            string
+	stdout         *common.BoundedCapture
+	stderr         *common.BoundedCapture
+	session        *gossh.Session
+	staged         bool
+	cleanupWarning string
 }
 
 type sshJobSnapshot struct {
@@ -42,6 +44,7 @@ type sshJobSnapshot struct {
 	StderrBytes     int64
 	StdoutTruncated bool
 	StderrTruncated bool
+	CleanupWarning  string
 }
 
 var sshJobs = struct {
@@ -50,6 +53,10 @@ var sshJobs = struct {
 }{items: make(map[string]*sshJob)}
 
 func startSSHJob(client *gossh.Client, command string, maxOutputBytes int, outputMode string) (*sshJob, error) {
+	return startSSHJobPrepared(client, command, maxOutputBytes, outputMode, nil)
+}
+
+func startSSHJobPrepared(client *gossh.Client, command string, maxOutputBytes int, outputMode string, staged *stagedPowerShell) (*sshJob, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return nil, err
@@ -67,6 +74,7 @@ func startSSHJob(client *gossh.Client, command string, maxOutputBytes int, outpu
 		stdout:    common.NewBoundedCaptureMode((maxOutputBytes+1)/2, outputMode),
 		stderr:    common.NewBoundedCaptureMode(maxOutputBytes/2, outputMode),
 		session:   session,
+		staged:    staged != nil,
 	}
 	session.Stdout = job.stdout
 	session.Stderr = job.stderr
@@ -78,11 +86,17 @@ func startSSHJob(client *gossh.Client, command string, maxOutputBytes int, outpu
 
 	go func() {
 		err := session.Run(command)
+		completionErr := err
+		if _, ok := err.(*gossh.ExitError); ok {
+			completionErr = nil // Non-zero exit still confirms remote completion.
+		}
+		cleanupWarning := finishStagedPowerShell(client, staged, completionErr)
 		job.mu.Lock()
 		defer job.mu.Unlock()
 		job.finishedAt = time.Now()
 		job.session = nil
 		job.exitCode = 0
+		job.cleanupWarning = cleanupWarning
 		if job.status == "cancelled" {
 			if exitErr, ok := err.(*gossh.ExitError); ok {
 				job.exitCode = exitErr.ExitStatus()
@@ -132,6 +146,7 @@ func (j *sshJob) snapshot() sshJobSnapshot {
 		Stdout: stdout, Stderr: stderr, StdoutBytes: stdoutBytes,
 		StderrBytes: stderrBytes, StdoutTruncated: stdoutTruncated,
 		StderrTruncated: stderrTruncated,
+		CleanupWarning:  j.cleanupWarning,
 	}
 }
 
@@ -142,7 +157,9 @@ func (j *sshJob) cancel() error {
 		return fmt.Errorf("job is already %s", j.status)
 	}
 	j.status = "cancelled"
-	j.finishedAt = time.Now()
+	if j.staged {
+		j.cleanupWarning = "remote completion was not confirmed; the temporary PowerShell script may remain until remote cleanup runs"
+	}
 	if j.session != nil {
 		_ = j.session.Signal(gossh.SIGKILL)
 		return j.session.Close()

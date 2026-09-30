@@ -72,7 +72,7 @@ func TestCompactDescribeFiltersByTargetOperationAndReusesHandle(t *testing.T) {
 		t.Fatalf("compact describe failed: result=%v err=%v", result, err)
 	}
 	text := result.Content[0].(*mcp.TextContent).Text
-	for _, want := range []string{`"command"`, `"quiet"`, `"echo_command"`, `"required":["command"]`} {
+	for _, want := range []string{`"command"`, `"quiet"`, `"echo_command"`, `"required":["command"]`, `"required":["powershell_script"]`, `"oneOf"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("compact schema omitted %s: %s", want, text)
 		}

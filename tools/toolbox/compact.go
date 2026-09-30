@@ -11,6 +11,7 @@ type operationShape struct {
 	fields             []string
 	required           []string
 	requiresConnection bool
+	requiresCommand    bool
 }
 
 var connectionFields = []string{
@@ -74,8 +75,8 @@ var compactOperationShapes = map[string]map[string]operationShape{
 	},
 	"ssh": {
 		"execute": {
-			fields:             append(append([]string{}, connectionFields...), "operation", "command", "timeout_sec", "max_output_chars", "output_mode", "quiet", "echo_command", "result_only"),
-			required:           []string{"command"},
+			fields:             append(append([]string{}, connectionFields...), "operation", "command", "powershell_script", "timeout_sec", "max_output_chars", "output_mode", "quiet", "echo_command", "result_only"),
+			requiresCommand:    true,
 			requiresConnection: true,
 		},
 	},
@@ -160,6 +161,12 @@ func compactInputSchema(encoded []byte, tool, operation string) ([]byte, error) 
 				map[string]any{"required": []string{"connection_profile"}},
 				map[string]any{"required": []string{"host", "user"}},
 			}
+		}
+		if shape.requiresCommand {
+			result["allOf"] = []any{map[string]any{"oneOf": []any{
+				map[string]any{"required": []string{"command"}},
+				map[string]any{"required": []string{"powershell_script"}},
+			}}}
 		}
 	} else {
 		// Generic compact mode keeps all fields but strips verbose root metadata.

@@ -344,6 +344,28 @@ only display; SSRF blocking and cloud metadata protection are unchanged. SSH als
 `result_only`; the last returns compact JSON centered on `stdout`, `stderr`, and
 `exit_code`. SFTP supports `quiet`, `result_only`, and `upload_many` (up to 100 files).
 
+For Windows PowerShell, pass script text in `powershell_script` instead of `command`.
+SSH uploads a unique UTF-8 temporary `.ps1` through a short PowerShell command's
+standard input, executes its contents with
+a short PowerShell launcher, and deletes it after success or failure. Standalone
+`powershell[.exe]` / `pwsh[.exe]` commands using `-EncodedCommand` (or `-enc`, `-ec`,
+`-e`) are staged automatically at 8,000 UTF-16 code units. Safe profile, interactive,
+apartment, and execution-policy options are preserved; unsupported options or shell
+suffixes require explicit `powershell_script` input. Scripts are limited to 4 MiB.
+SFTP is not required, including on legacy Windows SSH servers.
+
+```json
+{"operation":"execute","connection_profile":"dev","powershell_script":"Write-Output 'hello'","result_only":true}
+```
+
+Preparation and foreground execution share `timeout_sec`. Background scripts use
+the same upload and cleanup path, then expose `job_id` for status/tail/cancel.
+The remote launcher attempts cleanup in `finally`; confirmed completion also triggers
+bounded SSH cleanup. Cancellation or connection loss does not prove remote termination,
+so the tool leaves deletion to the remote launcher and reports `cleanup_warning` if
+completion or cleanup could not be confirmed. This warning is separate from the
+script's exit code and captured output.
+
 ### Local SSH private-key conversion
 
 `ssh_key` converts a private-key file without sending its contents over the network or

@@ -426,13 +426,18 @@ Host key verification: strict (known_hosts required), tofu (trust on first use, 
 ProxyJump: use jump_host to connect through a bastion (e.g. reach IPv6-only servers via IPv4 bastion).
 Foreground output defaults to 32768 bytes with original byte counts. output_mode
 selects head_tail (default), head, or tail retention.
-Non-zero remote exits return IsError=true. For long commands, use background=true or
+For Windows scripts use powershell_script instead of command (UTF-8, max 4 MiB).
+Uploads a unique temporary script through SSH stdin, executes it, and cleans up after
+success/failure. Long standalone EncodedCommand invocations are staged automatically.
+Preparation shares timeout_sec with execution. Unconfirmed remote completion or
+deletion is reported separately as cleanup_warning, including for background jobs.
+Non-zero remote exits return IsError=true. For long-running commands, use background=true or
 	operation=start, then operation=status/tail/cancel with job_id (tail_lines defaults to 50).
 	connection_profile reads a named local ignored profile; connection_id reuses its
 	connection fields for 30 minutes. quiet suppresses banners, echo_command controls
 	command echoing, and result_only returns stdout/stderr/exit_code JSON.
 	Parameters: operation, background, job_id, tail_lines, host, port, user, password,
-	key_file, passphrase, use_agent, command, disconnect, host_key_check, timeout_sec,
+	key_file, passphrase, use_agent, command, powershell_script, disconnect, host_key_check, timeout_sec,
 	max_output_chars, output_mode, jump_host, jump_port, jump_user, jump_password,
 	jump_key_file, jump_passphrase, connection_profile, connection_id, quiet, echo_command, result_only
 

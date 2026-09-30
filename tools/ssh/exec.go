@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"context"
+	"io"
 
 	"agent-tool/common"
 
@@ -21,11 +22,19 @@ type execResult struct {
 
 // executeCommand runs a command on the remote server with timeout.
 func executeCommand(ctx context.Context, client *gossh.Client, command string, maxOutputBytes int, outputMode string) (*execResult, error) {
+	return executeCommandWithInput(ctx, client, command, maxOutputBytes, outputMode, nil)
+}
+
+func executeCommandWithInput(ctx context.Context, client *gossh.Client, command string, maxOutputBytes int, outputMode string, stdin io.Reader) (*execResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	session, err := client.NewSession()
 	if err != nil {
 		return nil, err
 	}
 	defer session.Close()
+	session.Stdin = stdin
 
 	stdoutBuf := common.NewBoundedCaptureMode((maxOutputBytes+1)/2, outputMode)
 	stderrBuf := common.NewBoundedCaptureMode(maxOutputBytes/2, outputMode)
@@ -40,7 +49,8 @@ func executeCommand(ctx context.Context, client *gossh.Client, command string, m
 
 	select {
 	case <-ctx.Done():
-		// Timeout — kill remote process and close session to unblock
+		// Request remote termination and close the session to unblock.
+		// A channel close alone does not confirm remote process termination.
 		// the goroutine running session.Run (prevents goroutine leak).
 		_ = session.Signal(gossh.SIGKILL)
 		session.Close()
