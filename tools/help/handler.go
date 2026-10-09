@@ -11,7 +11,7 @@ import (
 )
 
 type HelpInput struct {
-	Topic string `json:"topic,omitempty" jsonschema:"Help topic. Available: overview, encoding, indentation, tools, debug, analyze, memtool, wintool, codegraph, ipc, troubleshooting. Empty = overview"`
+	Topic string `json:"topic,omitempty" jsonschema:"Help topic. Available: overview, encoding, indentation, tools, debug, analyze, memtool, wintool, codegraph, troubleshooting. Empty = overview"`
 }
 
 type HelpOutput struct {
@@ -42,15 +42,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HelpInput) (*mc
 		text = helpMemtool()
 	case "wintool", "window", "win", "gui":
 		text = helpWintool()
-	case "ipc":
-		text = helpIPC()
 	case "codegraph", "code-graph", "graph", "ast":
 		text = helpCodegraph()
 	case "troubleshooting", "trouble":
 		text = helpTroubleshooting()
 	default:
 		text = "Unknown topic: " + topic + "\n\n" +
-			"Available topics: overview, encoding, indentation, tools, debug, analyze, memtool, wintool, codegraph, ipc, troubleshooting"
+			"Available topics: overview, encoding, indentation, tools, debug, analyze, memtool, wintool, codegraph, troubleshooting"
 	}
 
 	return &mcp.CallToolResult{
@@ -90,9 +88,6 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - grep: Encoding-aware regex content search
 - glob: File pattern matching with ** recursive support
 - listdir: Bounded/pageable directory listing with type, name, and counts-only filters
-- compress: Create zip / tar.gz archives
-- decompress: Extract zip / tar.gz archives
-- backup: Timestamped zip backup with exclude patterns
 - convert_encoding: Convert file encoding (EUC-KR ↔ UTF-8, BOM, etc.)
 - checksum: Compute file hash (md5, sha1, sha256)
 - file_info: File metadata (size, encoding, mixed line-ending counts, indentation, line count)
@@ -100,34 +95,24 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - patch: Apply unified diff patch to a file (supports dry_run)
 - delete: Delete one or up to 100 files/directories with compact batch results (supports dry_run)
 - rename: Rename or move a file/directory (atomic, supports dry_run)
-- sysinfo: System information (OS, CPU, RAM, disk, uptime, CPU usage measurement)
-- find_tools: Discover installed dev tools (compilers, runtimes, build systems)
 - proclist: List running processes with PID, name, command line, memory (sensitive args masked)
 - prockill: Kill, suspend, or resume processes by PID or port (tree kill, signal selection, zombie handling, dry_run)
 - procexec: Execute commands as new processes (background, suspended start, timeout, diagnostic compaction)
-- envvar: Read environment variables (sensitive values masked)
-- firewall: Read firewall rules (iptables/nftables/netsh, read-only)
 - ssh: Execute commands on remote servers via SSH (IPv4/IPv6, ProxyJump, session pooling)
 - ssh_key: Convert local SSH private keys between PPK, PEM, OpenSSH, and PKCS#8
 - sftp: Transfer files and manage remote filesystems over SSH (upload, download, ls, stat, mkdir, rm, chmod, rename, async transfers)
 - bash: Persistent shell sessions with state retention and raw-retrievable diagnostic compaction
-- webfetch: Fetch web content as text/Markdown with ECH, DoH, proxy, and SSRF protection
-- websearch: Web search via Brave Search or Naver API (requires API key env vars)
 - download: Download files from URLs with ECH, DoH, proxy, and SSRF protection
 - httpreq: Execute HTTP requests with any method (POST, PUT, DELETE, etc.) for API testing
 - copy: Copy files or directories (recursive, atomic write, permissions preserved, dry_run)
 - mkdir: Create directories with optional permission mode (recursive by default)
 - multiread: Read multiple files in one call (reduces API round-trips)
 - regexreplace: Regex find-and-replace across files or directories (capture groups, encoding-aware, dry_run)
-- jsonquery: Query JSON files with dot-notation paths to extract specific values (saves tokens)
-- yamlquery: Query YAML files with dot-notation paths (same syntax as jsonquery)
-- tomlquery: Query TOML files with dot-notation paths (same syntax as jsonquery)
+- query: Read one value from a JSON/YAML/TOML file by dot-notation path (format from extension; saves tokens)
 - portcheck: Check if a TCP port is open on a host (connectivity test)
-- tlscheck: Check TLS certificate of a host (expiry, issuer, SANs, protocol, cipher)
-- dnslookup: DNS record lookup (A, AAAA, MX, CNAME, TXT, NS, SOA) with DoH support
+- netcheck: Network diagnostics: external_ip, dns (A/AAAA/MX/CNAME/TXT/NS/SOA, DoH), tls (certificate expiry, issuer, SANs, protocol, cipher)
 - mysql: Execute MySQL/MariaDB queries (SELECT → table format, DML → affected rows)
 - redis: Execute Redis commands (any command, result formatting)
-- externalip: Get your external (public) IP address
 - sloc: Count source lines of code (SLOC) with per-language summary
 - debug: Interactive debugger via DAP (breakpoints, stepping, variables, stack traces)
 - analyze: Static binary analysis (23 operations: decompile to C (x86/x64 PE/ELF), disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
@@ -312,22 +297,6 @@ directories_only, files_only, name_pattern, include (array), counts_only
 Returns: tree, returned_files, returned_dirs, total_files, total_dirs,
 truncated, has_more, next_cursor
 
-## compress
-Create zip or tar.gz archive.
-Parameters: sources (array), output
-
-## decompress
-Extract zip or tar.gz archive. Includes Zip Slip and Zip Bomb protection.
-Symlinks are skipped by default (security). Enable via set_config allow_symlinks=true.
-Even when enabled, symlinks targeting outside the output directory are blocked.
-Parameters: archive, output_dir
-
-## backup
-Create timestamped zip backup with exclude patterns.
-Use dry_run=true to preview: shows included/excluded file counts, directory stats,
-exclude pattern match counts, and largest files — without creating the archive.
-Parameters: source, output_dir, excludes, dry_run
-
 ## convert_encoding
 Convert a file's encoding to a different character set.
 Supports: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1, UTF-16, ASCII, Windows-1252, Big5, GB18030.
@@ -373,18 +342,6 @@ Fails if destination already exists.
 Use dry_run=true to preview.
 Parameters: old_path, new_path, dry_run
 
-## sysinfo
-Returns system information: OS, CPU cores, RAM, disk space, hostname, uptime.
-Set duration_sec (1-20) to measure CPU usage over that period.
-Parameters: duration_sec
-
-## find_tools
-Discover installed development tools on the system.
-Returns paths and versions for compilers, build systems, and runtimes.
-Searches env vars, PATH, and known installation directories.
-Windows: also checks ~/bin, scoop shims, npm global. Unix: also checks ~/bin, ~/.local/bin, Homebrew.
-Parameters: category (go, dotnet, node, python, java, rust, c_cpp, build, vcs, container, js_runtime, or all)
-
 ## proclist
 List running processes with PID, name, command line arguments, and memory usage.
 Sensitive data in command lines (passwords, tokens, Bearer) is automatically masked.
@@ -406,16 +363,6 @@ Use prockill with signal=cont to resume a suspended process.
 Foreground output compacts repeated diagnostics by default. output_view=raw disables it.
 When compacted, retrieve the bounded original for 30 minutes with toolbox operation=output and raw_output_id.
 Parameters: command, args, cwd, env, timeout_sec, background, suspended, max_output_chars, output_view
-
-## envvar
-Read environment variables. Get a specific one by name, or list all with filter.
-Sensitive values (PASSWORD, TOKEN, SECRET, KEY, etc.) are automatically masked.
-Parameters: name (exact name), filter (partial name match)
-
-## firewall
-Read firewall rules (read-only). Supports iptables, nftables, firewalld on Linux; netsh on Windows.
-May require elevated privileges (sudo) on Linux.
-Parameters: filter (rule name or port)
 
 ## ssh
 Execute commands on a remote server via SSH. Supports IPv4 and IPv6.
@@ -473,22 +420,6 @@ Repeated diagnostics are compacted by default; output_view=raw disables it. When
 retrieve the bounded original for 30 minutes with toolbox operation=output and raw_output_id.
 Parameters: command, cwd (initial directory for new sessions), session_id (default: "default"), timeout_sec (default 120, max 600), output_view, disconnect
 
-## webfetch
-Fetch content from a URL and return it as text. HTML pages are automatically converted to Markdown.
-ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) enabled by default for privacy.
-Cloud metadata SSRF protection (blocks 169.254.x.x, link-local). Private IPs allowed for local dev.
-Default User-Agent mimics Chrome browser. Custom headers supported (User-Agent, Referer, etc.).
-Supports HTTP and SOCKS5 proxies.
-Parameters: url, headers, max_length (default 32768, max 131072), timeout_sec (default 30, max 120), proxy_url, no_doh, no_ech, raw
-
-## websearch
-Search the web using Brave Search or Naver Search API.
-Requires API keys via environment variables:
-- BRAVE_SEARCH_API_KEY for Brave Search (English/global, default)
-- NAVER_CLIENT_ID + NAVER_CLIENT_SECRET for Naver Search (Korean content)
-Auto-selects engine based on configured keys (Brave preferred) if engine is not specified.
-Parameters: query, engine (brave/naver), max_results (default 5, max 20), timeout_sec (default 15, max 30)
-
 ## download
 Download a file from a URL and save it to disk. Supports binary and text files.
 ECH and DoH enabled by default. Cloud metadata SSRF protection. HTTP and SOCKS5 proxy support.
@@ -541,25 +472,13 @@ index or compiled artifact is never rewritten.
 Atomic write for each modified file.
 Parameters: pattern, replacement, path (file or directory), glob, ignore_case, dry_run, max_files (default 100)
 
-## jsonquery
-Query a JSON file using dot-notation paths without loading the entire file into context.
+## query
+Read one value from a JSON, YAML or TOML file by a dot-notation path, without loading the file into context.
+Format comes from the extension (.json, .yaml/.yml, .toml); pass format=json|yaml|toml for other names.
 Supports nested keys (a.b.c), array indices ([0], [-1] for last), and wildcards ([*] for all elements).
-Examples: "dependencies.react", "scripts.build", "items[0].name", "users[*].email".
-Returns the matched value with its type. Objects and arrays are pretty-printed.
-Parameters: file_path, query
-
-## yamlquery
-Query a YAML file using dot-notation paths (same syntax as jsonquery).
-Supports nested keys, array indices, and wildcards.
-Examples: "services.web.ports[0]", "spec.containers[*].image".
-Parameters: file_path, query
-
-## tomlquery
-Query a TOML file using dot-notation paths (same syntax as jsonquery).
-Supports nested keys, array indices, and wildcards.
-Handles TOML-specific types: int64, datetime (RFC3339).
-Examples: "dependencies.react", "tool.poetry.name", "servers[0].host".
-Parameters: file_path, query
+Examples: "scripts.build", "services.web.ports[0]", "tool.poetry.name", "users[*].email".
+Returns the value with its type; objects and arrays print as JSON, TOML datetimes as RFC3339.
+Parameters: file_path, query, format, max_output_chars
 
 ## portcheck
 Check if a TCP port is open on a host. Tests connectivity with configurable timeout.
@@ -567,16 +486,14 @@ Returns OPEN/CLOSED status with response time or error details (refused, timeout
 Supports hostnames, IPv4, and IPv6 addresses.
 Parameters: host, port (1-65535), timeout_sec (default 5, max 30)
 
-## tlscheck
-Check TLS certificate and connection details of a remote host.
-Returns: Subject, Issuer, NotBefore, NotAfter, days until expiry, SANs, TLS version, cipher suite.
-Parameters: host, port (default 443), timeout_sec (default 10, max 30)
-
-## dnslookup
-Look up DNS records for a hostname.
-Supports record types: A, AAAA, MX, CNAME, TXT, NS, SOA.
-Uses DNS over HTTPS (DoH) by default for privacy. Can fall back to system DNS.
-Parameters: host, record_type (default A), use_doh (default true), doh_endpoint
+## netcheck
+Network diagnostics, one operation per call:
+- external_ip: public IPv4 and IPv6 (several detection services with fallback)
+- dns: records for host; record_type A, AAAA, MX, CNAME, TXT, NS, SOA (default A);
+  DNS over HTTPS by default (use_doh=false for the system resolver, doh_endpoint to override)
+- tls: certificate Subject, Issuer, NotBefore/NotAfter, days to expiry, SANs, TLS version, cipher
+  for host:port (default 443, timeout_sec default 10, max 30)
+Parameters: operation, host, record_type, use_doh, doh_endpoint, port, timeout_sec
 
 ## mysql
 Execute SQL queries on a MySQL/MariaDB server.
@@ -601,12 +518,6 @@ Defaults: max_value_chars=200, max_output_chars=32768 (max 131072).
 Parameters: host, port (default 6379), password, db (default 0), command,
 args (array), timeout_sec (default 30, max 120), tls, max_value_chars,
 max_output_chars
-
-## externalip
-Returns your external (public) IP address.
-Queries multiple IP detection services (ipify, ifconfig.me, icanhazip) with automatic fallback.
-Useful for SSH configuration, firewall rules, or verifying VPN/proxy status.
-No parameters required.
 
 ## sloc
 Count source lines of code (SLOC) in a file or directory.
@@ -1645,66 +1556,6 @@ macOS and Linux are not supported.
   - SetForegroundWindow may fail if agent-tool is not the foreground process
   - screenshot/clipboard return ImageContent by default (base64 PNG)
     Use save_path to save to file instead (save_path="temp" or absolute path)`
-}
-
-func helpIPC() string {
-	return `# ipc -- Inter-Process Communication
-
-TCP-based message passing between AI agent sessions (same or different machines).
-
-## Two modes
-
-### Point-to-point (no broker needed)
-Direct TCP connection. One sender, one receiver. Simple but fragile -- if sender
-arrives before receiver is listening, the message is lost.
-
-  send:    Connect to host and send a text message.
-           Required: host (e.g. "192.168.1.5:19900"), message
-  receive: Listen on port, block until a message arrives (or timeout).
-           Optional: port (default 19900), timeout (default 60s, max 300s),
-           bind (default 0.0.0.0). Auto-responds to PING with PONG.
-  ping:    Send PING to host, wait for PONG, measure RTT.
-           Required: host
-
-### Broker-based (reliable, no missed messages)
-A shared broker process queues messages per named mailbox. Agents post/fetch by
-name -- timing doesn't matter. First caller starts the broker; others attach.
-
-  broker_start:  Start (or attach to) broker on this machine.
-                 Optional: port (default 19901), bind (default 127.0.0.1)
-  broker_stop:   Stop the broker (only if this process owns it).
-  post:          Send message to a named mailbox. Non-blocking.
-                 Required: to (target mailbox), from (sender name), message
-                 Optional: port (broker port, default 19901)
-  fetch:         Read all pending messages from your mailbox. Non-blocking.
-                 Required: mailbox
-                 Optional: port
-  wait:          Block until a message arrives in your mailbox.
-                 Required: mailbox
-                 Optional: timeout (default 60s, max 300s), port
-                 No tokens consumed while waiting.
-  broker_status: Show queued message counts per mailbox.
-                 Optional: port
-
-## Workflow examples
-
-### Broker (recommended for agent-to-agent):
-  Both sessions:  ipc(operation="broker_start")
-  Session A:      ipc(operation="wait", mailbox="A")   -- blocks
-  Session B:      ipc(operation="post", to="A", from="B", message="hello")
-  Session A gets "hello", replies:
-                  ipc(operation="post", to="B", from="A", message="done")
-  Session B:      ipc(operation="fetch", mailbox="B")
-
-### Point-to-point:
-  Session A: ipc(operation="receive", port=19900, timeout=120)  -- blocks
-  Session B: ipc(operation="send", host="localhost:19900", message="hi")
-
-## Notes
-  - Max message size: 1MB. Max timeout: 300s.
-  - broker_start: first caller wins; subsequent callers auto-connect as clients.
-  - wait/receive block the MCP call (no token consumption during wait).
-  - For cross-machine broker: use bind="0.0.0.0" on broker_start, specify port on post/fetch/wait.`
 }
 
 func helpCodegraph() string {

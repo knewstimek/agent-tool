@@ -14,7 +14,7 @@ AI 코딩 에이전트(Claude Code, Cursor, Codex 등)의 내장 도구에는 �
 
 - **탭 들여쓰기 깨짐**: LLM은 공백을 출력하지만, 프로젝트는 탭을 사용. 내장 Edit는 공백을 그대로 써서 들여쓰기 스타일이 망가짐.
 - **인코딩 손상**: EUC-KR, Shift-JIS, GB18030 파일을 편집하면 조용히 UTF-8로 변환되어 레거시 프로젝트가 깨짐.
-- **도구가 너무 분산됨**: Redis CLI, MySQL/SSH 클라이언트를 따로 찾고 설정하는 과정은 번거롭고 오류가 잦음. agent-tool은 55개 도구를 한 바이너리로 통합하고 compact 프로필과 고정 toolbox gateway로 필요할 때 호출함.
+- **도구가 너무 분산됨**: Redis CLI, MySQL/SSH 클라이언트를 따로 찾고 설정하는 과정은 번거롭고 오류가 잦음. agent-tool은 41개 도구를 한 바이너리로 통합하고 compact 프로필과 고정 toolbox gateway로 필요할 때 호출함.
 - **리버스 엔지니어링 지원 부재**: 내장 도구로는 바이너리 디스어셈블, PE/ELF 헤더 분석, 함수 경계 탐지, 크로스 레퍼런스 검색이 불가능. agent-tool은 정적 바이너리 분석(디스어셈블리, PDB/DWARF 타입을 적용한 C 디컴파일, xref, 함수 탐지), DAP 디버거, CheatEngine 스타일 메모리 도구를 포함 -- 에이전트에게 완전한 리버스 엔지니어링 능력을 부여.
 - **네트워크 검열**: 일부 국가에서 정부 수준의 웹 필터링으로 `curl`/`wget` 요청이 차단됨. agent-tool은 ECH (Encrypted Client Hello)와 DoH (DNS over HTTPS)를 기본 활성화하여 이런 제한을 우회.
 
@@ -26,8 +26,8 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI 및 모든 MCP 호�
 
 ## LLM 친화적 기본 동작
 
-기본 `core` 프로필은 55개 전체 스키마 대신 `toolbox`를 포함한 11개만 노출합니다.
-실제 MCP 프로토콜 측정에서 직렬화된 도구 목록은 `full` 약 84KB에서 약 15KB로
+기본 `core` 프로필은 41개 전체 스키마 대신 `toolbox`를 포함한 11개만 노출합니다.
+실제 MCP 프로토콜 측정에서 직렬화된 도구 목록은 `full` 약 74KB에서 약 15KB로
 줄었습니다. 상시 컨텍스트를 최소화하려면 `--profile core-lite`로 약 6.4KB인
 `read`, `write`, `edit`, `grep`, `toolbox`만 노출할 수 있습니다. `toolbox(operation="describe", tool="ssh", compact=true,
 tool_operation="execute")`로 한 operation에 필요한 필드와 required 목록만 확인한 뒤
@@ -57,45 +57,31 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
 | **Patch** | unified diff 패치 적용 (dry_run 지원). 줄마다 자기 줄바꿈을 유지하므로 CRLF/LF 혼합 파일이 재작성되지 않음 | ✅ |
 | **Checksum** | 파일 해시 계산 (md5, sha1, sha256) | ✅ |
 | **FileInfo** | 파일 메타데이터 (크기, 인코딩, 혼합 줄바꿈별 개수, 들여쓰기, 줄 수) | ✅ |
-| **Compress** | zip / tar.gz 압축 | ✅ |
-| **Decompress** | zip / tar.gz 해제 (Zip Slip/Bomb 보호) | ✅ |
-| **Backup** | 타임스탬프 zip 백업 (제외 패턴 지원). dry_run 미리보기 — 디렉토리별 집계, 패턴별 매칭 수, 큰 파일 목록 | ✅ |
 | **ConvertEncoding** | 파일 인코딩 변환 (EUC-KR ↔ UTF-8, BOM 추가/제거 등) | ✅ |
 | **Delete** | 안전한 파일/디렉토리 삭제와 최대 100개 `file_paths` 일괄 처리. 디렉토리는 `recursive=true` 필요, 보호 경로·심볼릭링크 차단, 오류 제한, dry_run 미리보기 | ✅ |
 | **Rename** | 원자적 파일/디렉토리 이름 변경 및 이동 (dry_run) | ✅ |
-| **SysInfo** | 시스템 정보 — OS, CPU, RAM, 디스크, 업타임, CPU 사용률 측정 | ✅ |
-| **FindTools** | 설치된 개발 도구 탐색 — 컴파일러, 런타임, 빌드 시스템 (Go, .NET, Node, Python, Java, Rust, C/C++ 등). PATH, 환경변수, 알려진 경로 탐색 (~/bin, snap, scoop, Homebrew, SDKMAN, nvm, fnm, pyenv) | ✅ |
 | **ProcList** | 프로세스 목록 — PID, 이름, 커맨드라인, 메모리. 민감 인자 자동 마스킹. 이름/포트 필터 | ✅ |
 | **ProcKill** | PID/포트로 프로세스 종료/일시정지/재개. 트리 킬, 시그널 선택(kill/term/hup/int/stop/cont), 좀비 처리(Linux), dry_run | ✅ |
 | **ProcExec** | 명령어를 새 프로세스로 실행. 포그라운드/백그라운드/일시정지 상태 시작, 타임아웃·환경변수, 안전한 반복 진단 압축과 만료형 raw 출력 조회 | ✅ |
-| **EnvVar** | 환경변수 조회. 민감 값(비밀번호, 토큰) 자동 마스킹 | ✅ |
-| **Firewall** | 방화벽 규칙 조회 — iptables/nftables/firewalld (Linux), netsh (Windows). 읽기 전용 | ✅ |
 | **SSH** | 기본 32K head+tail 캡처, 원본 바이트 수, 비정상 종료 오류 의미론, 백그라운드 작업(start/status/tail/cancel). 인증 인식 풀링, 호스트 키 검증, ProxyJump, IPv6 | ✅ |
 | **SSHKey** | 로컬 개인키를 PuTTY PPK v3, 전통 PEM, 최신 OpenSSH, PKCS#8 사이에서 변환. 입력 자동 감지, 암호화 PPK/OpenSSH 출력, 0600 저장을 지원하며 키 본문은 반환하지 않음 | ✅ |
 | **SFTP** | SSH 경유 파일 전송 및 원격 파일시스템 관리. 업로드, 다운로드, ls, stat, mkdir, rm, chmod, rename. 비동기 전송(upload_async/download_async + status/cancel). SSH 세션 풀 재사용. 최대 2GB | ✅ |
 | **Bash** | 영속 셸 세션 — 작업 디렉토리·환경변수 상태 유지, 안전한 반복 진단 압축과 만료형 raw 출력 조회. 세션 풀링 (최대 5개, 유휴 타임아웃 30분). Unix: bash/sh, Windows: PowerShell/git-bash/cmd | ✅ |
-| **WebFetch** | 기본 32K/최대 128K 웹 콘텐츠 텍스트·마크다운 반환. ECH + DoH, HTML→마크다운, SSRF 차단, 프록시 지원 | ✅ |
-| **WebSearch** | Brave Search 또는 Naver API를 통한 웹 검색. API 키 환경변수 필요 (`BRAVE_SEARCH_API_KEY` 또는 `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`). 엔진 자동 선택, Brave 우선 | ✅ |
 | **Download** | URL에서 파일 다운로드. ECH + DoH 기본 활성. SSRF 차단. HTTP/SOCKS5 프록시. 원자적 파일 저장. 최대 2GB | ✅ |
 | **HTTPReq** | HTTP 요청 실행 (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS). 커스텀 헤더, 본문, 프록시 지원. API 테스트용. SSRF 차단 | ✅ |
-| **JSONQuery** | JSON 파일을 점 표기법으로 쿼리 (예: `dependencies.react`, `items[*].id`). 전체 파일 로드 없이 특정 값만 추출 (토큰 절약) | ✅ |
-| **YAMLQuery** | YAML 파일을 점 표기법으로 쿼리 (JSONQuery와 동일 문법) | ✅ |
-| **TOMLQuery** | TOML 파일을 점 표기법으로 쿼리 (JSONQuery와 동일 문법). TOML 전용 타입(datetime, int64) 지원 | ✅ |
+| **Query** | JSON/YAML/TOML 파일에서 점 표기법 경로로 값 하나만 조회 (예: `dependencies.react`, `services.web.ports[0]`, `users[*].email`). 형식은 확장자 또는 `format`으로 지정. 큰 설정 파일의 토큰 절약 | ✅ |
 | **Copy** | 파일/디렉토리 복사. 원자적 쓰기 + 권한 보존. 재귀 디렉토리 복사. Windows 잠긴 파일 폴백 (실행 중인 exe/DLL 이름 변경 후 교체). dry_run 미리보기 | ✅ |
 | **Mkdir** | 디렉토리 생성. 8진수 권한 모드 지정 가능 (예: 0755). 기본 재귀 생성 (mkdir -p). dry_run 미리보기 | ✅ |
 | **MultiRead** | 최대 50개 파일, 호출 전체 32K 예산, 파일별 기본 200줄, 초장문 행 안전 처리, 파일별/전체 continuation 메타데이터. 해시는 opt-in | ✅ |
 | **RegexReplace** | 파일/디렉토리 전체 정규식 찾기-바꾸기. 인코딩과 줄바꿈 보존, 캡처 그룹 ($1, $2) 지원. 바이너리 파일 자동 제외. dry_run 미리보기 | ✅ |
-| **TLSCheck** | TLS 인증서 상세 조회 — 주체, 발급자, 만료일, SAN, TLS 버전, 암호화 스위트 | ✅ |
-| **DNSLookup** | DNS 레코드 조회 (A/AAAA/MX/CNAME/TXT/NS/SOA). DoH(DNS over HTTPS) 기본 활성 | ✅ |
+| **NetCheck** | 네트워크 진단: `external_ip`(공인 IPv4/IPv6, 제공자 자동 fallback), `dns`(A/AAAA/MX/CNAME/TXT/NS/SOA, DoH 또는 시스템 리졸버), `tls`(인증서 주체·발급자·만료일·SAN·TLS 버전·암호 스위트) | ✅ |
 | **MySQL** | MySQL/MariaDB SQL 쿼리 실행. SELECT 결과의 행·열·셀·전체 출력 제한을 각각 설정 가능하고 DML은 영향 행 수 반환. 페이징은 SQL LIMIT/OFFSET 사용 | ✅ |
 | **Redis** | Redis 명령 실행. 타입별 포맷 출력. TLS 지원. 위험 명령(FLUSHALL, SHUTDOWN 등) 차단 | ✅ |
 | **PortCheck** | TCP 포트 열림 여부 확인. OPEN/CLOSED 상태 + 응답 시간 반환. 호스트명, IPv4, IPv6 지원 | ✅ |
-| **ExternalIP** | 외부(공인) IP 주소 조회. 복수 제공자 자동 fallback (ipify, ifconfig.me, icanhazip) | ✅ |
 | **SLOC** | 언어별 소스 코드 라인 수 집계. 70+ 언어 감지, 파일/언어별 분류, 빈 줄 통계, max_depth 제어 | ✅ |
 | **Debug** | DAP(Debug Adapter Protocol) 기반 인터랙티브 디버거. 변수값·전체 출력 제한과 variables/completions/modules/loaded_sources 페이징 지원. dlv(Go), debugpy(Python), codelldb(C/C++/Rust) 테스트 완료. 모든 DAP 호환 어댑터 사용 가능. Stdio/TCP 모드. 참고: vsdbg(Microsoft)는 VS Code 라이센스 필수로 단독 사용 불가 — codelldb 또는 netcoredbg를 대안으로 사용 | ✅ |
 | **Analyze** | 정적 바이너리 분석 및 리버스 엔지니어링. x86/x64 PE/ELF 함수의 C 디컴파일(Ghidra 디컴파일러 코어의 Go 포팅인 Gosleigh, 시간/메모리 상한을 건 별도 워커 프로세스에서 실행), GUID가 맞는 PE PDB(내장 리더, DIA SDK 불필요; `pdb_force`로 GUID가 다른 PDB도 로드) 또는 내장 DWARF 자동 적용(디컴파일에는 함수 이름·프로토타입·구조체/열거형 타입·전역 데이터·비트필드·지역변수 이름과 타입, disassemble·call_graph·function_at에는 이름과 정확한 함수 경계), MSVC 데코레이션 이름 디맹글, Go 바이너리는 Go ABI 적용, Ghidra 방식의 noreturn 함수 감지, `agent-tool decompile-all`로 바이너리 전체를 JSONL 코퍼스로 추출, x86/x64/ARM/ARM64 디스어셈블리, 실행 섹션 전체 오프셋 복구·CFG 신뢰도·호출 대상/결과 필터·ABI 인식 CALL/tail-call 인자까지의 제한된 레지스터/스택/읽기 전용 상수 추적을 갖춘 x86/x64 의미 기반 명령어 검색, PE/ELF/Mach-O 파싱과 PE import 출력 페이징·상한, xref, 함수/콜그래프, 포인터/RTTI/vtable/구조체 분석, imphash, Rich 헤더, DWARF, 문자열, hexdump, 패턴 검색, 엔트로피, 오버레이, 바이너리 비교. 글로벌 파일 크기 제한 없음 | ✅ |
 | **Memtool** | CheatEngine 스타일 프로세스 메모리 도구 — 메모리 값 검색/필터/읽기/쓰기, read_chain(base+offset 포인터 체인을 한 콜에 배치로 해소), 라이브 디스어셈블리(x86/x64/ARM/ARM64), 실행 취소, 구조체 패턴 검색, 포인터 스캔, 메모리 diff. 대용량 스캔을 위한 디스크 기반 스냅샷. 세션 관리 (유휴 타임아웃). Windows (ReadProcessMemory), Linux (/proc/pid/mem). Windows는 elevated 시 SeDebugPrivilege 자동 활성화, opt-in `force_dacl`로 같은 유저의 self-harden DACL 프로세스 우회(원본 DACL 원복) | ✅ |
-| **IPC** | AI 에이전트 세션 간 TCP 기반 프로세스 간 통신. 1:1 메시지 전달 (블로킹 수신). 프로토콜: [2바이트 타입][4바이트 길이][페이로드]. 작업: send, receive (타임아웃 블로킹), ping. 다른 PC 간 통신 가능. 최대 1MB 메시지, 300초 타임아웃 | ✅ |
 | **Wintool** | Windows GUI 자동화 -- 창/자식 컨트롤 검색/열거, 스크린샷 캡처(ImageContent PNG, PrintWindow), 클립보드 이미지 읽기, 텍스트 읽기/쓰기, 클릭, 타이핑, 원시 메시지 전송, 표시/숨기기/최소화/최대화, 이동/크기 변경, 닫기, 포커스. screenshot/clipboard 기본 ImageContent 반환 (save_path 옵션으로 파일 저장). AI 에이전트가 GUI 앱을 "보고" 조작할 수 있게 함. Windows 전용 | ✅ |
 | **CodeGraph** | 완전 내장 시맨틱 코드 그래프. Go 표준 라이브러리 AST와 C/C++·Python·C#·Rust·Java용 지연 압축 tree-sitter WASM에 선언/정의 통합, 반환 체인·generic·alias 전파, 전이 include, 보정 가능한 overload 증거 점수, virtual/interface dispatch, macro/callback 간선, 빌드 조건 provenance, multi-root workspace를 더함. 컴파일러·언어 서버·외부 바이너리·LLM 호출·토큰 비용 없음 | ✅ |
 | **SetConfig** | 런타임 설정 변경 (인코딩, 파일 크기 제한, symlink, workspace 등) | ✅ |

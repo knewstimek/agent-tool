@@ -260,16 +260,6 @@ func formatRecord(rr dns.RR) string {
 	}
 }
 
-func Register(server *mcp.Server) {
-	common.SafeAddTool(server, &mcp.Tool{
-		Name: "dnslookup",
-		Description: `Query DNS records for a hostname.
-Supports record types: A, AAAA, MX, CNAME, TXT, NS, SOA.
-Uses DNS over HTTPS (DoH) by default for privacy and to bypass local DNS filters.
-Can also use traditional UDP DNS queries against the system resolver.
-Returns record values with TTL information.`,
-	}, Handle)
-}
 
 func errorResult(msg string) (*mcp.CallToolResult, DNSLookupOutput, error) {
 	return &mcp.CallToolResult{

@@ -139,14 +139,6 @@ func tlsVersionName(version uint16) string {
 	}
 }
 
-func Register(server *mcp.Server) {
-	common.SafeAddTool(server, &mcp.Tool{
-		Name: "tlscheck",
-		Description: `Checks TLS certificate and connection details for a host.
-Returns certificate subject, issuer, expiry, SANs, TLS version, and cipher suite.
-Useful for verifying SSL certificates, checking expiry dates, and debugging TLS issues.`,
-	}, Handle)
-}
 
 func errorResult(msg string) (*mcp.CallToolResult, TLSCheckOutput, error) {
 	return &mcp.CallToolResult{

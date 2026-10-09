@@ -18,12 +18,12 @@ type ConfigInput struct {
 	MaxFileSizeMB    *int   `json:"max_file_size_mb,omitempty" jsonschema:"Maximum file size in MB that read/edit/grep tools will accept. Min: 1, Default: 100"`
 	AllowSymlinks    *bool  `json:"allow_symlinks,omitempty" jsonschema:"Allow creating symlinks when extracting archives. Default: false (skipped for security)"`
 	Workspace        string `json:"workspace,omitempty" jsonschema:"Set the default workspace/project root directory. Used by glob when no explicit path is given. Must be an absolute path to an existing directory"`
-	AllowHTTPPrivate  *bool `json:"allow_http_private,omitempty" jsonschema:"Allow webfetch/download/httpreq to access private IPs (127.x, 192.168.x, 10.x). Default: false (blocked). Cloud metadata IPs always blocked"`
+	AllowHTTPPrivate  *bool `json:"allow_http_private,omitempty" jsonschema:"Allow download/httpreq to access private IPs (127.x, 192.168.x, 10.x). Default: false (blocked). Cloud metadata IPs always blocked"`
 	AllowMySQLPrivate *bool `json:"allow_mysql_private,omitempty" jsonschema:"Allow mysql tool to access private IPs. Default: true. Cloud metadata IPs always blocked"`
 	AllowRedisPrivate *bool `json:"allow_redis_private,omitempty" jsonschema:"Allow redis tool to access private IPs. Default: true. Cloud metadata IPs always blocked"`
 	AllowSSHPrivate   *bool `json:"allow_ssh_private,omitempty" jsonschema:"Allow ssh/sftp tools to access private IPs. Default: true. Cloud metadata IPs always blocked"`
-	EnableDoH         *bool `json:"enable_doh,omitempty" jsonschema:"Enable DNS over HTTPS globally for webfetch/download/httpreq/dnslookup. Default: true. Per-request no_doh/use_doh can still override"`
-	EnableECH         *bool `json:"enable_ech,omitempty" jsonschema:"Enable Encrypted Client Hello globally for webfetch/download/httpreq. Default: true. Per-request no_ech can still override"`
+	EnableDoH         *bool `json:"enable_doh,omitempty" jsonschema:"Enable DNS over HTTPS globally for download/httpreq/netcheck dns. Default: true. Per-request no_doh/use_doh can still override"`
+	EnableECH         *bool `json:"enable_ech,omitempty" jsonschema:"Enable Encrypted Client Hello globally for download/httpreq. Default: true. Per-request no_ech can still override"`
 }
 
 type ConfigOutput struct {

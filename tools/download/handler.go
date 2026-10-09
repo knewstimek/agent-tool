@@ -202,7 +202,7 @@ func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name: "download",
 		Description: `Download a file from a URL and save it to disk.
-Supports binary and text files. For reading web page content as text, use the webfetch tool.
+Supports binary and text files. For an API call or a page body inline, use httpreq.
 Features: ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) enabled by default.
 Supports HTTP and SOCKS5 proxies. SSRF protection blocks private/internal IPs.
 Max download size: 100 MB (adjustable via max_size_mb, hard limit 2 GB).`,

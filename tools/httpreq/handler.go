@@ -226,7 +226,7 @@ Ideal for testing APIs, webhooks, and web services during development.
 Features: ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) enabled by default.
 Supports custom headers, request body, and HTTP/SOCKS5 proxies.
 SSRF protection blocks private/internal IPs. Response body is truncated at max_response_kb.
-For fetching web pages as text, use webfetch. For downloading files, use download.`,
+For downloading files, use download.`,
 	}, Handle)
 }
 

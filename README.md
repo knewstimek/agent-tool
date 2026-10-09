@@ -14,7 +14,7 @@ Built-in tools in AI coding agents (Claude Code, Cursor, Codex, etc.) have known
 
 - **Tab indentation breaks**: LLMs output spaces, but your project uses tabs. The built-in Edit tool writes spaces as-is, corrupting your indentation style.
 - **Encoding corruption**: Editing EUC-KR, Shift-JIS, or GB18030 files silently converts them to UTF-8, breaking legacy projects.
-- **Too many separate tools**: Making the agent find, install, and configure Redis CLI, MySQL client, SSH client, etc. is tedious and error-prone. agent-tool bundles 55 tools into one binary and exposes them on demand through compact profiles.
+- **Too many separate tools**: Making the agent find, install, and configure Redis CLI, MySQL client, SSH client, etc. is tedious and error-prone. agent-tool bundles 41 tools into one binary and exposes them on demand through compact profiles.
 - **No reverse engineering support**: Built-in tools can't disassemble binaries, inspect PE/ELF headers, find function boundaries, or search cross-references. agent-tool includes static binary analysis (disassembly, decompilation to C with PDB/DWARF types, xref, function detection), a DAP debugger, and CheatEngine-style memory tools -- giving your agent full reverse engineering capabilities.
 - **Network censorship**: In some countries, government-level web filtering breaks plain `curl`/`wget` requests. agent-tool uses ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) by default to work around these restrictions.
 
@@ -27,8 +27,8 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 ## LLM-efficient by default
 
 The default `core` profile exposes only 11 schemas (including `toolbox`) instead of
-all 55. In a protocol-level measurement this reduced the serialized tool list from
-about 84 KB (`full`) to 15 KB. For the smallest steady-state context, start with
+all 41. In a protocol-level measurement this reduced the serialized tool list from
+about 74 KB (`full`) to 15 KB. For the smallest steady-state context, start with
 `--profile core-lite`; its five schemas are about 6.4 KB and expose only `read`,
 `write`, `edit`, `grep`, and `toolbox`. Use
 `toolbox(operation="describe", tool="ssh", compact=true, tool_operation="execute")`
@@ -59,45 +59,31 @@ Local relative paths resolve against an explicit workspace, then the MCP client 
 | **Patch** | Apply unified diff patch to a file (supports dry_run). Each line keeps its own ending, so a mixed CRLF/LF file is not rewritten | ✅ |
 | **Checksum** | Compute file hash (md5, sha1, sha256) | ✅ |
 | **FileInfo** | File metadata (size, encoding, mixed line-ending counts, indentation, line count) | ✅ |
-| **Compress** | Create zip / tar.gz archives | ✅ |
-| **Decompress** | Extract zip / tar.gz archives (Zip Slip/Bomb protection) | ✅ |
-| **Backup** | Timestamped zip backup with exclude patterns. dry_run preview with directory stats, pattern match counts, and largest files | ✅ |
 | **ConvertEncoding** | Convert file encoding (EUC-KR ↔ UTF-8, add/remove BOM, etc.) | ✅ |
 | **Delete** | Safe file/directory deletion, including compact batches of up to 100 `file_paths`. Directories require `recursive=true`; protected roots, symlink blocking, bounded errors, and dry_run preview | ✅ |
 | **Rename** | Atomic file/directory rename or move (dry_run) | ✅ |
-| **SysInfo** | System information — OS, CPU, RAM, disk, uptime, CPU usage measurement | ✅ |
-| **FindTools** | Discover installed dev tools — compilers, runtimes, build systems (Go, .NET, Node, Python, Java, Rust, C/C++, etc.). Searches PATH, env vars, and known locations (~/bin, snap, scoop, Homebrew, SDKMAN, nvm, fnm, pyenv) | ✅ |
 | **ProcList** | List running processes — PID, name, command line, memory. Sensitive args auto-masked. Filter by name or port | ✅ |
 | **ProcKill** | Kill, suspend, or resume processes by PID or port. Tree kill, signal selection (kill/term/hup/int/stop/cont), zombie handling (Linux), dry_run | ✅ |
 | **ProcExec** | Execute commands as new processes. Foreground/background/suspended start, timeout/env vars, and safe repeated-diagnostic compaction with expiring raw-output retrieval | ✅ |
-| **EnvVar** | Read environment variables. Sensitive values (passwords, tokens) auto-masked | ✅ |
-| **Firewall** | Read firewall rules — iptables/nftables/firewalld (Linux), netsh (Windows). Read-only | ✅ |
 | **SSH** | SSH execution with 32K head+tail capture, original byte counts, proper non-zero-exit errors, and background jobs (`start/status/tail/cancel`). Auth-aware pooling, host-key verification, ProxyJump, IPv6 | ✅ |
 | **SSHKey** | Convert local private keys between PuTTY PPK v3, traditional PEM, modern OpenSSH, and PKCS#8. Auto-detects input, supports encrypted PPK/OpenSSH output, writes mode 0600, and never returns key material | ✅ |
 | **SFTP** | Transfer files and manage remote filesystems over SSH. Upload, download, ls, stat, mkdir, rm, chmod, rename. Reuses SSH session pool. Max 2 GB per transfer | ✅ |
 | **Bash** | Persistent shell sessions with working directory/environment retention, safe repeated-diagnostic compaction, and expiring raw-output retrieval. Session pooling (max 5, idle timeout 30 min). Unix: bash/sh, Windows: PowerShell/git-bash/cmd | ✅ |
-| **WebFetch** | Fetch web content as text/Markdown with a 32K default/128K max. ECH + DoH, HTML→Markdown conversion, SSRF protection, proxy support, Chrome User-Agent | ✅ |
-| **WebSearch** | Web search via Brave Search or Naver API. Requires API key env vars (`BRAVE_SEARCH_API_KEY` or `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET`). Auto-selects engine, Brave preferred | ✅ |
 | **Download** | Download files from URLs to disk. ECH + DoH by default. SSRF protection. HTTP/SOCKS5 proxy. Atomic write. Max 2 GB | ✅ |
 | **HTTPReq** | Execute HTTP requests with any method (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS). API testing with custom headers, body, proxy. SSRF protection | ✅ |
-| **JSONQuery** | Query JSON files with dot-notation paths (e.g. `dependencies.react`, `items[*].id`). Extract specific values without loading entire file into context | ✅ |
-| **YAMLQuery** | Query YAML files with dot-notation paths (same syntax as JSONQuery) | ✅ |
-| **TOMLQuery** | Query TOML files with dot-notation paths (same syntax as JSONQuery). Supports TOML-specific types (datetime, int64) | ✅ |
+| **Query** | Read one value from a JSON, YAML or TOML file by dot-notation path (e.g. `dependencies.react`, `services.web.ports[0]`, `users[*].email`); format from the extension or `format`. Saves tokens on large configs | ✅ |
 | **Copy** | Copy files/directories with atomic write and permission preservation. Recursive directory copy. Windows locked-file fallback (renames running exe/DLL aside). dry_run preview | ✅ |
 | **Mkdir** | Create directories with optional permission mode (octal, e.g. 0755). Recursive by default (mkdir -p). dry_run preview | ✅ |
 | **MultiRead** | Read up to 50 files with a call-wide 32K budget, 200-line per-file default, long-line safety, and per-file/overall continuation metadata. Hashes are opt-in | ✅ |
 | **RegexReplace** | Regex find-and-replace across files/directories. Encoding and line-ending preserving, capture groups ($1, $2). Skips binary files. dry_run preview | ✅ |
-| **TLSCheck** | Check TLS certificate details — subject, issuer, expiry, SANs, TLS version, cipher suite | ✅ |
-| **DNSLookup** | DNS record lookup (A/AAAA/MX/CNAME/TXT/NS/SOA). DNS over HTTPS (DoH) by default for privacy | ✅ |
+| **NetCheck** | Network diagnostics: `external_ip` (public IPv4/IPv6 with provider fallback), `dns` (A/AAAA/MX/CNAME/TXT/NS/SOA over DoH or the system resolver), `tls` (certificate subject, issuer, expiry, SANs, TLS version, cipher) | ✅ |
 | **MySQL** | Execute SQL queries on MySQL/MariaDB. Table-formatted SELECT results with configurable row/column/cell/total-output limits; affected rows for DML. Use SQL LIMIT/OFFSET for paging | ✅ |
 | **Redis** | Execute Redis commands with formatted output by type. TLS support. Dangerous commands (FLUSHALL, SHUTDOWN, etc.) blocked | ✅ |
 | **PortCheck** | Check if a TCP port is open on a host. Returns OPEN/CLOSED with response time. Supports hostname, IPv4, IPv6 | ✅ |
-| **ExternalIP** | Get your external (public) IP address. Multiple providers with automatic fallback (ipify, ifconfig.me, icanhazip) | ✅ |
 | **SLOC** | Count source lines of code per language. 70+ language detection, per-file/language breakdown, blank line stats, max_depth control | ✅ |
 | **Debug** | Interactive debugger via DAP (Debug Adapter Protocol). Full DAP coverage with bounded values/output and paging for variables, completions, modules, and loaded sources. Tested with dlv (Go), debugpy (Python), codelldb (C/C++/Rust). Works with any DAP-compatible adapter. Stdio and TCP modes. Note: vsdbg (Microsoft) requires VS Code licensing and is not usable standalone — use codelldb or netcoredbg as open-source alternatives | ✅ |
 | **Analyze** | Static binary analysis and reverse engineering. Decompilation of x86/x64 PE/ELF functions to C (Gosleigh, a Go port of Ghidra's decompiler core, run in an isolated worker process with time/memory limits); a matching PE PDB (built-in reader, no DIA SDK; `pdb_force` loads one whose GUID differs) or embedded DWARF is read automatically for function names, prototypes, struct/enum types, global data, bitfields and local variables (names and types) in decompilation, and for names and exact function bounds in disassemble, call_graph and function_at; MSVC decorated names are demangled; Go binaries use the Go ABI; non-returning functions are detected as in Ghidra; `agent-tool decompile-all` dumps a whole binary to a JSONL corpus; x86/x64/ARM/ARM64 disassembly; semantic x86/x64 instruction search with exhaustive executable-offset recovery, CFG confidence, target/result filters, and bounded register/stack/read-only constant tracing into ABI-aware calls and tail calls; PE/ELF/Mach-O parsing with bounded, pageable PE import output; xref, function discovery/call graphs, pointer/RTTI/vtable/struct analysis, imphash, Rich header, DWARF, strings, hexdump, pattern search, entropy, overlay detection, and binary diff. No global file size limit | ✅ |
 | **Memtool** | CheatEngine-style process memory tool — search/filter/read/write memory values, read_chain (resolve base+offset pointer chains, batched in one call), live disassembly (x86/x64/ARM/ARM64), undo, struct pattern search, pointer scan, memory diff. Disk-backed snapshots for large scans. Session management with idle timeout. Windows (ReadProcessMemory) and Linux (/proc/pid/mem). Windows auto-enables SeDebugPrivilege when elevated; opt-in `force_dacl` bypasses a same-user process's self-hardened DACL (original restored after) | ✅ |
-| **IPC** | Inter-process communication between AI agent sessions over TCP. 1:1 message passing with blocking receive. Protocol: [2-byte type][4-byte length][payload]. Operations: send, receive (blocking with timeout), ping. Works across machines. Max 1MB message, 300s timeout | ✅ |
 | **Wintool** | Windows GUI automation — find/enumerate windows and child controls, capture screenshots (ImageContent PNG via PrintWindow), read clipboard images, read/set text, click, type, send raw messages, show/hide/minimize/maximize, move/resize, close, focus. screenshot/clipboard return ImageContent by default (save_path option for file output). Enables AI agents to "see" and interact with GUI applications. Windows only | ✅ |
 | **CodeGraph** | Fully embedded semantic code graph: Go standard-library AST plus lazy compressed tree-sitter WASM for C/C++, Python, C#, Rust, and Java. Adds declaration/definition identity, return-chain and generic/alias propagation, transitive includes, calibrated overload evidence, virtual/interface dispatch, macro/callback edges, build-condition provenance, and multi-root workspaces. No compiler, language server, external binary, LLM call, or token cost | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |

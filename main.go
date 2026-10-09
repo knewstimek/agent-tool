@@ -10,40 +10,33 @@ import (
 	"agent-tool/common"
 	"agent-tool/install"
 	"agent-tool/tools/analyze"
-	"agent-tool/tools/backup"
 	bashtool "agent-tool/tools/bash"
 	"agent-tool/tools/checksum"
 	"agent-tool/tools/codegraph"
-	"agent-tool/tools/compress"
 	"agent-tool/tools/config"
 	"agent-tool/tools/convertenc"
 	copytool "agent-tool/tools/copy"
 	"agent-tool/tools/debug"
 	"agent-tool/tools/delete"
 	"agent-tool/tools/diff"
-	"agent-tool/tools/dnslookup"
 	"agent-tool/tools/download"
 	edit "agent-tool/tools/edit"
-	"agent-tool/tools/envvar"
-	"agent-tool/tools/externalip"
 	"agent-tool/tools/fileinfo"
-	"agent-tool/tools/findtools"
-	"agent-tool/tools/firewall"
 	"agent-tool/tools/glob"
 	"agent-tool/tools/grep"
 	"agent-tool/tools/help"
 	"agent-tool/tools/httpreq"
-	"agent-tool/tools/ipc"
-	"agent-tool/tools/jsonquery"
 	"agent-tool/tools/listdir"
 	"agent-tool/tools/memtool"
 	"agent-tool/tools/mkdir"
 	"agent-tool/tools/multiedit"
 	"agent-tool/tools/multiread"
+	"agent-tool/tools/netcheck"
 	mysqltool "agent-tool/tools/mysql"
 	"agent-tool/tools/patch"
 	"agent-tool/tools/portcheck"
 	"agent-tool/tools/procexec"
+	"agent-tool/tools/query"
 	"agent-tool/tools/prockill"
 	"agent-tool/tools/proclist"
 	"agent-tool/tools/read"
@@ -54,15 +47,9 @@ import (
 	"agent-tool/tools/sloc"
 	"agent-tool/tools/ssh"
 	"agent-tool/tools/sshkey"
-	"agent-tool/tools/sysinfo"
-	"agent-tool/tools/tlscheck"
-	"agent-tool/tools/tomlquery"
 	"agent-tool/tools/toolbox"
-	"agent-tool/tools/webfetch"
-	"agent-tool/tools/websearch"
 	"agent-tool/tools/wintool"
 	"agent-tool/tools/write"
-	"agent-tool/tools/yamlquery"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -211,38 +198,24 @@ Groups: core, file, coding, system, remote, data, analysis, windows. Use agent_t
 		{Name: "multiread", Group: "core", Register: func() { multiread.Register(server) }},
 		{Name: "agent_tool_help", Group: "core", Register: func() { help.Register(server) }},
 
-		{Name: "compress", Group: "coding", Register: func() { compress.RegisterCompress(server) }},
-		{Name: "decompress", Group: "coding", Register: func() { compress.RegisterDecompress(server) }},
-		{Name: "backup", Group: "coding", Register: func() { backup.Register(server) }},
 		{Name: "convert_encoding", Group: "coding", Register: func() { convertenc.Register(server) }},
 		{Name: "bash", Group: "coding", Register: func() { bashtool.Register(server) }},
 		{Name: "procexec", Group: "coding", Register: func() { procexec.Register(server) }},
-		{Name: "find_tools", Group: "coding", Register: func() { findtools.Register(server) }},
 		{Name: "regexreplace", Group: "coding", Register: func() { regexreplace.Register(server) }},
 		{Name: "sloc", Group: "coding", Register: func() { sloc.Register(server) }},
 
-		{Name: "sysinfo", Group: "system", Register: func() { sysinfo.Register(server) }},
 		{Name: "proclist", Group: "system", Register: func() { proclist.Register(server) }},
 		{Name: "prockill", Group: "system", Register: func() { prockill.Register(server) }},
-		{Name: "envvar", Group: "system", Register: func() { envvar.Register(server) }},
-		{Name: "firewall", Group: "system", Register: func() { firewall.Register(server) }},
-		{Name: "ipc", Group: "system", Register: func() { ipc.Register(server) }},
 
 		{Name: "ssh", Group: "remote", Register: func() { ssh.Register(server) }},
 		{Name: "ssh_key", Group: "remote", Register: func() { sshkey.Register(server) }},
 		{Name: "sftp", Group: "remote", Register: func() { sftptool.Register(server) }},
-		{Name: "webfetch", Group: "remote", Register: func() { webfetch.Register(server) }},
-		{Name: "websearch", Group: "remote", Register: func() { websearch.Register(server) }},
 		{Name: "download", Group: "remote", Register: func() { download.Register(server) }},
 		{Name: "httpreq", Group: "remote", Register: func() { httpreq.Register(server) }},
 		{Name: "portcheck", Group: "remote", Register: func() { portcheck.Register(server) }},
-		{Name: "tlscheck", Group: "remote", Register: func() { tlscheck.Register(server) }},
-		{Name: "dnslookup", Group: "remote", Register: func() { dnslookup.Register(server) }},
-		{Name: "externalip", Group: "remote", Register: func() { externalip.Register(server) }},
+		{Name: "netcheck", Group: "remote", Register: func() { netcheck.Register(server) }},
 
-		{Name: "jsonquery", Group: "data", Register: func() { jsonquery.Register(server) }},
-		{Name: "yamlquery", Group: "data", Register: func() { yamlquery.Register(server) }},
-		{Name: "tomlquery", Group: "data", Register: func() { tomlquery.Register(server) }},
+		{Name: "query", Group: "data", Register: func() { query.Register(server) }},
 		{Name: "mysql", Group: "data", Register: func() { mysqltool.Register(server) }},
 		{Name: "redis", Group: "data", Register: func() { redistool.Register(server) }},
 

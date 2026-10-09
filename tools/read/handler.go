@@ -376,7 +376,7 @@ func Register(server *mcp.Server) {
 
 func handleImage(path string, fi os.FileInfo, mime string) (*mcp.CallToolResult, ReadOutput, error) {
 	if fi.Size() > maxImageSize {
-		return errorResult(fmt.Sprintf("image too large (%d bytes, max %d). Use download or compress first", fi.Size(), maxImageSize))
+		return errorResult(fmt.Sprintf("image too large (%d bytes, max %d). Downscale it first (e.g. with bash)", fi.Size(), maxImageSize))
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

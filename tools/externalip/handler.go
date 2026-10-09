@@ -118,16 +118,6 @@ func fetchIP(ctx context.Context, client *http.Client, providerURL string) (stri
 	return ip, nil
 }
 
-func Register(server *mcp.Server) {
-	common.SafeAddTool(server, &mcp.Tool{
-		Name: "externalip",
-		Description: `Returns your external (public) IP address (both IPv4 and IPv6).
-Queries dedicated IPv4 and IPv6 detection services with automatic fallback.
-IPv6 shows "not available" when the network has no IPv6 connectivity.
-Useful for SSH configuration, firewall rules, or verifying VPN/proxy status.
-No parameters required.`,
-	}, Handle)
-}
 
 func errorResult(msg string) (*mcp.CallToolResult, ExternalIPOutput, error) {
 	return &mcp.CallToolResult{

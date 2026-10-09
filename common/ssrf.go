@@ -78,7 +78,7 @@ func IsPrivateIP(ip net.IP) bool {
 // Cloud metadata IPs are always blocked regardless of these settings.
 
 var (
-	// allowHTTPPrivate controls whether webfetch/download/httpreq can access private IPs.
+	// allowHTTPPrivate controls whether download/httpreq can access private IPs.
 	// Default: false (blocked) — HTTP tools are the primary prompt injection vector.
 	allowHTTPPrivate   bool
 	allowHTTPPrivateMu sync.RWMutex

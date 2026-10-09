@@ -407,7 +407,7 @@ const mcpPermissionEntry = "mcp__agent-tool__*"
 // safePermissionEntries lists tools that are safe to auto-approve.
 // These only access local files, metadata, or read-only system info.
 // Excluded (require manual approval): ssh, ssh_key, sftp, mysql, redis, httpreq,
-// webfetch, download, bash, procexec, prockill, debug — these access networks,
+// netcheck, download, bash, procexec, prockill, debug — these access networks,
 // remote systems, sensitive private-key material, or execute arbitrary commands.
 var safePermissionEntries = []string{
 	"mcp__agent-tool__read",
@@ -422,9 +422,6 @@ var safePermissionEntries = []string{
 	"mcp__agent-tool__patch",
 	"mcp__agent-tool__checksum",
 	"mcp__agent-tool__file_info",
-	"mcp__agent-tool__compress",
-	"mcp__agent-tool__decompress",
-	"mcp__agent-tool__backup",
 	"mcp__agent-tool__convert_encoding",
 	"mcp__agent-tool__delete",
 	"mcp__agent-tool__rename",
@@ -432,14 +429,9 @@ var safePermissionEntries = []string{
 	"mcp__agent-tool__sloc",
 	"mcp__agent-tool__copy",
 	"mcp__agent-tool__regexreplace",
-	"mcp__agent-tool__jsonquery",
-	"mcp__agent-tool__yamlquery",
-	"mcp__agent-tool__tomlquery",
-	"mcp__agent-tool__sysinfo",
-	"mcp__agent-tool__find_tools",
+	"mcp__agent-tool__query",
 	"mcp__agent-tool__proclist",
-	"mcp__agent-tool__envvar",
-	// externalip excluded from safe: makes external HTTP requests
+	// netcheck excluded from safe: makes external DNS/HTTP/TLS requests
 	// set_config excluded from safe: can change SSRF policy
 	"mcp__agent-tool__agent_tool_help",
 	"mcp__agent-tool__analyze",
