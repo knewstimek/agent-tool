@@ -550,7 +550,7 @@ Static binary analysis tool with 23 operations:
 - rich_header: PE Rich header -- build tool fingerprinting
 - overlay_detect: Detect data appended after last section
 - dwarf_info: DWARF debug info (compilation units, functions, types)
-- xref: Find code references to a target address or inclusive range (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
+- xref: Code and data references to an address/range, to the strings containing a text, or to a struct field; each located in its function (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
 - function_at: Find function boundaries (PDB procedure records when a matching PDB is present, else .pdata or heuristic)
 - call_graph: Static call graph from root function (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
 - follow_ptr: Follow pointer chain with symbol annotation (PE). Detects circular pointer references
@@ -826,25 +826,46 @@ Extract DWARF debug information from PE, ELF, or Mach-O binaries.
     - "Binary appears stripped" if no DWARF data found
 
 ### xref
-Find all code locations that reference a target address or inclusive address range
-(PE, ELF, Mach-O).
-  analyze(operation="xref", file_path="/path/to/binary",
-          target_va="0x140001000")
+Find the code and data that reference an address, an address range, the strings
+containing a text, or a structure field (PE, ELF, Mach-O).
+  analyze(operation="xref", file_path="/path/to/binary", target_va="0x140001000")
   analyze(operation="xref", file_path="/path/to/binary",
           target_va="0x140020000", target_end_va="0x140020fff")
+  analyze(operation="xref", file_path="/path/to/binary", target_text="Login failed")
+  analyze(operation="xref", file_path="/path/to/binary", field="Player::health")
 
-  Scans executable sections for instruction patterns that reference the target:
-    x64: E8/E9 (CALL/JMP relative), 0F 8x (Jcc), LEA/MOV [rip+disp32],
-         FF 15/25 (indirect CALL/JMP), PUSH imm32
-    x86: E8/E9 (relative), 0F 8x (Jcc), FF 15/25 [abs32], A1/A3 (MOV),
-         68 imm32 (PUSH absolute)
-    ARM64: BL, B, B.cond, ADRP+ADD, ADRP+LDR (page-relative pairs)
-    ARM32: BL, B (with PC+8 pipeline offset)
+  Every reference line names the function it sits in ("; in World::Tick+0x42"),
+  using PDB bounds when available and otherwise the call_graph function table
+  (.pdata, exports, call targets, and functions found from the code layout).
+  The summary counts how many functions the references come from.
+
+  What is found:
+    Code: CALL/JMP/Jcc relative, RIP-relative operands (x64), absolute operands
+      and immediates (mov reg, imm; push imm; mov rax, imm64; x86 [abs32]),
+      ARM64 BL/B/B.cond/ADRP pairs, ARM32 BL/B. A lea/mov of the target followed
+      by call/jmp through that register is reported as a CALL ("then call rax").
+    Data (PTR): stored pointers in data sections -- vtable slots (with the slot
+      index), function-pointer and callback tables. PE images check each slot
+      against the relocation table; ELF PIE pointers come from RELATIVE relocs.
+
+  target_text: finds up to 16 stored strings (UTF-8/ASCII and UTF-16LE)
+    containing the text, widens each to the whole string, and lists the
+    references to each; max_results is shared across them.
+  field: Class::member (Go: pkg.Type::field). The offset comes from the PDB or
+    DWARF, inherited members included. Candidate functions are those with a
+    [reg+offset] operand -- the whole binary for offsets >= 0x80, otherwise the
+    methods of the class and of its bases down to the declaring one. Each
+    candidate is decompiled with the debug types: functions whose C names the
+    member are confirmed accesses (with the lines); the rest share only the
+    offset. max_results = functions to decompile (default 32, max 128);
+    timeout_sec bounds the whole call (default 120).
 
   Parameters:
-    target_va: Virtual address to find references to, or range start (hex, required)
-    target_end_va: Inclusive range end (hex, optional; exact-address search when omitted)
-    max_results: Maximum results (default: 200, max: 1000)
+    target_va / target_end_va: Address or inclusive range (hex)
+    target_text: Text to find in stored strings (instead of target_va)
+    field: Class::member (instead of target_va)
+    max_results: Maximum references (default 200, max 1000); for field, functions
+    pdb_path / pdb_force: As for decompile (names, field types)
 
   Auto-detects format (PE/ELF/Mach-O) and architecture from binary headers.
 
@@ -890,16 +911,25 @@ Build a static call graph from a root function (PE/ELF/Mach-O, x86/x64).
           va="0x140001000")
 
   Supports PE, ELF, and Mach-O binaries (x86, x64, ARM64, ARM32).
-  x64 PE: uses .pdata for precise function boundaries.
-  x86 PE: function starts come from exports + CALL targets (so ordinal-only DLLs
-    resolve correctly), and each function's calls are collected by following its
-    control flow -- NOT a linear range scan -- so an over-long boundary can no
-    longer leak a neighbour's calls in as false "fall-through" edges.
+  x64 PE: .pdata ranges are kept exact (a branch target inside one never
+    splits it); split-off cold blocks (chained unwind entries) belong to their
+    function. Leaf functions without .pdata are found from the code layout
+    (control flow to the end of each body, then int3 padding).
+  x86 PE: function starts come from exports, CALL targets, vtable pointers and
+    the same layout walk (switch tables after a function are skipped as data).
+    Measured against PDB bounds, the containing function is right for 100% of
+    addresses in a 78 MB x64 image and 99.5% in a 7 MB x86 one.
+  Each function's calls are collected by following its control flow -- NOT a
+    linear range scan -- so a boundary error cannot leak a neighbour's calls in.
   ELF / Mach-O: heuristic mode -- detects functions from CALL/BL targets.
   ARM64: scans BL imm26 targets. ARM32: scans BL imm24 targets (PC+8 offset).
   ELF/Mach-O: also merges symbol table entries as function starts.
   BFS traversal from the root function, showing:
-  - Callers: functions that call the root (1 level, reverse scan)
+  - Callers: functions that call the root (1 level), matched at every byte
+    offset; tail jumps are marked, and callers of a thunk (a function that
+    only jumps to the root) are listed "via thunk"
+  - Referenced from data: vtable slots and pointer tables holding the root,
+    for functions only called indirectly
   - Callees: functions called by the root (tree format, configurable depth)
 
   Parameters:
@@ -1025,7 +1055,7 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
 
   Parameters:
     va: Function entry as hex VA or symbol name (PDB names are qualified:
-        FActiveSound::SetWaveParameter); up to 16, comma-separated
+        Player::TakeDamage); up to 16, comma-separated
     pdb_path: PDB file when not beside the image; "none" disables the PDB
     pdb_force: Load pdb_path even if its GUID does not match (warns)
     timeout_sec: Worker time limit (default 60, max 600)
@@ -1045,7 +1075,7 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
    decompile -- Read a function as C once its start is known (x86/x64 PE/ELF)
 10. instruction_search -- Find decoded instructions/constants and trace bounded values into call arguments
 11. function_at -- Find function boundaries (.pdata or heuristic fallback)
-12. xref -- Find all call/jump/data references to an address (PE/ELF/Mach-O)
+12. xref -- References to an address, a string text or a struct field, each named by its function (PE/ELF/Mach-O)
 13. call_graph -- Build static call graph from a root function (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
 14. follow_ptr -- Follow pointer chains (vtable inspection, data structure traversal)
 15. rtti_dump -- Parse MSVC RTTI from vtable (identify C++ class hierarchy)

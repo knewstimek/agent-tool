@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -274,7 +275,7 @@ func TestXrefTargetEndVAValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := opXref(AnalyzeInput{TargetVA: "0x2000", TargetEndVA: tt.end})
+			_, err := opXref(context.Background(), AnalyzeInput{TargetVA: "0x2000", TargetEndVA: tt.end})
 			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 				t.Fatalf("opXref error = %v, want substring %q", err, tt.wantError)
 			}

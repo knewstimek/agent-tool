@@ -273,7 +273,7 @@ func exhaustiveInstructionMatches(bin *cgBinary, spec instructionSearchSpec, rea
 				hit.confidence = "confirmed"
 			}
 			if fn := findFunc(bin.funcTable, rva); fn != nil {
-				hit.function, hit.hasFunc = fn.begin, true
+				hit.function, hit.hasFunc = fn.entry(), true
 			}
 			if hit.confidence == "confirmed" {
 				if len(confirmed) < maxResults {

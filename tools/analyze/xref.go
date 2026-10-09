@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"context"
 	"debug/elf"
 	"debug/macho"
 	"debug/pe"
@@ -30,6 +31,11 @@ type xrefBinary struct {
 	arch      string // "x86", "x64", "arm64", "arm32"
 	sections  []xrefSection
 	format    string // "PE", "ELF", "Mach-O"
+
+	dataSections []xrefDataSection
+	relocSlots   []uint32          // PE: sorted RVAs of relocated pointer slots
+	hasRelocs    bool              // PE: relocSlots is authoritative
+	relative     map[uint32]uint32 // ELF PIE: slot RVA -> target RVA
 }
 
 // xrefResult holds a single cross-reference result with type classification.
@@ -73,48 +79,63 @@ func (r xrefTargetRange) label() string {
 	return fmt.Sprintf("0x%x", r.startVA)
 }
 
-// opXref finds all code locations that reference a target virtual address or,
-// when target_end_va is supplied, any address in the inclusive target range.
-// Supports PE, ELF, and Mach-O binaries with x86, x64, ARM64, and ARM32 architectures.
+// opXref finds the code and data that reference a target virtual address, an
+// inclusive address range (target_end_va), every string containing a text
+// (target_text), or a structure field (field, see opXrefField). Supports PE,
+// ELF, and Mach-O binaries with x86, x64, ARM64, and ARM32 architectures.
 //
-// Performance: full-scans all executable sections on every call (no caching).
-// Direct branches use cheap byte-pattern matching. A ModRM prefilter limits
-// x86asm decoding to possible x64 RIP-relative memory forms, with byte-pattern
-// fallbacks for common instructions if decoding fails. Unlike call_graph, which
-// collects ALL call targets (high false-positive risk from data bytes), exact xref
-// matches against a specific target address, so false positives remain
-// statistically unlikely. Range-match probability grows with the requested span,
-// so callers should keep ranges task-sized.
-func opXref(input AnalyzeInput) (string, error) {
-	if input.TargetVA == "" {
-		return "", fmt.Errorf("target_va is required for xref")
+// Performance: full-scans all executable and data sections on every call (no
+// caching). Direct branches use cheap byte-pattern matching. A ModRM prefilter
+// limits x86asm decoding to possible x64 RIP-relative memory forms, and the
+// immediate scan decodes only where a 4/8-byte value falls in the target
+// range. Unlike call_graph, which collects ALL call targets (high
+// false-positive risk from data bytes), exact xref matches against a specific
+// target address, so false positives remain statistically unlikely. Range-match
+// probability grows with the requested span, so callers should keep ranges
+// task-sized.
+func opXref(ctx context.Context, input AnalyzeInput) (string, error) {
+	if input.Field != "" {
+		return opXrefField(ctx, input)
+	}
+	if input.TargetText != "" && input.TargetVA != "" {
+		return "", fmt.Errorf("pass either target_va or target_text, not both")
+	}
+	if input.TargetVA == "" && input.TargetText == "" {
+		return "", fmt.Errorf("xref needs target_va (address or range start), target_text (find the strings containing it, then their references) or field (Class::member)")
 	}
 
-	targetVA, err := parseHexAddr(input.TargetVA)
-	if err != nil {
-		return "", fmt.Errorf("invalid target_va: %s", input.TargetVA)
-	}
-	targetEndVA := targetVA
-	if input.TargetEndVA != "" {
-		targetEndVA, err = parseHexAddr(input.TargetEndVA)
-		if err != nil {
-			return "", fmt.Errorf("invalid target_end_va: %s", input.TargetEndVA)
+	var targetVA, targetEndVA uint64
+	if input.TargetVA != "" {
+		var err error
+		if targetVA, err = parseHexAddr(input.TargetVA); err != nil {
+			return "", fmt.Errorf("invalid target_va: %s", input.TargetVA)
 		}
-		if targetEndVA < targetVA {
-			return "", fmt.Errorf("target_end_va 0x%x must be greater than or equal to target_va 0x%x", targetEndVA, targetVA)
+		targetEndVA = targetVA
+		if input.TargetEndVA != "" {
+			if targetEndVA, err = parseHexAddr(input.TargetEndVA); err != nil {
+				return "", fmt.Errorf("invalid target_end_va: %s", input.TargetEndVA)
+			}
+			if targetEndVA < targetVA {
+				return "", fmt.Errorf("target_end_va 0x%x must be greater than or equal to target_va 0x%x", targetEndVA, targetVA)
+			}
 		}
 	}
 
-	// Try PE, then ELF, then Mach-O
-	bin, err := xrefOpenPE(input.FilePath)
+	bin, err := xrefOpen(input.FilePath)
 	if err != nil {
-		bin, err = xrefOpenELF(input.FilePath)
+		return "", err
 	}
-	if err != nil {
-		bin, err = xrefOpenMachO(input.FilePath)
+	maxRes := input.MaxResults
+	if maxRes <= 0 {
+		maxRes = defaultXrefMaxResults
 	}
-	if err != nil {
-		return "", fmt.Errorf("xref: not a valid PE, ELF, or Mach-O file: %w", err)
+	if maxRes > maxXrefMaxResults {
+		maxRes = maxXrefMaxResults
+	}
+	loc := newXrefLocator(input.FilePath, input.PDBPath, input.PDBForce)
+
+	if input.TargetText != "" {
+		return xrefText(bin, loc, input.TargetText, maxRes), nil
 	}
 
 	if targetVA < bin.imageBase {
@@ -126,25 +147,46 @@ func opXref(input AnalyzeInput) (string, error) {
 	if targetEndVA-bin.imageBase > 0xFFFFFFFF {
 		return "", fmt.Errorf("target_end_va 0x%x is too far from image base 0x%x (offset exceeds 4GB)", targetEndVA, bin.imageBase)
 	}
-	target := xrefTargetRange{
-		imageBase: bin.imageBase,
-		startVA:   targetVA,
-		endVA:     targetEndVA,
-		startRVA:  uint32(targetVA - bin.imageBase),
-		endRVA:    uint32(targetEndVA - bin.imageBase),
-	}
+	target := bin.target(targetVA, targetEndVA)
 
-	maxRes := input.MaxResults
-	if maxRes <= 0 {
-		maxRes = defaultXrefMaxResults
+	refs, found := scanXrefs(bin, target, maxRes)
+	var sb strings.Builder
+	writeXrefs(&sb, bin, loc, target.label(), refs, found, maxRes)
+	if found == 0 && !target.isRange() {
+		// Agent-first guidance: 0 direct refs to a mid-function address usually
+		// means the caller wanted the enclosing function. Point at its start.
+		if hint := xrefEnclosingHint(input.FilePath, targetVA); hint != "" {
+			sb.WriteString(hint)
+		}
 	}
-	if maxRes > maxXrefMaxResults {
-		maxRes = maxXrefMaxResults
-	}
+	return sb.String(), nil
+}
 
+// xrefOpen tries PE, then ELF, then Mach-O.
+func xrefOpen(path string) (*xrefBinary, error) {
+	bin, err := xrefOpenPE(path)
+	if err != nil {
+		bin, err = xrefOpenELF(path)
+	}
+	if err != nil {
+		bin, err = xrefOpenMachO(path)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("xref: not a valid PE, ELF, or Mach-O file: %w", err)
+	}
+	return bin, nil
+}
+
+func (b *xrefBinary) target(startVA, endVA uint64) xrefTargetRange {
+	return xrefTargetRange{imageBase: b.imageBase, startVA: startVA, endVA: endVA,
+		startRVA: uint32(startVA - b.imageBase), endRVA: uint32(endVA - b.imageBase)}
+}
+
+// scanXrefs collects code references (branches, RIP-relative operands,
+// immediates and absolute addresses) and stored data pointers.
+func scanXrefs(bin *xrefBinary, target xrefTargetRange, maxRes int) ([]xrefResult, int) {
 	var refs []xrefResult
 	found := 0
-
 	for _, sec := range bin.sections {
 		if found >= maxRes {
 			break
@@ -160,55 +202,97 @@ func opXref(input AnalyzeInput) (string, error) {
 			refs, found = collectXrefARM32(sec.data, sec.rva, target, maxRes, found, refs)
 		}
 	}
+	if mode := map[string]int{"x86": 32, "x64": 64}[bin.arch]; mode != 0 {
+		reported := make(map[uint64]bool, len(refs))
+		for _, r := range refs {
+			reported[r.lineVA()] = true
+		}
+		for _, sec := range bin.sections {
+			if found >= maxRes {
+				break
+			}
+			refs, found = collectXrefImm(sec.data, sec.rva, target, mode, reported, maxRes, found, refs)
+		}
+	}
+	if found < maxRes {
+		refs, found = collectXrefData(bin, target, maxRes, found, refs)
+	}
+	return refs, found
+}
 
-	var sb strings.Builder
-
-	// Header with format/arch info
+// writeXrefs prints the summary line, the located references and the count.
+func writeXrefs(sb *strings.Builder, bin *xrefBinary, loc *xrefLocator, label string, refs []xrefResult, found, maxRes int) {
 	archLabel := bin.arch
 	if bin.format != "" {
 		archLabel = bin.format + "/" + bin.arch
 	}
-
-	// Summary statistics
+	nfuncs := annotateXrefs(bin, loc, refs)
 	if found > 0 {
 		counts := make(map[string]int)
 		for _, r := range refs {
 			counts[r.refType]++
 		}
-		sb.WriteString(fmt.Sprintf("%d references to %s (%s):", found, target.label(), archLabel))
-		for _, typ := range []string{"CALL", "JMP", "LEA", "MOV", "DATA", "PUSH", "Jcc", "BL", "B", "ADRP"} {
+		fmt.Fprintf(sb, "%d references to %s (%s):", found, label, archLabel)
+		var parts []string
+		for _, typ := range []string{"CALL", "JMP", "LEA", "MOV", "DATA", "PUSH", "PTR", "Jcc", "BL", "B", "ADRP"} {
 			if c, ok := counts[typ]; ok {
-				sb.WriteString(fmt.Sprintf(" %d %s,", c, typ))
+				parts = append(parts, fmt.Sprintf(" %d %s", c, typ))
 			}
 		}
-		s := strings.TrimRight(sb.String(), ",")
-		sb.Reset()
-		sb.WriteString(s)
+		sb.WriteString(strings.Join(parts, ","))
+		if nfuncs > 0 {
+			fmt.Fprintf(sb, "; code in %d function(s)", nfuncs)
+		}
 		sb.WriteString("\n\n")
 	} else {
-		sb.WriteString(fmt.Sprintf("Cross-references to %s (%s):\n\n", target.label(), archLabel))
+		fmt.Fprintf(sb, "Cross-references to %s (%s):\n\n", label, archLabel)
 	}
-
 	for _, r := range refs {
 		sb.WriteString(r.line)
 	}
-
 	if found == 0 {
 		sb.WriteString("No references found.\n")
-		// Agent-first guidance: 0 direct refs to a mid-function address usually
-		// means the caller wanted the enclosing function. Point at its start.
-		if !target.isRange() {
-			if hint := xrefEnclosingHint(input.FilePath, targetVA); hint != "" {
-				sb.WriteString(hint)
-			}
-		}
 	}
-	sb.WriteString(fmt.Sprintf("\n(%d references found)", found))
+	fmt.Fprintf(sb, "\n(%d references found)", found)
 	if found >= maxRes {
-		sb.WriteString(fmt.Sprintf(" -- truncated at max_results=%d", maxRes))
+		fmt.Fprintf(sb, " -- truncated at max_results=%d", maxRes)
 	}
+	sb.WriteString("\n")
+}
 
-	return sb.String(), nil
+// xrefText finds the stored strings containing text and the references to
+// each, so "who prints 'Login failed'" is one call.
+func xrefText(bin *xrefBinary, loc *xrefLocator, text string, maxRes int) string {
+	strs := findXrefStrings(bin, text)
+	var sb strings.Builder
+	if len(strs) == 0 {
+		fmt.Fprintf(&sb, "No string containing %q in the data sections (searched UTF-8/ASCII and UTF-16LE). Try a shorter or differently cased fragment, or the strings operation to list what is there.\n", text)
+		return sb.String()
+	}
+	fmt.Fprintf(&sb, "%d string(s) containing %q", len(strs), text)
+	if len(strs) == maxXrefTextStrings {
+		sb.WriteString(" (first ones only; use a more specific text)")
+	}
+	sb.WriteString("\n")
+	left := maxRes
+	for _, s := range strs {
+		enc := "ascii"
+		if s.wide {
+			enc = "utf-16"
+		}
+		fmt.Fprintf(&sb, "\n== %q at 0x%x (%s, %s)\n", s.text, s.va, s.section, enc)
+		if left <= 0 {
+			sb.WriteString("(skipped: max_results reached)\n")
+			continue
+		}
+		// Share max_results across the strings so one busy format string
+		// does not hide the rest.
+		budget := min(left, max(maxRes/len(strs), 5))
+		refs, found := scanXrefs(bin, bin.target(s.va, s.va), budget)
+		writeXrefs(&sb, bin, loc, fmt.Sprintf("0x%x", s.va), refs, found, budget)
+		left -= found
+	}
+	return sb.String()
 }
 
 // xrefEnclosingHint returns an actionable note when a target with no direct
@@ -286,18 +370,25 @@ func xrefOpenPE(path string) (*xrefBinary, error) {
 	}
 
 	var sections []xrefSection
+	var dataSections []xrefDataSection
 	for _, sec := range f.Sections {
-		if sec.Characteristics&0x20000000 == 0 { // IMAGE_SCN_MEM_EXECUTE
-			continue
-		}
 		data, err := sec.Data()
 		if err != nil || len(data) == 0 {
 			continue
 		}
+		if sec.Characteristics&0x20000000 == 0 { // IMAGE_SCN_MEM_EXECUTE
+			// Relocation and resource data hold no program pointers.
+			if sec.Name != ".reloc" && sec.Name != ".rsrc" && sec.Characteristics&0x40000000 != 0 {
+				dataSections = append(dataSections, xrefDataSection{name: sec.Name, rva: sec.VirtualAddress, data: data})
+			}
+			continue
+		}
 		sections = append(sections, xrefSection{data: data, rva: sec.VirtualAddress})
 	}
+	relocs := peRelocSlots(f)
 
-	return &xrefBinary{imageBase: imageBase, arch: arch, sections: sections, format: "PE"}, nil
+	return &xrefBinary{imageBase: imageBase, arch: arch, sections: sections, format: "PE",
+		dataSections: dataSections, relocSlots: relocs, hasRelocs: len(relocs) > 0}, nil
 }
 
 func xrefOpenELF(path string) (*xrefBinary, error) {
@@ -334,27 +425,31 @@ func xrefOpenELF(path string) (*xrefBinary, error) {
 	}
 
 	var sections []xrefSection
+	var dataSections []xrefDataSection
 	for _, sec := range f.Sections {
-		if sec.Flags&elf.SHF_EXECINSTR == 0 {
+		if sec.Flags&elf.SHF_ALLOC == 0 || sec.Type == elf.SHT_NOBITS {
 			continue
+		}
+		// ELF section Addr is absolute VA; convert to RVA relative to imageBase
+		if sec.Addr < imageBase || sec.Addr-imageBase > 0xFFFFFFFF {
+			continue // skip sections beyond 4GB offset from imageBase
 		}
 		data, err := sec.Data()
 		if err != nil || len(data) == 0 {
 			continue
 		}
-		// ELF section Addr is absolute VA; convert to RVA relative to imageBase
-		if sec.Addr < imageBase {
+		rva := uint32(sec.Addr - imageBase)
+		if sec.Flags&elf.SHF_EXECINSTR == 0 {
+			if sec.Type != elf.SHT_RELA && sec.Type != elf.SHT_REL && sec.Type != elf.SHT_DYNSYM && sec.Type != elf.SHT_STRTAB {
+				dataSections = append(dataSections, xrefDataSection{name: sec.Name, rva: rva, data: data})
+			}
 			continue
 		}
-		offset := sec.Addr - imageBase
-		if offset > 0xFFFFFFFF {
-			continue // skip sections beyond 4GB offset from imageBase
-		}
-		rva := uint32(offset)
 		sections = append(sections, xrefSection{data: data, rva: rva})
 	}
 
-	return &xrefBinary{imageBase: imageBase, arch: arch, sections: sections, format: "ELF"}, nil
+	return &xrefBinary{imageBase: imageBase, arch: arch, sections: sections, format: "ELF",
+		dataSections: dataSections, relative: elfRelativeTargets(f, imageBase)}, nil
 }
 
 func xrefOpenMachO(path string) (*xrefBinary, error) {
@@ -400,9 +495,16 @@ func xrefFromMachO(f *macho.File) (*xrefBinary, error) {
 	}
 
 	var sections []xrefSection
+	var dataSections []xrefDataSection
 	for _, sec := range f.Sections {
 		// Mach-O executable sections: __TEXT,__text and similar
 		// Check segment name or section attributes
+		if sec.Seg == "__DATA" || sec.Seg == "__DATA_CONST" {
+			if data, err := sec.Data(); err == nil && len(data) > 0 && sec.Addr >= imageBase && sec.Addr-imageBase <= 0xFFFFFFFF {
+				dataSections = append(dataSections, xrefDataSection{name: sec.Seg + "," + sec.Name, rva: uint32(sec.Addr - imageBase), data: data})
+			}
+			continue
+		}
 		if sec.Seg != "__TEXT" {
 			continue
 		}
@@ -421,7 +523,7 @@ func xrefFromMachO(f *macho.File) (*xrefBinary, error) {
 		sections = append(sections, xrefSection{data: data, rva: rva})
 	}
 
-	return &xrefBinary{imageBase: imageBase, arch: arch, sections: sections, format: "Mach-O"}, nil
+	return &xrefBinary{imageBase: imageBase, arch: arch, sections: sections, format: "Mach-O", dataSections: dataSections}, nil
 }
 
 // --- x86/x64 pattern matchers (unchanged logic) ---

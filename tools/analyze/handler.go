@@ -61,6 +61,8 @@ type AnalyzeInput struct {
 	// xref parameters
 	TargetVA    string `json:"target_va,omitempty" jsonschema:"Target virtual address to find references to, or inclusive range start when target_end_va is set (hex). For xref operation."`
 	TargetEndVA string `json:"target_end_va,omitempty" jsonschema:"Optional inclusive end of the target address range (hex). Omit for an exact-address xref."`
+	TargetText  string `json:"target_text,omitempty" jsonschema:"xref: find the stored strings containing this text (UTF-8 and UTF-16LE), then the references to each. Instead of target_va"`
+	Field       string `json:"field,omitempty" jsonschema:"xref: structure field as Class::member (offset from the PDB or DWARF); lists the functions that access it, confirmed by decompiling candidates. Instead of target_va"`
 
 	// bin_diff parameters
 	FilePathB string `json:"file_path_b,omitempty" jsonschema:"Second file for bin_diff. Relative paths use workspace/MCP root"`
@@ -69,7 +71,7 @@ type AnalyzeInput struct {
 
 	// decompile parameters (also uses VA)
 	TimeoutSec int    `json:"timeout_sec,omitempty" jsonschema:"Seconds before the decompile worker is killed. Default: 60, Max: 600. For decompile"`
-	PDBPath    string `json:"pdb_path,omitempty" jsonschema:"PDB for a PE image when it is not beside the binary (must match the image GUID); none disables PDB use. Used by decompile, function_at, follow_ptr, struct_layout; other operations find the PDB automatically"`
+	PDBPath    string `json:"pdb_path,omitempty" jsonschema:"PDB for a PE image when it is not beside the binary (must match the image GUID); none disables PDB use. Used by decompile, function_at, follow_ptr, struct_layout, xref; other operations find the PDB automatically"`
 	PDBForce   bool   `json:"pdb_force,omitempty" jsonschema:"Load pdb_path even when its GUID does not match the image (relinked or patched build with the same code); output carries a warning. Requires pdb_path"`
 }
 
@@ -212,7 +214,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 	case "dwarf_info":
 		result, err = opDWARFInfo(input)
 	case "xref":
-		result, err = opXref(input)
+		result, err = opXref(ctx, input)
 	case "function_at":
 		result, err = opFunctionAt(input)
 	case "call_graph":

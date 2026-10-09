@@ -633,13 +633,19 @@ func newPEHost(f *pe.File, bin *cgBinary, pd *pdataIndex) *decompHost {
 			exports[bin.imageBase+uint64(e.rva)] = true
 		}
 	}
+	starts := make([]uint32, 0, len(bin.funcTable)+len(bin.innerStarts))
 	for _, fr := range bin.funcTable {
+		if !bin.layoutStarts[fr.begin] {
+			starts = append(starts, fr.begin)
+		}
+	}
+	for _, s := range append(starts, bin.innerStarts...) {
 		if pd != nil {
-			if _, chained := pd.primary[fr.begin]; chained {
+			if _, chained := pd.primary[s]; chained {
 				continue // a function part, not a function
 			}
 		}
-		h.funcs[bin.imageBase+uint64(fr.begin)] = ""
+		h.funcs[bin.imageBase+uint64(s)] = ""
 	}
 	// peSymbolMap mixes export names (at code) with import names (at IAT
 	// slots); a slot is never a function start.

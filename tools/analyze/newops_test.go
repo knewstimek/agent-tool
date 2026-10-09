@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -144,7 +145,7 @@ func TestXref_Summary(t *testing.T) {
 		Operation: "xref",
 		TargetVA:  "0x8f4be4",
 	}
-	result, err := opXref(input)
+	result, err := opXref(context.Background(), input)
 	if err != nil {
 		t.Fatalf("opXref failed: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestXref_NoResults(t *testing.T) {
 		Operation: "xref",
 		TargetVA:  "0x99FFFF",
 	}
-	result, err := opXref(input)
+	result, err := opXref(context.Background(), input)
 	if err != nil {
 		t.Fatalf("opXref failed: %v", err)
 	}
@@ -606,7 +607,7 @@ func TestXref_X64_Positive(t *testing.T) {
 		Operation: "xref",
 		TargetVA:  "0x140002a54",
 	}
-	result, err := opXref(input)
+	result, err := opXref(context.Background(), input)
 	if err != nil {
 		t.Fatalf("xref x64 failed: %v", err)
 	}

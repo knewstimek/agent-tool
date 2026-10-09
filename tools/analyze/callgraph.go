@@ -102,12 +102,19 @@ func opCallGraph(input AnalyzeInput) (string, error) {
 				"Try function_at with va=\"0x%x\" to find the nearest function", rootVA, rootVA)
 		}
 	}
+	if rootFunc.owner != 0 { // inside a split-off cold block: the graph is its owner's
+		if owner := findFunc(funcTable, rootFunc.owner); owner != nil {
+			rootFunc = owner
+		}
+	}
 
 	// Known function starts (RVA) -- walls for CFG-based call scanning so a
 	// function's call collection never leaks into a neighbour.
 	startSet := make(map[uint32]bool, len(funcTable))
 	for i := range funcTable {
-		startSet[funcTable[i].begin] = true
+		if funcTable[i].owner == 0 { // a chained fragment continues its owner
+			startSet[funcTable[i].begin] = true
+		}
 	}
 
 	// BFS to build call graph
@@ -179,14 +186,21 @@ func opCallGraph(input AnalyzeInput) (string, error) {
 	}
 
 	// Also find callers of root (reverse direction, 1 level only)
-	var rootCallers []uint32
+	var rootCallers []cgCaller
+	asCallers := func(rvas []uint32) []cgCaller {
+		out := make([]cgCaller, len(rvas))
+		for i, r := range rvas {
+			out[i] = cgCaller{rva: r}
+		}
+		return out
+	}
 	switch bin.arch {
 	case "arm64":
-		rootCallers = findCallersARM64(execSections, rootFunc.begin, imageBase, funcTable)
+		rootCallers = asCallers(findCallersARM64(execSections, rootFunc.begin, imageBase, funcTable))
 	case "arm32":
-		rootCallers = findCallersARM32(execSections, rootFunc.begin, imageBase, funcTable)
+		rootCallers = asCallers(findCallersARM32(execSections, rootFunc.begin, imageBase, funcTable))
 	default:
-		rootCallers = findCallers(execSections, rootFunc.begin, imageBase, funcTable, is64)
+		rootCallers = findCallers(execSections, rootFunc.begin, funcTable)
 	}
 
 	// Format output
@@ -206,11 +220,24 @@ func opCallGraph(input AnalyzeInput) (string, error) {
 	// Print callers
 	if len(rootCallers) > 0 {
 		sb.WriteString(fmt.Sprintf("Callers of %s:\n", rootName))
-		for _, callerRVA := range rootCallers {
-			callerVA := imageBase + uint64(callerRVA)
-			sb.WriteString(fmt.Sprintf("  <- %s\n", funcName(callerVA, symbols)))
+		for _, c := range rootCallers {
+			how := ""
+			switch {
+			case c.thunk != 0:
+				how = " (via thunk " + funcName(imageBase+uint64(c.thunk), symbols) + ")"
+			case c.tail:
+				how = " (tail jump)"
+			}
+			sb.WriteString(fmt.Sprintf("  <- %s%s\n", funcName(imageBase+uint64(c.rva), symbols), how))
 		}
 		sb.WriteString("\n")
+	}
+	// Virtual functions and callbacks have no direct callers; the data slots
+	// that hold their address (vtables, handler tables) are how they are reached.
+	if ptrs := rootDataRefs(input.FilePath, imageBase+uint64(rootFunc.begin), symbols); len(ptrs) > 0 {
+		sb.WriteString(fmt.Sprintf("Referenced from data (indirect calls through these slots):\n%s\n", strings.Join(ptrs, "")))
+	} else if len(rootCallers) == 0 {
+		sb.WriteString("No direct callers and no stored pointers: reached only through computed addresses, or unused.\n\n")
 	}
 
 	// Print callees as tree
@@ -228,6 +255,286 @@ func opCallGraph(input AnalyzeInput) (string, error) {
 type funcRange struct {
 	begin uint32
 	end   uint32
+	// owner is the function a chained .pdata fragment belongs to (a cold
+	// block split off from it); 0 for a function of its own.
+	owner uint32
+	// exact marks a range read from .pdata rather than estimated.
+	exact bool
+}
+
+// entry is the start of the function this range's code belongs to.
+func (r *funcRange) entry() uint32 {
+	if r.owner != 0 {
+		return r.owner
+	}
+	return r.begin
+}
+
+// pdataFuncTable is the .pdata table with each chained fragment attributed to
+// its function, so a fragment is neither a call-graph node nor a wall that
+// cuts the owner's control flow short.
+func pdataFuncTable(pd *pdataIndex) []funcRange {
+	table := make([]funcRange, len(pd.table))
+	for i, fr := range pd.table {
+		table[i] = fr
+		table[i].owner = pd.primary[fr.begin]
+		table[i].exact = true
+	}
+	return table
+}
+
+// paddingStarts finds the functions in the gaps between .pdata ranges --
+// leaf functions have no unwind entry -- one after another: a function's
+// body is what its control flow reaches, and the next function starts at
+// the first code after it (past any int3 padding). A body with a jump the
+// walk cannot follow (a switch through a register) runs to the next int3
+// padding instead, since its case blocks are unreached code of its own.
+func paddingStarts(table []funcRange, execSections []cgSection, mode int, known map[uint32]bool, imageBase uint64) []uint32 {
+	knownSorted := make([]uint32, 0, len(known))
+	for k := range known {
+		knownSorted = append(knownSorted, k)
+	}
+	sort.Slice(knownSorted, func(i, j int) bool { return knownSorted[i] < knownSorted[j] })
+	var out []uint32
+	for _, sec := range execSections {
+		secEnd := uint64(sec.rva) + uint64(len(sec.data))
+		lo := sort.Search(len(table), func(i int) bool { return uint64(table[i].begin) >= uint64(sec.rva) })
+		gapFrom := uint64(sec.rva)
+		for i := lo; i <= len(table); i++ {
+			gapTo := secEnd
+			if i < len(table) && uint64(table[i].begin) < secEnd {
+				gapTo = uint64(table[i].begin)
+			}
+			if gapTo > gapFrom {
+				data := sec.data[gapFrom-uint64(sec.rva) : gapTo-uint64(sec.rva)]
+				walls := map[int]bool{}
+				for j := sort.Search(len(knownSorted), func(j int) bool { return uint64(knownSorted[j]) > gapFrom }); j < len(knownSorted) && uint64(knownSorted[j]) < gapTo; j++ {
+					walls[int(uint64(knownSorted[j])-gapFrom)] = true
+				}
+				for _, off := range gapFunctions(data, mode, walls, imageBase+gapFrom) {
+					out = append(out, uint32(gapFrom)+uint32(off))
+				}
+			}
+			if i == len(table) || uint64(table[i].begin) >= secEnd {
+				break
+			}
+			gapFrom = max(gapFrom, uint64(table[i].end))
+		}
+	}
+	return out
+}
+
+// gapFunctions returns the offsets of the functions laid out in data;
+// walls are starts already known, which no body runs into. Between functions
+// the compiler pads with int3 (x64) or int3/nop (x86).
+func gapFunctions(data []byte, mode int, walls map[int]bool, baseVA uint64) []int {
+	isPad := func(b byte) bool { return b == 0xCC || (mode == 32 && b == 0x90) }
+	skip := func(i int) int {
+		for i < len(data) && isPad(data[i]) {
+			i++
+		}
+		return i
+	}
+	// nextPadded is the first code after the next run of two or more pad bytes
+	// (or a known start): where to resume after bytes that are not code.
+	nextPadded := func(i int) int {
+		for i < len(data) && !walls[i] && !(isPad(data[i]) && i+1 < len(data) && isPad(data[i+1])) {
+			i++
+		}
+		return skip(i)
+	}
+	var out []int
+	for s := skip(0); s < len(data); {
+		end, open := bodyExtent(data, s, mode, walls, baseVA)
+		if end == s {
+			s = nextPadded(s + 1) // not code (data between functions)
+			continue
+		}
+		out = append(out, s)
+		if open {
+			// Run on to the next padding (two or more pad bytes in a row).
+			for end < len(data) && !walls[end] && !(isPad(data[end]) && end+1 < len(data) && isPad(data[end+1])) {
+				end++
+			}
+		}
+		s = skip(end)
+	}
+	return out
+}
+
+// x86SwitchTable reads an x86 MSVC switch, jmp [index*4+table], whose table
+// of absolute case addresses was placed in the code after the function. It
+// returns the case offsets and the table's extent [from, to) in data; the
+// table follows the jump and its cases lie between start and the table.
+func x86SwitchTable(data []byte, inst x86asm.Inst, baseVA uint64, start, pos int) ([]int, int, int, bool) {
+	m, ok := inst.Args[0].(x86asm.Mem)
+	if !ok || m.Base != 0 || m.Index == 0 || m.Scale != 4 || inst.Mode != 32 {
+		return nil, 0, 0, false
+	}
+	tableVA := uint64(uint32(m.Disp))
+	if tableVA < baseVA || tableVA-baseVA >= uint64(len(data)) {
+		return nil, 0, 0, false
+	}
+	from := int(tableVA - baseVA)
+	if from <= pos {
+		return nil, 0, 0, false
+	}
+	var cases []int
+	to := from
+	for to+4 <= len(data) && len(cases) < maxJumpTableEntries {
+		// Case blocks lie between the function start and the table.
+		va := uint64(binary.LittleEndian.Uint32(data[to:]))
+		if va < baseVA+uint64(start) || va >= baseVA+uint64(from) {
+			break
+		}
+		cases = append(cases, int(va-baseVA))
+		to += 4
+	}
+	if len(cases) == 0 {
+		return nil, 0, 0, false
+	}
+	return cases, from, to, true
+}
+
+// isSwitchJump recognizes a switch dispatch: jmp reg (x64, the target added
+// to the image base) or jmp [table+index*scale] (x86, a table of addresses).
+// A jmp through a plain memory slot is a tail call (an import or a vtable).
+func isSwitchJump(inst x86asm.Inst) bool {
+	switch a := inst.Args[0].(type) {
+	case x86asm.Reg:
+		return true
+	case x86asm.Mem:
+		return a.Index != 0
+	}
+	return false
+}
+
+// bodyExtent walks the control flow from start and returns the end of the
+// code it covers contiguously from start: a jump to distant shared code must
+// not swallow the functions in between. Alignment nops the walk skips over
+// do not break the run. open reports a switch dispatch it could not follow.
+// int3 bytes are walls, and an unconditional jump to code right after int3
+// padding is a tail call into another function, not followed.
+func bodyExtent(data []byte, start, mode int, walls map[int]bool, baseVA uint64) (int, bool) {
+	open := false
+	reached := map[int]int{} // instruction start -> end
+	stack := []int{start}
+	for len(stack) > 0 && len(reached) < 20000 {
+		pos := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if pos < start || pos >= len(data) || data[pos] == 0xCC || (pos != start && walls[pos]) {
+			continue
+		}
+		if _, ok := reached[pos]; ok {
+			continue
+		}
+		inst, err := x86asm.Decode(data[pos:], mode)
+		if err != nil || inst.Len == 0 {
+			continue
+		}
+		next := pos + inst.Len
+		reached[pos] = next
+		switch inst.Op {
+		case x86asm.RET:
+		case x86asm.JMP:
+			if t, ok := branchTargetOff(inst, pos); ok {
+				if t > 0 && t < len(data) && data[t-1] != 0xCC {
+					stack = append(stack, t)
+				}
+			} else if cases, from, to, ok := x86SwitchTable(data, inst, baseVA, start, pos); ok {
+				// The table sits in this code: the body runs over it.
+				reached[from] = to
+				stack = append(stack, cases...)
+			} else if isSwitchJump(inst) {
+				open = true
+			}
+		default:
+			if t, ok := branchTargetOff(inst, pos); ok && inst.Op != x86asm.CALL {
+				stack = append(stack, t)
+			}
+			stack = append(stack, next)
+		}
+	}
+	end := start
+	for {
+		if end != start && walls[end] {
+			return end, open
+		}
+		if e, ok := reached[end]; ok {
+			end = e
+			continue
+		}
+		// Skip a hole of nops (loop alignment) when code continues after it.
+		n := end
+		for n < len(data) && n-end < 16 {
+			inst, err := x86asm.Decode(data[n:], mode)
+			if err != nil || inst.Op != x86asm.NOP {
+				break
+			}
+			n += inst.Len
+		}
+		if _, ok := reached[n]; n > end && ok {
+			end = n
+			continue
+		}
+		// An instruction reached from a branch may start inside the run's last
+		// bytes only on overlapping decodes; anything else ends the body.
+		return end, open
+	}
+}
+
+// addGapStarts adds extra function starts that fall outside every exact
+// (.pdata) range: leaf functions have no unwind entry and sit in the gaps.
+// Starts inside a .pdata range are branch targets or mid-function labels and
+// must not split it; those ranges keep their exact ends. Estimated ranges
+// already in the table are re-ranged with the new starts.
+func addGapStarts(base []funcRange, extraStarts []uint32, execSections []cgSection) []funcRange {
+	var exact []funcRange
+	var starts []uint32
+	for _, fr := range base {
+		if fr.exact {
+			exact = append(exact, fr)
+		} else {
+			starts = append(starts, fr.begin)
+		}
+	}
+	added := false
+	for _, s := range extraStarts {
+		if findFunc(exact, s) == nil && isInExecSection(execSections, s) {
+			starts = append(starts, s)
+			added = true
+		}
+	}
+	if !added {
+		return base
+	}
+	sort.Slice(starts, func(i, j int) bool { return starts[i] < starts[j] })
+	table := exact
+	for i, s := range starts {
+		if i > 0 && starts[i-1] == s {
+			continue
+		}
+		end := uint32(0)
+		for _, sec := range execSections {
+			if se := uint64(sec.rva) + uint64(len(sec.data)); uint64(s) >= uint64(sec.rva) && uint64(s) < se {
+				end = uint32(min(se, 0xFFFFFFFF))
+			}
+		}
+		if j := sort.Search(len(exact), func(j int) bool { return exact[j].begin > s }); j < len(exact) && exact[j].begin < end {
+			end = exact[j].begin
+		}
+		for k := i + 1; k < len(starts); k++ {
+			if starts[k] != s {
+				end = min(end, starts[k])
+				break
+			}
+		}
+		if end > s {
+			table = append(table, funcRange{begin: s, end: end})
+		}
+	}
+	sort.Slice(table, func(i, j int) bool { return table[i].begin < table[j].begin })
+	return table
 }
 
 // buildFuncTable extracts all function ranges from .pdata.
@@ -461,43 +768,68 @@ func scanCallTargetsCFG(sections []cgSection, funcBegin uint32, imageBase uint64
 	return targets
 }
 
-// findCallers scans all executable code for CALL instructions targeting funcBeginRVA.
-// Returns RVAs of functions that contain such calls (deduplicated).
-// Uses instruction-level decoding to avoid false positives from mid-instruction bytes.
-func findCallers(sections []cgSection, targetRVA uint32, imageBase uint64, funcTable []funcRange, is64 bool) []uint32 {
-	seen := make(map[uint32]bool)
-	var callers []uint32
-	mode := 32
-	if is64 {
-		mode = 64
-	}
+// cgCaller is a function that reaches the root: by a CALL, by a tail JMP, or
+// through a thunk (a function that only jumps to the root).
+type cgCaller struct {
+	rva   uint32 // the caller's entry
+	tail  bool   // reaches it with JMP rel32
+	thunk uint32 // non-zero: calls this thunk, which jumps to the root
+}
 
-	for _, sec := range sections {
-		data := sec.data
-		for i := 0; i < len(data); {
-			inst, err := x86asm.Decode(data[i:], mode)
-			if err != nil || inst.Len <= 0 {
-				i++
-				continue
-			}
-			if data[i] == 0xE8 && inst.Len == 5 {
-				instrRVA := sec.rva + uint32(i)
-				rel := int32(binary.LittleEndian.Uint32(data[i+1:]))
-				target := uint32(int64(instrRVA) + 5 + int64(rel))
-				if target == targetRVA {
-					fn := findFunc(funcTable, instrRVA)
-					if fn != nil && !seen[fn.begin] {
-						seen[fn.begin] = true
-						callers = append(callers, fn.begin)
-					}
+// findCallers lists the functions with a CALL or JMP rel32 to targetRVA,
+// matching every byte offset: a linear decode of the whole section loses
+// sync at the first data island and skips the calls after it. A caller that
+// is itself a thunk (its entry is the jump) is replaced by its own callers.
+func findCallers(sections []cgSection, targetRVA uint32, funcTable []funcRange) []cgCaller {
+	var out []cgCaller
+	seen := map[uint32]bool{}
+	for _, c := range relCallers(sections, targetRVA, funcTable) {
+		if c.tail && c.site == c.rva {
+			for _, t := range relCallers(sections, c.rva, funcTable) {
+				if !seen[t.rva] {
+					seen[t.rva] = true
+					out = append(out, cgCaller{rva: t.rva, tail: t.tail, thunk: c.rva})
 				}
 			}
-			i += inst.Len
+			continue
+		}
+		if !seen[c.rva] {
+			seen[c.rva] = true
+			out = append(out, cgCaller{rva: c.rva, tail: c.tail})
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].rva < out[j].rva })
+	return out
+}
 
-	sort.Slice(callers, func(i, j int) bool { return callers[i] < callers[j] })
-	return callers
+type relCaller struct {
+	rva, site uint32
+	tail      bool
+}
+
+// relCallers finds E8/E9 rel32 instructions that land on target, attributed
+// to the function (entry) containing each.
+func relCallers(sections []cgSection, target uint32, funcTable []funcRange) []relCaller {
+	var out []relCaller
+	for _, sec := range sections {
+		data := sec.data
+		for i := 0; i+5 <= len(data); i++ {
+			if data[i] != 0xE8 && data[i] != 0xE9 {
+				continue
+			}
+			site := sec.rva + uint32(i)
+			rel := int32(binary.LittleEndian.Uint32(data[i+1:]))
+			if uint32(int64(site)+5+int64(rel)) != target {
+				continue
+			}
+			fn := findFunc(funcTable, site)
+			if fn == nil {
+				continue
+			}
+			out = append(out, relCaller{rva: fn.entry(), site: site, tail: data[i] == 0xE9})
+		}
+	}
+	return out
 }
 
 // funcName formats a VA with symbol name if available.
@@ -682,7 +1014,15 @@ type cgBinary struct {
 	execSections   []cgSection
 	staticSections []cgSection // mapped, non-writable bytes safe for constant loads
 	funcTable      []funcRange
-	closer         func()
+	// innerStarts are estimated starts (sweep, exports, data pointers) that
+	// fall inside a .pdata range and so are not in funcTable. The decompile
+	// host still takes them as known starts, as it did before .pdata ranges
+	// were kept exact; its Ghidra comparisons were measured with them.
+	innerStarts []uint32
+	// layoutStarts are table entries found only from the padding layout; the
+	// decompile host leaves them out for the same reason.
+	layoutStarts map[uint32]bool
+	closer       func()
 }
 
 // cgOpenBinary tries PE, ELF, Mach-O in order and returns a cgBinary. A PE's
@@ -754,10 +1094,28 @@ func cgOpenPE(path string, withPDB bool) (*cgBinary, error) {
 		return nil, fmt.Errorf("PE: no executable sections")
 	}
 
-	// Build function table
+	// Build function table. With .pdata the boundaries are exact and the
+	// extra starts below only fill the gaps (leaf functions); without it they
+	// are all estimates and re-range one another.
 	var funcTable []funcRange
+	authoritative := false
+	var innerStarts []uint32
+	merge := func(starts []uint32) {
+		if authoritative {
+			for _, s := range starts {
+				if fn := findFunc(funcTable, s); fn != nil && fn.begin != s {
+					innerStarts = append(innerStarts, s)
+				}
+			}
+			funcTable = addGapStarts(funcTable, starts, execSections)
+		} else {
+			funcTable = mergeStartsIntoFuncTable(funcTable, starts, execSections)
+		}
+	}
 	if is64 {
-		funcTable = buildFuncTable(f, imageBase)
+		if pd := loadPdata(f, imageBase); pd != nil {
+			funcTable, authoritative = pdataFuncTable(pd), true
+		}
 		if len(funcTable) == 0 {
 			// x64 PE without .pdata: fall back to heuristic
 			funcTable = buildFuncTableFromCalls(execSections, imageBase)
@@ -770,12 +1128,12 @@ func cgOpenPE(path string, withPDB bool) (*cgBinary, error) {
 	// Fold export starts in as real boundaries -- the heuristic table is built
 	// from CALL targets only and would otherwise miss ordinal-only exports.
 	if exp, _ := codeExportStarts(f); len(exp) > 0 {
-		funcTable = mergeStartsIntoFuncTable(funcTable, exp, execSections)
+		merge(exp)
 	}
 	// Fold in vtable/callback function pointers so virtual-only functions become
 	// real boundaries (and valid call_graph roots), not folded into a neighbour.
 	if ptrs := dataPointerStarts(f, imageBase, is64); len(ptrs) > 0 {
-		funcTable = mergeStartsIntoFuncTable(funcTable, ptrs, execSections)
+		merge(ptrs)
 	}
 	// Fold in a full linear sweep's corroborated CALL/JMP targets, so functions
 	// whose callers are unreachable from the exports are still real boundaries.
@@ -789,8 +1147,32 @@ func cgOpenPE(path string, withPDB bool) (*cgBinary, error) {
 		sweep = append(sweep, cachedSweepStarts(id, sec.data, sec.rva, sweepMode)...)
 	}
 	if len(sweep) > 0 {
-		funcTable = mergeStartsIntoFuncTable(funcTable, sweep, execSections)
+		merge(sweep)
 	}
+	// Functions nothing above found, located from the code layout: in the
+	// gaps between .pdata ranges, or (x86) across the whole code. Only the
+	// starts no other source knows are marked as layout-only.
+	var exact []funcRange
+	for _, fr := range funcTable {
+		if fr.exact {
+			exact = append(exact, fr)
+		}
+	}
+	known := make(map[uint32]bool, len(funcTable)+len(innerStarts))
+	for _, fr := range funcTable {
+		known[fr.begin] = true
+	}
+	for _, s := range innerStarts {
+		known[s] = true
+	}
+	pads := paddingStarts(exact, execSections, sweepMode, known, imageBase)
+	layoutStarts := make(map[uint32]bool, len(pads))
+	for _, s := range pads {
+		if !known[s] {
+			layoutStarts[s] = true
+		}
+	}
+	merge(pads)
 
 	symbols := peSymbolMap(f, imageBase)
 	if withPDB {
@@ -806,6 +1188,8 @@ func cgOpenPE(path string, withPDB bool) (*cgBinary, error) {
 		execSections:   execSections,
 		staticSections: staticSections,
 		funcTable:      funcTable,
+		innerStarts:    innerStarts,
+		layoutStarts:   layoutStarts,
 		closer:         func() { f.Close() },
 	}, nil
 }

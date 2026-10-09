@@ -4,6 +4,7 @@ package analyze
 // AGENT_TOOL_D2_DIR (see exports_d2_test.go).
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +15,7 @@ import (
 // function start so the agent can re-query for the real callers.
 func TestXrefZeroRefsGivesEnclosingHint(t *testing.T) {
 	path := filepath.Join(d2Dir(t), "D2Game.dll")
-	out, err := opXref(AnalyzeInput{Operation: "xref", FilePath: path, TargetVA: "0x6fc67be4"})
+	out, err := opXref(context.Background(), AnalyzeInput{Operation: "xref", FilePath: path, TargetVA: "0x6fc67be4"})
 	if err != nil {
 		t.Fatalf("xref: %v", err)
 	}
@@ -37,7 +38,7 @@ func TestXrefZeroRefsGivesEnclosingHint(t *testing.T) {
 // the call target 0x6fc4e050) should, on 0 direct refs, point at that start.
 func TestXrefMidFunctionPointsAtStart(t *testing.T) {
 	path := filepath.Join(d2Dir(t), "D2Game.dll")
-	out, err := opXref(AnalyzeInput{Operation: "xref", FilePath: path, TargetVA: "0x6fc4e0d5"})
+	out, err := opXref(context.Background(), AnalyzeInput{Operation: "xref", FilePath: path, TargetVA: "0x6fc4e0d5"})
 	if err != nil {
 		t.Fatalf("xref: %v", err)
 	}

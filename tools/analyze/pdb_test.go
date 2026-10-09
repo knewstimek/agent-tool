@@ -14,7 +14,7 @@ import (
 func TestSplitQualified(t *testing.T) {
 	for _, c := range []struct{ in, ns, name string }{
 		{"main", "", "main"},
-		{"FActiveSound::SetWaveParameter", "FActiveSound", "SetWaveParameter"},
+		{"Player::TakeDamage", "Player", "TakeDamage"},
 		{"A::B<C::D>::f", "A::B<C::D>", "f"},
 		{"GlobalVectorConstants::`dynamic initializer for 'A::B''", "GlobalVectorConstants", "`dynamic initializer for 'A::B''"},
 		{"std::vector<int>::operator()", "std::vector<int>", "operator()"},
