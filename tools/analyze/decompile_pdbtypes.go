@@ -215,6 +215,13 @@ func (c *pdbTypes) structFields(fl pdb.TypeIndex, size int64) []pcode.HostFieldD
 				_, short := splitQualified(bd.Name)
 				out = append(out, pcode.HostFieldDesc{Name: "super_" + short, Offset: int32(m.Offset), Type: bd})
 			}
+		case *pdb.VFuncTab:
+			// The class's own virtual table pointer, at offset 0 (MSVC lays it
+			// out first; a base class that has one covers it instead and wins
+			// the overlap check below). Named as MSVC's debugger shows it.
+			slot := &pcode.HostTypeDesc{Meta: "ptr", Size: c.ptrSize, Elem: &pcode.HostTypeDesc{Meta: "code", Size: 1, Name: "code"}}
+			out = append(out, pcode.HostFieldDesc{Name: "__vfptr", Offset: 0,
+				Type: &pcode.HostTypeDesc{Meta: "ptr", Size: c.ptrSize, Elem: slot}})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Offset < out[j].Offset })

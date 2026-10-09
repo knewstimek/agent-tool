@@ -163,6 +163,7 @@ func (t *decompileTarget) decompile(target string, maxInstr int, ghidraFormat bo
 		MaxInstructions: maxInstr,
 		Host:            t.host,
 		FlowOverrides:   tailCallOverrides(t, entry),
+		HostLocals:      t.hostLocals(entry),
 		TrackedRegs:     t.tracked,
 		GhidraFormat:    ghidraFormat,
 	})
@@ -205,6 +206,19 @@ func stripTypeDefinitions(c string) string {
 		break
 	}
 	return strings.Join(lines[i:], "\n")
+}
+
+// hostLocals are the PDB names of the function's stack variables, nil when
+// there are none.
+func (t *decompileTarget) hostLocals(entry uint64) map[int64]string {
+	if !pdbLocalNames || t.host.pdb == nil {
+		return nil
+	}
+	f := t.host.pdb.funcs[entry]
+	if f == nil || f.proc == nil {
+		return nil
+	}
+	return localNames(f.proc, t.is64)
 }
 
 // resolve turns a target (hex address or symbol name) into a function entry.
