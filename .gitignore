@@ -17,3 +17,4 @@ UNRELEASED.md
 go.work
 go.work.sum
 !tools/analyze/testdata/pdb/*.exe
+!tools/analyze/testdata/pdb/*.pdb
