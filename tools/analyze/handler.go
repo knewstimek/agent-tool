@@ -68,7 +68,8 @@ type AnalyzeInput struct {
 	// call_graph parameters are reused from VA + Count fields above
 
 	// decompile parameters (also uses VA)
-	TimeoutSec int `json:"timeout_sec,omitempty" jsonschema:"Seconds before the decompile worker is killed. Default: 60, Max: 600. For decompile"`
+	TimeoutSec int    `json:"timeout_sec,omitempty" jsonschema:"Seconds before the decompile worker is killed. Default: 60, Max: 600. For decompile"`
+	PDBPath    string `json:"pdb_path,omitempty" jsonschema:"PDB for a PE image when it is not beside the binary; must match the image GUID. 'none' disables PDB use. For decompile"`
 }
 
 // Note: follow_ptr uses VA + Count, rtti_dump uses VA, struct_layout uses VA + Length

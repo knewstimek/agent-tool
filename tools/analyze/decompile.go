@@ -43,7 +43,7 @@ func opDecompile(ctx context.Context, input AnalyzeInput) (string, error) {
 		return "", fmt.Errorf("timeout_sec must be at most %d", decompileMaxTimeout)
 	}
 
-	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB}
+	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath}
 	start := time.Now()
 	lines, failure := runDecompileWorker(ctx, req, time.Duration(timeout)*time.Second)
 	return formatDecompile(input, targets, lines, failure, time.Since(start)), nil
@@ -174,7 +174,13 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 	if load.HostTracked != "" {
 		fmt.Fprintf(&sb, ", %s", load.HostTracked)
 	}
-	sb.WriteString(".\nNo PDB/DWARF types or prototypes are applied: parameter/local types and callee signatures are inferred by the decompiler (Ghidra-equivalent core), so treat names like param_1/local_10 and undefined types as recovered, not declared.\n")
+	sb.WriteString(".\n")
+	if load.PDB != "" {
+		fmt.Fprintf(&sb, "PDB: %s (function names applied).\n", load.PDB)
+	} else if load.PDBNote != "" {
+		fmt.Fprintf(&sb, "PDB: %s.\n", load.PDBNote)
+	}
+	sb.WriteString("No PDB/DWARF types or prototypes are applied: parameter/local types and callee signatures are inferred by the decompiler (Ghidra-equivalent core), so treat names like param_1/local_10 and undefined types as recovered, not declared.\n")
 
 	for _, t := range targets {
 		r, have := results[t]

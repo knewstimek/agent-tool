@@ -41,10 +41,25 @@ func TestDecompileRealexeAdapter(t *testing.T) {
 			}
 			readJSON(t, filepath.Join(dir, work, "goldens.json"), &goldens)
 
-			target, err := loadDecompileTarget(meta.Exe)
+			// A golden made without the PDB (its functions keep FUN_ names) is
+			// compared with the adapter's PDB use off, so both sides know the same.
+			pdb, fun := "", 0
+			for _, g := range goldens.Functions {
+				if strings.HasPrefix(g.Name, "FUN_") {
+					fun++
+				}
+			}
+			if fun*2 > len(goldens.Functions) {
+				pdb = "none"
+			}
+			if v := os.Getenv("AGENT_TOOL_REALEXE_PDB"); v != "" {
+				pdb = v
+			}
+			target, err := loadDecompileTarget(meta.Exe, pdb)
 			if err != nil {
 				t.Fatal(err)
 			}
+			t.Logf("%s: pdb=%q used=%q note=%q", work, pdb, target.pdb, target.pdbNote)
 			type result struct {
 				Name   string `json:"name"`
 				Output string `json:"output"`

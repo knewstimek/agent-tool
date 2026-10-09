@@ -32,7 +32,9 @@ const DecompileWorkerArg = "__decompile-worker"
 
 // decompileRequest is the worker's stdin: one JSON object.
 type decompileRequest struct {
-	Path            string   `json:"path"`
+	Path string `json:"path"`
+	// PDBPath overrides where the PE's PDB is looked for; "none" disables it.
+	PDBPath         string   `json:"pdb_path,omitempty"`
 	Targets         []string `json:"targets"`
 	MaxInstructions int      `json:"max_instructions,omitempty"`
 	MemLimitMB      int      `json:"mem_limit_mb"`
@@ -52,6 +54,8 @@ type decompileLine struct {
 	Imports     int     `json:"imports,omitempty"`
 	LoadSecs    float64 `json:"load_secs,omitempty"`
 	HostTracked string  `json:"tracked,omitempty"`
+	PDB         string  `json:"pdb,omitempty"`      // PDB used
+	PDBNote     string  `json:"pdb_note,omitempty"` // why no PDB was used
 
 	// result (and fatal: the target that was running)
 	Target    string   `json:"target,omitempty"`
@@ -105,13 +109,14 @@ func RunDecompileWorker(in io.Reader, out io.Writer) int {
 	}()
 
 	start := time.Now()
-	t, err := loadDecompileTarget(req.Path)
+	t, err := loadDecompileTarget(req.Path, req.PDBPath)
 	if err != nil {
 		emit(decompileLine{Kind: "fatal", ErrorKind: "load", Error: err.Error()})
 		return 1
 	}
 	emit(decompileLine{Kind: "load", Format: t.format, Spec: t.spec, KnownStarts: len(t.host.funcs),
 		NamedStarts: t.host.named, Imports: len(t.host.imports), HostTracked: t.trackedDesc,
+		PDB: t.pdb, PDBNote: t.pdbNote,
 		LoadSecs: time.Since(start).Seconds()})
 
 	for _, target := range req.Targets {
@@ -129,6 +134,8 @@ type decompileTarget struct {
 	spec        string
 	tracked     map[string]uint64
 	trackedDesc string
+	pdb         string // PDB whose names are applied
+	pdbNote     string // why no PDB is applied (empty when none was expected)
 	is64        bool
 	exec        []execBytes
 	// containing returns the start of the function that contains va when the
@@ -149,7 +156,8 @@ func (t *decompileTarget) decompile(target string, maxInstr int, ghidraFormat bo
 	start := time.Now()
 	res, err := t.prog.Decompile(decomp.Function{
 		Entry:           entry,
-		Name:            t.host.funcs[entry],
+		Name:            shortName(t.host.funcs[entry]),
+		DisplayName:     t.host.funcs[entry],
 		MaxInstructions: maxInstr,
 		Host:            t.host,
 		FlowOverrides:   tailCallOverrides(t, entry),
@@ -182,7 +190,7 @@ func (t *decompileTarget) resolve(target string) (uint64, string, error) {
 		if e, ok := t.host.lookupName(target); ok {
 			return e, "", nil
 		}
-		return 0, "", fmt.Errorf("%q is neither a hex address nor a function name in this file (names come from PE exports and ELF symbol tables; PDB files are not read); pass va as hex, e.g. 0x140001000", target)
+		return 0, "", fmt.Errorf("%q is neither a hex address nor a function name in this file (names come from PE exports, the matching PDB, and ELF symbol tables; use the qualified PDB form, e.g. Class::Method); pass va as hex, e.g. 0x140001000", target)
 	}
 	if !t.inExec(va) {
 		return 0, "", fmt.Errorf("0x%x is not inside an executable section; check the address with analyze pe_info/elf_info", va)
@@ -218,7 +226,7 @@ type execBytes struct {
 
 // loadDecompileTarget maps the binary, picks the embedded spec and builds the
 // host symbol scope from what the file itself records.
-func loadDecompileTarget(path string) (*decompileTarget, error) {
+func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 	bin, err := cgOpenBinary(path)
 	if err != nil {
 		return nil, fmt.Errorf("%v; decompile supports x86/x64 PE and ELF", err)
@@ -260,6 +268,14 @@ func loadDecompileTarget(path string) (*decompileTarget, error) {
 			}
 		}
 		host = newPEHost(f, bin, pd)
+		if pdbPath != "none" {
+			var names *pdbNames
+			names, t.pdbNote = loadPDBNames(path, pdbPath, f, bin.imageBase)
+			if names != nil {
+				t.pdb = names.path
+				host.addNames(names.funcs, bin)
+			}
+		}
 		// The segment bases Ghidra's PE loader sets for every function (FS for
 		// x86 TEB access, GS for x64); observed in Ghidra 12 decompiler requests
 		// for MSVC images. Without them fs:[0]/gs:[0x30] become unresolved
@@ -329,7 +345,21 @@ type decompHost struct {
 	named   int
 }
 
+// addNames takes PDB function names and entries. A PDB entry is a real
+// function even where the file's own records missed it, so it also becomes a
+// known start (better callee names and tail-call detection).
+func (h *decompHost) addNames(names map[uint64]string, bin *cgBinary) {
+	for va, name := range names {
+		if va < bin.imageBase || va-bin.imageBase > 0xffffffff || !isInExecSection(bin.execSections, uint32(va-bin.imageBase)) {
+			continue
+		}
+		h.funcs[va] = name
+	}
+	h.finish()
+}
+
 func (h *decompHost) finish() {
+	h.named = 0
 	h.starts = make([]uint64, 0, len(h.funcs))
 	for va, n := range h.funcs {
 		h.starts = append(h.starts, va)
@@ -352,7 +382,14 @@ func (h *decompHost) QueryFunction(a address.Address) (pcode.HostFunction, bool)
 	if _, ok := h.funcs[a.Offset]; !ok {
 		return pcode.HostFunction{}, false
 	}
-	return pcode.HostFunction{Name: h.nameOf(a.Offset), ExtraPop: pcode.ExtrapopUnknown}, true
+	name := h.nameOf(a.Offset)
+	ns, _ := splitQualified(name)
+	return pcode.HostFunction{Name: name, Namespace: ns, ExtraPop: pcode.ExtrapopUnknown}, true
+}
+
+func shortName(qualified string) string {
+	_, n := splitQualified(qualified)
+	return n
 }
 
 func (h *decompHost) QueryExternalRef(a address.Address) (string, bool) {
