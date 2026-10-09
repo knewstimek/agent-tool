@@ -70,6 +70,7 @@ type AnalyzeInput struct {
 	// decompile parameters (also uses VA)
 	TimeoutSec int    `json:"timeout_sec,omitempty" jsonschema:"Seconds before the decompile worker is killed. Default: 60, Max: 600. For decompile"`
 	PDBPath    string `json:"pdb_path,omitempty" jsonschema:"PDB for a PE image when it is not beside the binary (must match the image GUID); none disables PDB use. Used by decompile, function_at, follow_ptr, struct_layout; other operations find the PDB automatically"`
+	PDBForce   bool   `json:"pdb_force,omitempty" jsonschema:"Load pdb_path even when its GUID does not match the image (relinked or patched build with the same code); output carries a warning. Requires pdb_path"`
 }
 
 // Note: follow_ptr uses VA + Count, rtti_dump uses VA, struct_layout uses VA + Length
@@ -117,6 +118,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 	}
 	if input.ResultOffset < 0 {
 		return errorResult("result_offset must be non-negative")
+	}
+	if input.PDBForce && (input.PDBPath == "" || input.PDBPath == "none") {
+		return errorResult("pdb_force needs pdb_path: name the PDB file to load despite a GUID mismatch (a PDB found automatically is never forced)")
 	}
 	if input.MaxOutputChars <= 0 {
 		input.MaxOutputChars = defaultAnalyzeOutputChars

@@ -1,8 +1,10 @@
 package analyze
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -88,7 +90,7 @@ func TestDecompilePDBLocals(t *testing.T) {
 // Bitfield members reach the decompiler as their storage unit plus the
 // field's bits in it (struct Flags { ready:1; mode:3; rest:28; }).
 func TestPDBBitfieldMembers(t *testing.T) {
-	target, err := loadDecompileTarget(filepath.Join("testdata", "pdb", "fixture_x64.exe"), "")
+	target, err := loadDecompileTarget(filepath.Join("testdata", "pdb", "fixture_x64.exe"), "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,5 +106,62 @@ func TestPDBBitfieldMembers(t *testing.T) {
 	}
 	if want := []string{"ready@0:0+1", "mode@0:1+3", "rest@0:4+28"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Flags fields = %v; want %v", got, want)
+	}
+}
+
+// A PDB whose GUID differs from the image is refused unless pdb_force names
+// it; forcing also covers an image whose RSDS record was wiped. The forced
+// load must carry a warning, since the PDB may describe another build.
+func TestPDBForce(t *testing.T) {
+	src := filepath.Join("testdata", "pdb", "fixture_x64.exe")
+	img, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := bytes.Index(img, []byte("RSDS"))
+	if at < 0 {
+		t.Fatal("fixture has no RSDS record")
+	}
+	pdbFile, _ := filepath.Abs(filepath.Join("testdata", "pdb", "fixture_x64.pdb"))
+	dir := t.TempDir()
+	write := func(name string, b []byte) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	other := append([]byte(nil), img...)
+	other[at+4] ^= 0xFF // GUID
+	relinked := write("relinked.exe", other)
+	wiped := append([]byte(nil), img...)
+	copy(wiped[at:], "XXXX")
+	stripped := write("stripped.exe", wiped)
+
+	for _, c := range []struct {
+		name, exe, pdb string
+		force            bool
+		used             bool
+		note             string
+	}{
+		{"mismatch refused", relinked, pdbFile, false, false, "pass pdb_force=true"},
+		{"mismatch forced", relinked, pdbFile, true, true, "GUID does not match"},
+		{"no RSDS refused", stripped, pdbFile, false, false, "pdb_force=true"},
+		{"no RSDS forced", stripped, pdbFile, true, true, "GUID does not match"},
+		{"matching unaffected", src, pdbFile, true, true, ""},
+	} {
+		tg, err := loadDecompileTarget(c.exe, c.pdb, c.force)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if used := tg.pdb != ""; used != c.used {
+			t.Errorf("%s: PDB used = %v; want %v (note %q)", c.name, used, c.used, tg.pdbNote)
+		}
+		if c.note == "" && tg.pdbNote != "" || !strings.Contains(tg.pdbNote, c.note) {
+			t.Errorf("%s: note %q; want it to contain %q", c.name, tg.pdbNote, c.note)
+		}
+		if c.used && tg.host.debug == nil {
+			t.Errorf("%s: PDB debug info not applied", c.name)
+		}
 	}
 }

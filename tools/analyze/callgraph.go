@@ -794,7 +794,7 @@ func cgOpenPE(path string, withPDB bool) (*cgBinary, error) {
 
 	symbols := peSymbolMap(f, imageBase)
 	if withPDB {
-		mergePDBNames(symbols, path, "", f, imageBase)
+		mergePDBNames(symbols, path, "", false, f, imageBase)
 	}
 
 	return &cgBinary{

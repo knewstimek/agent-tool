@@ -37,6 +37,7 @@ type decompileRequest struct {
 	Path string `json:"path"`
 	// PDBPath overrides where the PE's PDB is looked for; "none" disables it.
 	PDBPath         string   `json:"pdb_path,omitempty"`
+	PDBForce        bool     `json:"pdb_force,omitempty"` // load PDBPath despite a GUID mismatch
 	Targets         []string `json:"targets"`
 	MaxInstructions int      `json:"max_instructions,omitempty"`
 	MemLimitMB      int      `json:"mem_limit_mb"`
@@ -57,7 +58,7 @@ type decompileLine struct {
 	LoadSecs    float64 `json:"load_secs,omitempty"`
 	HostTracked string  `json:"tracked,omitempty"`
 	PDB         string  `json:"pdb,omitempty"`      // PDB used
-	PDBNote     string  `json:"pdb_note,omitempty"` // why no PDB was used
+	PDBNote     string  `json:"pdb_note,omitempty"` // why no PDB was used, or a forced-load warning
 	Reused      bool    `json:"reused,omitempty"`   // the binary was already loaded
 
 	// result (and fatal: the target that was running)
@@ -124,11 +125,11 @@ func RunDecompileWorker(in io.Reader, out io.Writer) int {
 				}
 			}(req.MemLimitMB)
 		}
-		if key := req.Path + "|" + req.PDBPath; t == nil || key != loaded {
+		if key := fmt.Sprintf("%s|%s|%t", req.Path, req.PDBPath, req.PDBForce); t == nil || key != loaded {
 			t = nil
 			runtime.GC() // let the previous binary go before loading the next
 			start := time.Now()
-			nt, err := loadDecompileTarget(req.Path, req.PDBPath)
+			nt, err := loadDecompileTarget(req.Path, req.PDBPath, req.PDBForce)
 			if err != nil {
 				emit(decompileLine{Kind: "fatal", ErrorKind: "load", Error: err.Error()})
 				emit(decompileLine{Kind: "done"})
@@ -321,7 +322,7 @@ type execBytes struct {
 
 // loadDecompileTarget maps the binary, picks the embedded spec and builds the
 // host symbol scope from what the file itself records.
-func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
+func loadDecompileTarget(path, pdbPath string, pdbForce bool) (*decompileTarget, error) {
 	bin, err := cgOpenBinaryPDB(path, false)
 	if err != nil {
 		return nil, fmt.Errorf("%v; decompile supports x86/x64 PE and ELF", err)
@@ -373,7 +374,7 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 		}
 		if pdbPath != "none" {
 			var pi *pdbInfo
-			pi, t.pdbNote = openPDBInfo(path, pdbPath, f, bin.imageBase, bin.is64)
+			pi, t.pdbNote = openPDBInfo(path, pdbPath, pdbForce, f, bin.imageBase, bin.is64)
 			if pi != nil {
 				t.pdb, host.debug = pi.path, pi
 				host.addNames(pi.functionNames(), bin)

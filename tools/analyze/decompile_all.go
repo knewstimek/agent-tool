@@ -37,6 +37,7 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 	jobs := fs.Int("j", analysisThreads(), "worker processes")
 	perFunc := fs.Int("timeout", 30, "seconds allowed per function")
 	pdbPath := fs.String("pdb", "", "PDB path, or none (PE only)")
+	pdbForce := fs.Bool("pdb-force", false, "load -pdb even if its GUID does not match the image")
 	limit := fs.Int("limit", 0, "decompile at most this many functions (0 = all)")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: agent-tool %s [flags] <binary>\n\nDecompiles every known function of an x86/x64 PE/ELF binary to C, one JSON\nobject per line: {\"entry\",\"name\",\"c\"} or {\"entry\",\"error\"}.\n\n", DecompileAllArg)
@@ -56,10 +57,16 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 
 	// The function list is the decompile host's known starts (with PDB or
 	// DWARF functions); the analysis cache makes this load cheap.
-	t, err := loadDecompileTarget(bin, *pdbPath)
+	t, err := loadDecompileTarget(bin, *pdbPath, *pdbForce)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
+	}
+	if t.pdb != "" {
+		fmt.Fprintf(stderr, "pdb: %s\n", t.pdb)
+	}
+	if t.pdbNote != "" {
+		fmt.Fprintf(stderr, "pdb: %s\n", t.pdbNote)
 	}
 	starts := append([]uint64(nil), t.host.starts...)
 	t = nil
@@ -132,7 +139,7 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 					pending.Add(-len(vas))
 					continue
 				}
-				n := corpusBatch(ctx, bin, *pdbPath, vas, *perFunc, write)
+				n := corpusBatch(ctx, decompileRequest{Path: bin, PDBPath: *pdbPath, PDBForce: *pdbForce}, vas, *perFunc, write)
 				pending.Add(-n)
 				if rest := vas[n:]; len(rest) > 0 {
 					queue <- rest
@@ -151,19 +158,19 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 
 // corpusBatch decompiles vas on a pooled worker, writing an entry for each
 // function settled, and returns how many were (a prefix of vas).
-func corpusBatch(ctx context.Context, bin, pdbPath string, vas []uint64, perFunc int, write func(corpusEntry)) int {
-	targets := make([]string, len(vas))
+func corpusBatch(ctx context.Context, req decompileRequest, vas []uint64, perFunc int, write func(corpusEntry)) int {
+	req.Targets = make([]string, len(vas))
 	for i, va := range vas {
-		targets[i] = fmt.Sprintf("0x%x", va)
+		req.Targets[i] = fmt.Sprintf("0x%x", va)
 	}
-	req := decompileRequest{Path: bin, PDBPath: pdbPath, Targets: targets, MemLimitMB: decompileMemLimitMB}
+	req.MemLimitMB = decompileMemLimitMB
 	lines, failure := runDecompileWorker(ctx, req, time.Duration(perFunc*len(vas))*time.Second)
 	n := 0
 	for _, l := range lines {
 		if l.Kind != "result" || n >= len(vas) {
 			continue
 		}
-		e := corpusEntry{Entry: targets[n], Name: l.Name, C: l.C, Secs: l.Secs}
+		e := corpusEntry{Entry: req.Targets[n], Name: l.Name, C: l.C, Secs: l.Secs}
 		if l.Error != "" {
 			e.Error = l.ErrorKind + ": " + l.Error
 		}
@@ -173,7 +180,7 @@ func corpusBatch(ctx context.Context, bin, pdbPath string, vas []uint64, perFunc
 	if n < len(vas) && ctx.Err() == nil {
 		if failure != "" {
 			// The function that was running when the worker died or timed out.
-			write(corpusEntry{Entry: targets[n], Error: failure})
+			write(corpusEntry{Entry: req.Targets[n], Error: failure})
 			return n + 1
 		}
 		// Results missing without a failure: the worker reported a fatal
@@ -186,7 +193,7 @@ func corpusBatch(ctx context.Context, bin, pdbPath string, vas []uint64, perFunc
 			}
 		}
 		for ; n < len(vas); n++ {
-			write(corpusEntry{Entry: targets[n], Error: msg})
+			write(corpusEntry{Entry: req.Targets[n], Error: msg})
 		}
 	}
 	return n

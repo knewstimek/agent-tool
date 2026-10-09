@@ -46,7 +46,7 @@ var decompPool workerPool
 // workerKey identifies a binary for reuse: a rebuilt file (other size or
 // time) gets a fresh worker.
 func workerKey(req decompileRequest) string {
-	key := req.Path + "|" + req.PDBPath
+	key := fmt.Sprintf("%s|%s|%t", req.Path, req.PDBPath, req.PDBForce)
 	if fi, err := os.Stat(req.Path); err == nil {
 		key += fmt.Sprintf("|%d|%d", fi.Size(), fi.ModTime().UnixNano())
 	}

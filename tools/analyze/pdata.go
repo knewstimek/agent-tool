@@ -129,9 +129,9 @@ func opFunctionAt(input AnalyzeInput) (string, error) {
 
 	// A matching PDB records every procedure's start and length: exact on
 	// x86 too, where .pdata does not exist and only heuristics remain.
-	if idx, _ := loadPDBNameIndex(input.FilePath, input.PDBPath, f, imageBase); idx != nil {
+	if idx, note := loadPDBNameIndex(input.FilePath, input.PDBPath, input.PDBForce, f, imageBase); idx != nil {
 		if r, ok := idx.procAt(va); ok {
-			return formatPDBFunction(f, imageBase, va, r, idx.path, input), nil
+			return formatPDBFunction(f, imageBase, va, r, idx.path, note, input), nil
 		}
 	}
 
@@ -319,7 +319,7 @@ func opFunctionAt(input AnalyzeInput) (string, error) {
 
 // formatPDBFunction formats function_at output for a procedure the PDB
 // describes.
-func formatPDBFunction(f *pe.File, imageBase, va uint64, r pdbRange, pdbPath string, input AnalyzeInput) string {
+func formatPDBFunction(f *pe.File, imageBase, va uint64, r pdbRange, pdbPath, note string, input AnalyzeInput) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Function containing 0x%x:\n", va))
 	sb.WriteString(fmt.Sprintf("  Name:   %s\n", r.name))
@@ -327,7 +327,13 @@ func formatPDBFunction(f *pe.File, imageBase, va uint64, r pdbRange, pdbPath str
 	sb.WriteString(fmt.Sprintf("  End:    0x%x (RVA: 0x%x)\n", r.end, r.end-imageBase))
 	sb.WriteString(fmt.Sprintf("  Size:   %d bytes\n", r.end-r.start))
 	sb.WriteString(fmt.Sprintf("  start_source: pdb (%s)\n", pdbPath))
-	sb.WriteString("  confidence:   exact\n")
+	if note != "" {
+		// A forced PDB may describe another build: its bounds are a claim.
+		sb.WriteString("  confidence:   low\n")
+		sb.WriteString(fmt.Sprintf("  warning:      PDB %s\n", note))
+	} else {
+		sb.WriteString("  confidence:   exact\n")
+	}
 
 	count := input.Count
 	if count <= 0 {

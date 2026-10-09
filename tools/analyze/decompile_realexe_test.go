@@ -67,7 +67,7 @@ func TestDecompileRealexeAdapter(t *testing.T) {
 			if v := os.Getenv("AGENT_TOOL_REALEXE_PDB"); v != "" {
 				pdb = v
 			}
-			target, err := loadDecompileTarget(meta.Exe, pdb)
+			target, err := loadDecompileTarget(meta.Exe, pdb, false)
 			if err != nil {
 				t.Fatal(err)
 			}

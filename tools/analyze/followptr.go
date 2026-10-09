@@ -53,7 +53,7 @@ func opFollowPtr(input AnalyzeInput) (string, error) {
 	}
 
 	symbols := peSymbolMap(f, imageBase)
-	mergePDBNames(symbols, input.FilePath, input.PDBPath, f, imageBase)
+	mergePDBNames(symbols, input.FilePath, input.PDBPath, input.PDBForce, f, imageBase)
 	cache := make(secCache)
 
 	var sb strings.Builder

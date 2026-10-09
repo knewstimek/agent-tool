@@ -35,7 +35,7 @@ var pdbNameCache struct {
 // loadPDBNameIndex returns the PDB name index for the PE image at exePath
 // (nil when there is no matching PDB, with a note saying why when one was
 // expected). pdbPath overrides the PDB location; "none" disables it.
-func loadPDBNameIndex(exePath, pdbPath string, f *pe.File, imageBase uint64) (*pdbNameIndex, string) {
+func loadPDBNameIndex(exePath, pdbPath string, force bool, f *pe.File, imageBase uint64) (*pdbNameIndex, string) {
 	if pdbPath == "none" {
 		return nil, ""
 	}
@@ -43,14 +43,14 @@ func loadPDBNameIndex(exePath, pdbPath string, f *pe.File, imageBase uint64) (*p
 	if err != nil {
 		return nil, ""
 	}
-	key := fmt.Sprintf("%s|%d|%d|%s", exePath, st.Size(), st.ModTime().UnixNano(), pdbPath)
+	key := fmt.Sprintf("%s|%d|%d|%s|%t", exePath, st.Size(), st.ModTime().UnixNano(), pdbPath, force)
 	pdbNameCache.mu.Lock()
 	defer pdbNameCache.mu.Unlock()
 	if pdbNameCache.key == key {
 		return pdbNameCache.idx, pdbNameCache.note
 	}
 	_, is64 := f.OptionalHeader.(*pe.OptionalHeader64)
-	pi, note := openPDBInfo(exePath, pdbPath, f, imageBase, is64)
+	pi, note := openPDBInfo(exePath, pdbPath, force, f, imageBase, is64)
 	var idx *pdbNameIndex
 	if pi != nil {
 		idx = &pdbNameIndex{path: pi.path, names: make(map[uint64]string, len(pi.funcs)+len(pi.data))}
@@ -73,8 +73,8 @@ func loadPDBNameIndex(exePath, pdbPath string, f *pe.File, imageBase uint64) (*p
 
 // mergePDBNames adds PDB names for addresses the file's own symbols do not
 // name; the file's names (exports, import slots) keep priority.
-func mergePDBNames(syms map[uint64]string, exePath, pdbPath string, f *pe.File, imageBase uint64) {
-	idx, _ := loadPDBNameIndex(exePath, pdbPath, f, imageBase)
+func mergePDBNames(syms map[uint64]string, exePath, pdbPath string, force bool, f *pe.File, imageBase uint64) {
+	idx, _ := loadPDBNameIndex(exePath, pdbPath, force, f, imageBase)
 	if idx == nil {
 		return
 	}

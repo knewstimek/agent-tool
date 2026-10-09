@@ -1080,7 +1080,7 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
 
   Every function of a binary (a corpus) is a CLI job, not a tool call -- it takes
   minutes on a large program. Run it in the background and read the file:
-    agent-tool decompile-all [-j workers] [-timeout sec] [-pdb path] [-limit n] [-o out.jsonl] <binary>
+    agent-tool decompile-all [-j workers] [-timeout sec] [-pdb path [-pdb-force]] [-limit n] [-o out.jsonl] <binary>
   One JSON object per line: {"entry","name","c","secs"} or {"entry","error"};
   rerunning resumes an existing output file.
 
@@ -1097,7 +1097,9 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   without full debug info is named and typed from its
   decorated public names (MSVC demangler). The PDB is found via the image's RSDS
   record (its path, then beside the image) and used only when its GUID matches;
-  pdb_path points to it elsewhere, pdb_path="none" turns it off.
+  pdb_path points to it elsewhere, pdb_path="none" turns it off. pdb_force=true
+  loads pdb_path despite a GUID mismatch or a wiped RSDS record (relinked or
+  patched image with the same code); the output then carries a warning.
 
   Without a PDB, embedded DWARF (ELF, MinGW/Go PE) supplies the same: names,
   prototypes, types, globals and stack locals.
@@ -1121,6 +1123,7 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
     va: Function entry as hex VA or symbol name (PDB names are qualified:
         FActiveSound::SetWaveParameter); up to 16, comma-separated
     pdb_path: PDB file when not beside the image; "none" disables the PDB
+    pdb_force: Load pdb_path even if its GUID does not match (warns)
     timeout_sec: Worker time limit (default 60, max 600)
     max_output_chars: Output cap (default 32768)
 

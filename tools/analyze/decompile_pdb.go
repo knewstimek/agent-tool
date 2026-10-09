@@ -96,12 +96,15 @@ type pdbData struct {
 // given, else the RSDS path, then the RSDS file name and the image's own
 // name beside the image -- and checks its GUID. A missing PDB is not an
 // error; a PDB with a different GUID is reported and not used: its
-// addresses describe another build.
-func openPDBInfo(exePath, override string, f *pe.File, imageBase uint64, is64 bool) (*pdbInfo, string) {
+// addresses describe another build. force (with an override only) loads it
+// anyway -- a relinked or patched image whose code still matches -- and the
+// note then warns that names and types may be misplaced.
+func openPDBInfo(exePath, override string, force bool, f *pe.File, imageBase uint64, is64 bool) (*pdbInfo, string) {
+	force = force && override != ""
 	cv, ok := readPECodeView(f)
-	if !ok {
+	if !ok && !force {
 		if override != "" {
-			return nil, "the image has no RSDS debug record, so pdb_path cannot be matched to it"
+			return nil, "the image has no RSDS debug record, so pdb_path cannot be matched to it; pass pdb_force=true to load it unchecked"
 		}
 		return nil, ""
 	}
@@ -128,10 +131,14 @@ func openPDBInfo(exePath, override string, f *pe.File, imageBase uint64, is64 bo
 			continue
 		}
 		info, err := p.Info()
-		if err != nil || info.GUID != cv.guid {
-			p.Close()
-			note = fmt.Sprintf("PDB %s does not match this image (GUID differs); not used", c)
-			continue
+		var warn string
+		if err != nil || !ok || info.GUID != cv.guid {
+			if !force {
+				p.Close()
+				note = fmt.Sprintf("PDB %s does not match this image (GUID differs); not used. If it is the same build (relinked or patched image), pass pdb_force=true", c)
+				continue
+			}
+			warn = "forced with pdb_force: the GUID does not match the image, so names, types and locals may sit at the wrong addresses if the code differs"
 		}
 		pi, err := loadPDBInfo(c, p, imageBase, is64)
 		if err != nil {
@@ -141,7 +148,7 @@ func openPDBInfo(exePath, override string, f *pe.File, imageBase uint64, is64 bo
 		// The type table stays in use for lazy conversion; the file itself is
 		// fully read into memory by then.
 		p.Close()
-		return pi, ""
+		return pi, warn
 	}
 	if note != "" {
 		return nil, note

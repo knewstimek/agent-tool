@@ -39,7 +39,7 @@ func opDecompile(ctx context.Context, input AnalyzeInput) (string, error) {
 		return "", fmt.Errorf("timeout_sec must be at most %d", decompileMaxTimeout)
 	}
 
-	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath}
+	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath, PDBForce: input.PDBForce}
 	start := time.Now()
 	lines, failure := runDecompileWorker(ctx, req, time.Duration(timeout)*time.Second)
 	return formatDecompile(input, targets, lines, failure, time.Since(start)), nil
@@ -111,6 +111,9 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 	sb.WriteString(".\n")
 	if load.PDB != "" {
 		fmt.Fprintf(&sb, "Debug info: %s (function names, prototypes, struct/enum types, global data and named locals applied).\n", load.PDB)
+		if load.PDBNote != "" {
+			fmt.Fprintf(&sb, "WARNING: PDB %s.\n", load.PDBNote)
+		}
 	} else {
 		if load.PDBNote != "" {
 			fmt.Fprintf(&sb, "PDB: %s.\n", load.PDBNote)
