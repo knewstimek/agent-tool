@@ -109,8 +109,7 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - multiread: Read multiple files in one call (reduces API round-trips)
 - regexreplace: Regex find-and-replace across files or directories (capture groups, encoding-aware, dry_run)
 - query: Read one value from a JSON/YAML/TOML file by dot-notation path (format from extension; saves tokens)
-- portcheck: Check if a TCP port is open on a host (connectivity test)
-- netcheck: Network diagnostics: external_ip, dns (A/AAAA/MX/CNAME/TXT/NS/SOA, DoH), tls (certificate expiry, issuer, SANs, protocol, cipher)
+- netcheck: Network diagnostics: external_ip, dns (A/AAAA/MX/CNAME/TXT/NS/SOA, DoH), tls (certificate expiry, issuer, SANs, protocol, cipher), port (TCP open/closed)
 - mysql: Execute MySQL/MariaDB queries (SELECT → table format, DML → affected rows)
 - redis: Execute Redis commands (any command, result formatting)
 - sloc: Count source lines of code (SLOC) with per-language summary
@@ -479,12 +478,6 @@ Supports nested keys (a.b.c), array indices ([0], [-1] for last), and wildcards 
 Examples: "scripts.build", "services.web.ports[0]", "tool.poetry.name", "users[*].email".
 Returns the value with its type; objects and arrays print as JSON, TOML datetimes as RFC3339.
 Parameters: file_path, query, format, max_output_chars
-
-## portcheck
-Check if a TCP port is open on a host. Tests connectivity with configurable timeout.
-Returns OPEN/CLOSED status with response time or error details (refused, timeout, DNS failure).
-Supports hostnames, IPv4, and IPv6 addresses.
-Parameters: host, port (1-65535), timeout_sec (default 5, max 30)
 
 ## netcheck
 Network diagnostics, one operation per call:

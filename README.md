@@ -14,7 +14,7 @@ Built-in tools in AI coding agents (Claude Code, Cursor, Codex, etc.) have known
 
 - **Tab indentation breaks**: LLMs output spaces, but your project uses tabs. The built-in Edit tool writes spaces as-is, corrupting your indentation style.
 - **Encoding corruption**: Editing EUC-KR, Shift-JIS, or GB18030 files silently converts them to UTF-8, breaking legacy projects.
-- **Too many separate tools**: Making the agent find, install, and configure Redis CLI, MySQL client, SSH client, etc. is tedious and error-prone. agent-tool bundles 41 tools into one binary and exposes them on demand through compact profiles.
+- **Too many separate tools**: Making the agent find, install, and configure Redis CLI, MySQL client, SSH client, etc. is tedious and error-prone. agent-tool bundles 40 tools into one binary and exposes them on demand through compact profiles.
 - **No reverse engineering support**: Built-in tools can't disassemble binaries, inspect PE/ELF headers, find function boundaries, or search cross-references. agent-tool includes static binary analysis (disassembly, decompilation to C with PDB/DWARF types, xref, function detection), a DAP debugger, and CheatEngine-style memory tools -- giving your agent full reverse engineering capabilities.
 - **Network censorship**: In some countries, government-level web filtering breaks plain `curl`/`wget` requests. agent-tool uses ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) by default to work around these restrictions.
 
@@ -27,7 +27,7 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI, and any MCP-compati
 ## LLM-efficient by default
 
 The default `core` profile exposes only 11 schemas (including `toolbox`) instead of
-all 41. In a protocol-level measurement this reduced the serialized tool list from
+all 40. In a protocol-level measurement this reduced the serialized tool list from
 about 74 KB (`full`) to 15 KB. For the smallest steady-state context, start with
 `--profile core-lite`; its five schemas are about 6.4 KB and expose only `read`,
 `write`, `edit`, `grep`, and `toolbox`. Use
@@ -76,10 +76,9 @@ Local relative paths resolve against an explicit workspace, then the MCP client 
 | **Mkdir** | Create directories with optional permission mode (octal, e.g. 0755). Recursive by default (mkdir -p). dry_run preview | ✅ |
 | **MultiRead** | Read up to 50 files with a call-wide 32K budget, 200-line per-file default, long-line safety, and per-file/overall continuation metadata. Hashes are opt-in | ✅ |
 | **RegexReplace** | Regex find-and-replace across files/directories. Encoding and line-ending preserving, capture groups ($1, $2). Skips binary files. dry_run preview | ✅ |
-| **NetCheck** | Network diagnostics: `external_ip` (public IPv4/IPv6 with provider fallback), `dns` (A/AAAA/MX/CNAME/TXT/NS/SOA over DoH or the system resolver), `tls` (certificate subject, issuer, expiry, SANs, TLS version, cipher) | ✅ |
+| **NetCheck** | Network diagnostics: `external_ip` (public IPv4/IPv6 with provider fallback), `dns` (A/AAAA/MX/CNAME/TXT/NS/SOA over DoH or the system resolver), `tls` (certificate subject, issuer, expiry, SANs, TLS version, cipher), `port` (TCP OPEN/CLOSED with response time) | ✅ |
 | **MySQL** | Execute SQL queries on MySQL/MariaDB. Table-formatted SELECT results with configurable row/column/cell/total-output limits; affected rows for DML. Use SQL LIMIT/OFFSET for paging | ✅ |
 | **Redis** | Execute Redis commands with formatted output by type. TLS support. Dangerous commands (FLUSHALL, SHUTDOWN, etc.) blocked | ✅ |
-| **PortCheck** | Check if a TCP port is open on a host. Returns OPEN/CLOSED with response time. Supports hostname, IPv4, IPv6 | ✅ |
 | **SLOC** | Count source lines of code per language. 70+ language detection, per-file/language breakdown, blank line stats, max_depth control | ✅ |
 | **Debug** | Interactive debugger via DAP (Debug Adapter Protocol). Full DAP coverage with bounded values/output and paging for variables, completions, modules, and loaded sources. Tested with dlv (Go), debugpy (Python), codelldb (C/C++/Rust). Works with any DAP-compatible adapter. Stdio and TCP modes. Note: vsdbg (Microsoft) requires VS Code licensing and is not usable standalone — use codelldb or netcoredbg as open-source alternatives | ✅ |
 | **Analyze** | Static binary analysis and reverse engineering. Decompilation of x86/x64 PE/ELF functions to C (Gosleigh, a Go port of Ghidra's decompiler core, run in an isolated worker process with time/memory limits); a matching PE PDB (built-in reader, no DIA SDK; `pdb_force` loads one whose GUID differs) or embedded DWARF is read automatically for function names, prototypes, struct/enum types, global data, bitfields and local variables (names and types) in decompilation, and for names and exact function bounds in disassemble, call_graph and function_at; MSVC decorated names are demangled; Go binaries use the Go ABI; non-returning functions are detected as in Ghidra; `agent-tool decompile-all` dumps a whole binary to a JSONL corpus; x86/x64/ARM/ARM64 disassembly; semantic x86/x64 instruction search with exhaustive executable-offset recovery, CFG confidence, target/result filters, and bounded register/stack/read-only constant tracing into ABI-aware calls and tail calls; PE/ELF/Mach-O parsing with bounded, pageable PE import output; xref, function discovery/call graphs, pointer/RTTI/vtable/struct analysis, imphash, Rich header, DWARF, strings, hexdump, pattern search, entropy, overlay detection, and binary diff. No global file size limit | ✅ |

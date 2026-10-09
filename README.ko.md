@@ -14,7 +14,7 @@ AI 코딩 에이전트(Claude Code, Cursor, Codex 등)의 내장 도구에는 �
 
 - **탭 들여쓰기 깨짐**: LLM은 공백을 출력하지만, 프로젝트는 탭을 사용. 내장 Edit는 공백을 그대로 써서 들여쓰기 스타일이 망가짐.
 - **인코딩 손상**: EUC-KR, Shift-JIS, GB18030 파일을 편집하면 조용히 UTF-8로 변환되어 레거시 프로젝트가 깨짐.
-- **도구가 너무 분산됨**: Redis CLI, MySQL/SSH 클라이언트를 따로 찾고 설정하는 과정은 번거롭고 오류가 잦음. agent-tool은 41개 도구를 한 바이너리로 통합하고 compact 프로필과 고정 toolbox gateway로 필요할 때 호출함.
+- **도구가 너무 분산됨**: Redis CLI, MySQL/SSH 클라이언트를 따로 찾고 설정하는 과정은 번거롭고 오류가 잦음. agent-tool은 40개 도구를 한 바이너리로 통합하고 compact 프로필과 고정 toolbox gateway로 필요할 때 호출함.
 - **리버스 엔지니어링 지원 부재**: 내장 도구로는 바이너리 디스어셈블, PE/ELF 헤더 분석, 함수 경계 탐지, 크로스 레퍼런스 검색이 불가능. agent-tool은 정적 바이너리 분석(디스어셈블리, PDB/DWARF 타입을 적용한 C 디컴파일, xref, 함수 탐지), DAP 디버거, CheatEngine 스타일 메모리 도구를 포함 -- 에이전트에게 완전한 리버스 엔지니어링 능력을 부여.
 - **네트워크 검열**: 일부 국가에서 정부 수준의 웹 필터링으로 `curl`/`wget` 요청이 차단됨. agent-tool은 ECH (Encrypted Client Hello)와 DoH (DNS over HTTPS)를 기본 활성화하여 이런 제한을 우회.
 
@@ -26,7 +26,7 @@ Claude Code, Codex CLI, Cursor, Windsurf, Cline, Gemini CLI 및 모든 MCP 호�
 
 ## LLM 친화적 기본 동작
 
-기본 `core` 프로필은 41개 전체 스키마 대신 `toolbox`를 포함한 11개만 노출합니다.
+기본 `core` 프로필은 40개 전체 스키마 대신 `toolbox`를 포함한 11개만 노출합니다.
 실제 MCP 프로토콜 측정에서 직렬화된 도구 목록은 `full` 약 74KB에서 약 15KB로
 줄었습니다. 상시 컨텍스트를 최소화하려면 `--profile core-lite`로 약 6.4KB인
 `read`, `write`, `edit`, `grep`, `toolbox`만 노출할 수 있습니다. `toolbox(operation="describe", tool="ssh", compact=true,
@@ -74,10 +74,9 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
 | **Mkdir** | 디렉토리 생성. 8진수 권한 모드 지정 가능 (예: 0755). 기본 재귀 생성 (mkdir -p). dry_run 미리보기 | ✅ |
 | **MultiRead** | 최대 50개 파일, 호출 전체 32K 예산, 파일별 기본 200줄, 초장문 행 안전 처리, 파일별/전체 continuation 메타데이터. 해시는 opt-in | ✅ |
 | **RegexReplace** | 파일/디렉토리 전체 정규식 찾기-바꾸기. 인코딩과 줄바꿈 보존, 캡처 그룹 ($1, $2) 지원. 바이너리 파일 자동 제외. dry_run 미리보기 | ✅ |
-| **NetCheck** | 네트워크 진단: `external_ip`(공인 IPv4/IPv6, 제공자 자동 fallback), `dns`(A/AAAA/MX/CNAME/TXT/NS/SOA, DoH 또는 시스템 리졸버), `tls`(인증서 주체·발급자·만료일·SAN·TLS 버전·암호 스위트) | ✅ |
+| **NetCheck** | 네트워크 진단: `external_ip`(공인 IPv4/IPv6, 제공자 자동 fallback), `dns`(A/AAAA/MX/CNAME/TXT/NS/SOA, DoH 또는 시스템 리졸버), `tls`(인증서 주체·발급자·만료일·SAN·TLS 버전·암호 스위트), `port`(TCP 포트 OPEN/CLOSED와 응답 시간) | ✅ |
 | **MySQL** | MySQL/MariaDB SQL 쿼리 실행. SELECT 결과의 행·열·셀·전체 출력 제한을 각각 설정 가능하고 DML은 영향 행 수 반환. 페이징은 SQL LIMIT/OFFSET 사용 | ✅ |
 | **Redis** | Redis 명령 실행. 타입별 포맷 출력. TLS 지원. 위험 명령(FLUSHALL, SHUTDOWN 등) 차단 | ✅ |
-| **PortCheck** | TCP 포트 열림 여부 확인. OPEN/CLOSED 상태 + 응답 시간 반환. 호스트명, IPv4, IPv6 지원 | ✅ |
 | **SLOC** | 언어별 소스 코드 라인 수 집계. 70+ 언어 감지, 파일/언어별 분류, 빈 줄 통계, max_depth 제어 | ✅ |
 | **Debug** | DAP(Debug Adapter Protocol) 기반 인터랙티브 디버거. 변수값·전체 출력 제한과 variables/completions/modules/loaded_sources 페이징 지원. dlv(Go), debugpy(Python), codelldb(C/C++/Rust) 테스트 완료. 모든 DAP 호환 어댑터 사용 가능. Stdio/TCP 모드. 참고: vsdbg(Microsoft)는 VS Code 라이센스 필수로 단독 사용 불가 — codelldb 또는 netcoredbg를 대안으로 사용 | ✅ |
 | **Analyze** | 정적 바이너리 분석 및 리버스 엔지니어링. x86/x64 PE/ELF 함수의 C 디컴파일(Ghidra 디컴파일러 코어의 Go 포팅인 Gosleigh, 시간/메모리 상한을 건 별도 워커 프로세스에서 실행), GUID가 맞는 PE PDB(내장 리더, DIA SDK 불필요; `pdb_force`로 GUID가 다른 PDB도 로드) 또는 내장 DWARF 자동 적용(디컴파일에는 함수 이름·프로토타입·구조체/열거형 타입·전역 데이터·비트필드·지역변수 이름과 타입, disassemble·call_graph·function_at에는 이름과 정확한 함수 경계), MSVC 데코레이션 이름 디맹글, Go 바이너리는 Go ABI 적용, Ghidra 방식의 noreturn 함수 감지, `agent-tool decompile-all`로 바이너리 전체를 JSONL 코퍼스로 추출, x86/x64/ARM/ARM64 디스어셈블리, 실행 섹션 전체 오프셋 복구·CFG 신뢰도·호출 대상/결과 필터·ABI 인식 CALL/tail-call 인자까지의 제한된 레지스터/스택/읽기 전용 상수 추적을 갖춘 x86/x64 의미 기반 명령어 검색, PE/ELF/Mach-O 파싱과 PE import 출력 페이징·상한, xref, 함수/콜그래프, 포인터/RTTI/vtable/구조체 분석, imphash, Rich 헤더, DWARF, 문자열, hexdump, 패턴 검색, 엔트로피, 오버레이, 바이너리 비교. 글로벌 파일 크기 제한 없음 | ✅ |

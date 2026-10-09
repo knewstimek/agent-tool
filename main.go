@@ -34,7 +34,6 @@ import (
 	"agent-tool/tools/netcheck"
 	mysqltool "agent-tool/tools/mysql"
 	"agent-tool/tools/patch"
-	"agent-tool/tools/portcheck"
 	"agent-tool/tools/procexec"
 	"agent-tool/tools/query"
 	"agent-tool/tools/prockill"
@@ -212,7 +211,6 @@ Groups: core, file, coding, system, remote, data, analysis, windows. Use agent_t
 		{Name: "sftp", Group: "remote", Register: func() { sftptool.Register(server) }},
 		{Name: "download", Group: "remote", Register: func() { download.Register(server) }},
 		{Name: "httpreq", Group: "remote", Register: func() { httpreq.Register(server) }},
-		{Name: "portcheck", Group: "remote", Register: func() { portcheck.Register(server) }},
 		{Name: "netcheck", Group: "remote", Register: func() { netcheck.Register(server) }},
 
 		{Name: "query", Group: "data", Register: func() { query.Register(server) }},

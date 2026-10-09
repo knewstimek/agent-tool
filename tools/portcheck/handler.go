@@ -96,16 +96,6 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PortCheckInput)
 	}, PortCheckOutput{Result: result, Open: true}, nil
 }
 
-func Register(server *mcp.Server) {
-	common.SafeAddTool(server, &mcp.Tool{
-		Name: "portcheck",
-		Description: `Check if a TCP port is open on a host.
-Tests connectivity by attempting a TCP connection with a configurable timeout.
-Returns OPEN/CLOSED status with response time or error details.
-Useful for verifying if a server is running, checking firewall rules, or validating deployments.
-Supports hostnames, IPv4, and IPv6 addresses.`,
-	}, Handle)
-}
 
 func errorResult(msg string) (*mcp.CallToolResult, PortCheckOutput, error) {
 	return &mcp.CallToolResult{
