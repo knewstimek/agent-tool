@@ -46,6 +46,8 @@ github.com/knewstimek/gosleigh v0.1.0 h1:jqr1zU/vwjUA97kg6FZQgVZ5YrIawm+3DkMxtlW
 github.com/knewstimek/gosleigh v0.1.0/go.mod h1:fCQ7cQx7SFpFImEWITl5zA5M/HBWxqHEPzcd6kK46RU=
 github.com/knewstimek/gosleigh v0.1.1 h1:jSGoiZn6WlDVfTi37Q1UTwLpddFWPtulAwQjpoBvfjE=
 github.com/knewstimek/gosleigh v0.1.1/go.mod h1:fCQ7cQx7SFpFImEWITl5zA5M/HBWxqHEPzcd6kK46RU=
+github.com/knewstimek/gosleigh v0.1.2 h1:UB/yzi3e0EMY4rjPYo0/WfTLfi9FOGecuZRtdZdqxDw=
+github.com/knewstimek/gosleigh v0.1.2/go.mod h1:fCQ7cQx7SFpFImEWITl5zA5M/HBWxqHEPzcd6kK46RU=
 github.com/kr/fs v0.1.0 h1:Jskdu9ieNAYnjxsi0LbQp1ulIKZV1LAFgK1tWhpZgl8=
 github.com/kr/fs v0.1.0/go.mod h1:FFnZGqtBN9Gxj7eW1uZ42v5BccTP0vu6NEaFoC2HwRg=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=

@@ -1076,8 +1076,10 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   For PE images a matching PDB adds, as Ghidra's PDB analysis does: function names
   (Class::Method), prototypes (calling convention, this pointer, parameter names and
   types, return type, no-return), struct/class/union/enum types with their fields,
-  and named, typed global data -- plus local variable names, which Ghidra leaves to
-  the decompiler. Code built without full debug info is named and typed from its
+  and named, typed global data -- plus local variables with their names and types
+  (a structure local is one variable: r.w_ = 3), which Ghidra leaves to the
+  decompiler. x64 frames are located from the image's unwind codes. Code built
+  without full debug info is named and typed from its
   decorated public names (MSVC demangler). The PDB is found via the image's RSDS
   record (its path, then beside the image) and used only when its GUID matches;
   pdb_path points to it elsewhere, pdb_path="none" turns it off.
@@ -1089,9 +1091,9 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   abort, ExitProcess, _CxxThrowException, Go runtime panics, ...), debug-info
   no-return flags, and call sites followed by padding or another function.
 
-  Not applied: bitfield members, local variable types, locals of x64 RBP-based
-  frames. Go 386 results returned on the stack are not recovered. Type definitions
-  are omitted from the output to save tokens; use struct_layout for a layout.
+  Not applied: bitfield members (the storage unit is shown with masks). Type
+  definitions are omitted from the output to save tokens; use struct_layout for a
+  layout.
 
   An address inside a function is moved to its start when x64 .pdata gives exact
   extents; otherwise the output carries a note -- confirm the start with function_at.

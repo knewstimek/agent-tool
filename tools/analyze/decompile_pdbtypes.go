@@ -511,3 +511,26 @@ func typeID(name, unique string) string {
 	}
 	return "pdb:" + name
 }
+
+// paramCount is a function type's parameter count, the this pointer
+// included.
+func (c *pdbTypes) paramCount(ti pdb.TypeIndex) int {
+	if c == nil {
+		return 0
+	}
+	typ, err := c.tt.Lookup(ti)
+	if err != nil {
+		return 0
+	}
+	switch t := typ.(type) {
+	case *pdb.ProcedureType:
+		return int(t.ParamCount)
+	case *pdb.MemberFunction:
+		n := int(t.ParamCount)
+		if t.This != 0 {
+			n++
+		}
+		return n
+	}
+	return 0
+}

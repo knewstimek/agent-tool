@@ -22,6 +22,9 @@ type dwarfInfo struct {
 	done    map[dwarf.Type]bool
 	types   map[dwarf.Type]pcode.Datatype
 	anon    int
+	// goStackResults: Go 386 code (ABI0) returns results in stack slots
+	// after the arguments, which the golang spec's model has no output for.
+	goStackResults bool
 }
 
 type dwarfFunc struct {
@@ -30,12 +33,17 @@ type dwarfFunc struct {
 	params   []dwarfParam
 	variadic bool
 	noReturn bool
-	locals   map[int64]string
+	locals   map[int64]dwarfLocal
 	proto    *pcode.HostFunction
 	built    bool
 }
 
 type dwarfParam struct {
+	name string
+	typ  dwarf.Type
+}
+
+type dwarfLocal struct {
 	name string
 	typ  dwarf.Type
 }
@@ -143,10 +151,11 @@ func loadDWARFInfo(src string, d *dwarf.Data, ptrSize int32) *dwarfInfo {
 					if off, n := sleb128(loc[1:]); n > 0 {
 						if stackOff := off + int64(di.ptrSize); stackOff < 0 {
 							if fn.locals == nil {
-								fn.locals = map[int64]string{}
+								fn.locals = map[int64]dwarfLocal{}
 							}
 							if _, dup := fn.locals[stackOff]; !dup {
-								fn.locals[stackOff] = name
+								t, _ := di.typeOf(e)
+								fn.locals[stackOff] = dwarfLocal{name: name, typ: t}
 							}
 						}
 					}
@@ -253,14 +262,20 @@ func (di *dwarfInfo) noReturn() []uint64 {
 	return out
 }
 
-func (di *dwarfInfo) localNames(va uint64, _ bool) map[int64]string {
-	if !pdbLocalNames {
+func (di *dwarfInfo) locals(va uint64, _ frameBase) map[int64]stackVar {
+	f := di.funcs[va]
+	if f == nil || len(f.locals) == 0 {
 		return nil
 	}
-	if f := di.funcs[va]; f != nil {
-		return f.locals
+	out := make(map[int64]stackVar, len(f.locals))
+	for off, l := range f.locals {
+		v := stackVar{name: l.name}
+		if l.typ != nil {
+			v.typ = di.desc(l.typ)
+		}
+		out[off] = v
 	}
-	return nil
+	return out
 }
 
 func (di *dwarfInfo) dataAt(va uint64) (string, uint64, pcode.Datatype, bool) {
@@ -304,6 +319,9 @@ func (di *dwarfInfo) prototype(va uint64) *pcode.HostFunction {
 		hf.Output = &pcode.HostParam{Type: pcode.ResolveHostType(&pcode.HostTypeDesc{Meta: "void"})}
 	} else if rt := di.datatype(f.ret); rt != nil {
 		hf.Output = &pcode.HostParam{Type: rt, Size: rt.Size()}
+		if di.goStackResults {
+			hf.Output.Space, hf.Output.Offset = "stack", uint64(goResultSlot(hf.Params, rt, di.ptrSize))
+		}
 	} else {
 		hf.OutputLocked = false
 	}
@@ -481,4 +499,25 @@ func (di *dwarfInfo) typeName(n string) string {
 		return fmt.Sprintf("anon_%d", di.anon)
 	}
 	return typeName(n)
+}
+
+// goResultSlot is the entry-relative stack offset of the first result under
+// Go's ABI0 (all arguments and results on the stack): after the return
+// address, each argument at its alignment, then the results section aligned
+// to the pointer size. Go DWARF leaves the result's location empty.
+func goResultSlot(params []pcode.HostParam, ret pcode.Datatype, ptrSize int32) int32 {
+	align := func(off, a int32) int32 {
+		if a <= 1 {
+			return off
+		}
+		return (off + a - 1) / a * a
+	}
+	alignOf := func(t pcode.Datatype) int32 {
+		return min(max(t.Alignment(), 1), ptrSize)
+	}
+	off := int32(0)
+	for _, p := range params {
+		off = align(off, alignOf(p.Type)) + p.Type.Size()
+	}
+	return ptrSize + align(align(off, ptrSize), alignOf(ret))
 }

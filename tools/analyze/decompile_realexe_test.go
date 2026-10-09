@@ -31,6 +31,10 @@ func TestDecompileRealexeAdapter(t *testing.T) {
 		pdbLocalNames = false
 		defer func() { pdbLocalNames = true }()
 	}
+	if os.Getenv("AGENT_TOOL_REALEXE_LOCAL_TYPES") == "0" {
+		pdbLocalTypes = false
+		defer func() { pdbLocalTypes = true }()
+	}
 	for _, work := range strings.Split(works, ",") {
 		t.Run(work, func(t *testing.T) {
 			var meta struct {

@@ -144,6 +144,8 @@ type decompileTarget struct {
 	// containing returns the start of the function that contains va when the
 	// binary describes function extents exactly (x64 PE .pdata).
 	containing func(va uint64) (uint64, bool)
+	// frame is a function's prologue frame from x64 PE unwind info.
+	frame func(entry uint64) (prologueFrame, bool)
 }
 
 // decompile decompiles one target. ghidraFormat selects Ghidra's exact
@@ -158,6 +160,7 @@ func (t *decompileTarget) decompile(target string, maxInstr int, ghidraFormat bo
 	line.Entry, line.Note = entry, note
 	start := time.Now()
 	_, short := displayParts(t.host.funcs[entry])
+	localNames, localTypes := t.hostLocals(entry)
 	res, err := t.prog.Decompile(decomp.Function{
 		Entry:           entry,
 		Name:            short,
@@ -165,7 +168,8 @@ func (t *decompileTarget) decompile(target string, maxInstr int, ghidraFormat bo
 		MaxInstructions: maxInstr,
 		Host:            t.host,
 		FlowOverrides:   tailCallOverrides(t, entry),
-		HostLocals:      t.hostLocals(entry),
+		HostLocals:      localNames,
+		HostLocalTypes:  localTypes,
 		TrackedRegs:     t.tracked,
 		GhidraFormat:    ghidraFormat,
 	})
@@ -175,7 +179,9 @@ func (t *decompileTarget) decompile(target string, maxInstr int, ghidraFormat bo
 		msg := err.Error()
 		if errors.Is(err, decomp.ErrPanic) {
 			line.ErrorKind = "panic"
-			msg, _, _ = strings.Cut(msg, "\n") // drop the stack trace
+			if os.Getenv("AGENT_TOOL_DECOMPILE_STACK") == "" {
+				msg, _, _ = strings.Cut(msg, "\n") // drop the stack trace
+			}
 		}
 		line.Error = msg
 		return line
@@ -210,13 +216,35 @@ func stripTypeDefinitions(c string) string {
 	return strings.Join(lines[i:], "\n")
 }
 
-// hostLocals are the PDB names of the function's stack variables, nil when
-// there are none.
-func (t *decompileTarget) hostLocals(entry uint64) map[int64]string {
+// hostLocals are the debug-info names and types of the function's stack
+// variables, nil when there are none.
+func (t *decompileTarget) hostLocals(entry uint64) (map[int64]string, map[int64]*pcode.HostTypeDesc) {
 	if !pdbLocalNames || t.host.debug == nil {
-		return nil
+		return nil, nil
 	}
-	return t.host.debug.localNames(entry, t.is64)
+	fb := frameBase{is64: t.is64}
+	if t.frame != nil {
+		if fr, ok := t.frame(entry); ok {
+			fb.rsp, fb.rspOK = fr.rsp, true
+			fb.fp, fb.fpOK = fr.fp, fr.fpReg == 5 // RBP
+		}
+	}
+	vars := t.host.debug.locals(entry, fb)
+	if len(vars) == 0 {
+		return nil, nil
+	}
+	names := make(map[int64]string, len(vars))
+	var types map[int64]*pcode.HostTypeDesc
+	for off, v := range vars {
+		names[off] = v.name
+		if v.typ != nil && pdbLocalTypes {
+			if types == nil {
+				types = map[int64]*pcode.HostTypeDesc{}
+			}
+			types[off] = v.typ
+		}
+	}
+	return names, types
 }
 
 // resolve turns a target (hex address or symbol name) into a function entry.
@@ -304,6 +332,7 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 		if bits == 64 {
 			if pd = loadPdata(f, bin.imageBase); pd != nil {
 				t.containing = func(va uint64) (uint64, bool) { return pd.containing(bin.imageBase, va) }
+				t.frame = func(entry uint64) (prologueFrame, bool) { return pd.frame(bin.imageBase, entry) }
 			}
 		}
 		host = newPEHost(f, bin, pd)
@@ -386,6 +415,9 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 	// decompiles such binaries with its golang compiler spec.
 	if isGoBinary(sections) {
 		compiler, t.golang = specs.CompilerGolang, true
+		if di, ok := host.debug.(*dwarfInfo); ok && !t.is64 {
+			di.goStackResults = true
+		}
 	}
 	spec, err := specs.X86(bits, compiler)
 	if err != nil {

@@ -31,9 +31,39 @@ func TestDecompileFixtureEntry(t *testing.T) {
 }
 
 // A Go-built ELF carries DWARF: parameter names and types, Go's result
-// convention (results recorded as ~r0 parameters) and the Go register ABI
-// must all come through.
+// convention (results recorded as ~r0 parameters) and the Go ABI must all
+// come through -- registers on amd64, stack slots for arguments and results
+// on 386.
 func TestDecompileGoELFWithDWARF(t *testing.T) {
+	for _, c := range []struct {
+		goarch string
+		want   []string
+	}{
+		{"amd64", []string{
+			"ELF x64, x86:LE:64:default:golang",
+			"long main.addMul(long a, long b)",
+			"return (a + b) * 3;",
+			"main.addMul(os_Args.len, 2)",
+		}},
+		{"386", []string{
+			"ELF x86, x86:LE:32:default:golang",
+			"int main.addMul(int a, int b)",
+			"= (b + a) * 3;",
+			" = main.addMul(os_Args.len, 2);",
+		}},
+	} {
+		t.Run(c.goarch, func(t *testing.T) {
+			out := decompileGoProgram(t, c.goarch)
+			for _, want := range append(c.want, "Debug info: DWARF (embedded)") {
+				if !strings.Contains(out, want) {
+					t.Errorf("output lacks %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+}
+
+func decompileGoProgram(t *testing.T, goarch string) string {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "main.go")
 	code := "package main\n\nimport \"os\"\n\n//go:noinline\nfunc addMul(a, b int) int { return (a + b) * 3 }\n\nfunc main() { os.Exit(addMul(len(os.Args), 2)) }\n"
@@ -46,7 +76,7 @@ func TestDecompileGoELFWithDWARF(t *testing.T) {
 	bin := filepath.Join(dir, "prog.elf")
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0", "GOFLAGS=")
+	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+goarch, "CGO_ENABLED=0", "GOFLAGS=")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
@@ -54,17 +84,7 @@ func TestDecompileGoELFWithDWARF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"ELF x64, x86:LE:64:default:golang",
-		"Debug info: DWARF (embedded)",
-		"long main.addMul(long a, long b)",
-		"return (a + b) * 3;",
-		"main.addMul(os_Args.len, 2)",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output lacks %q:\n%s", want, out)
-		}
-	}
+	return out
 }
 
 func TestDecompileRequiresVA(t *testing.T) {

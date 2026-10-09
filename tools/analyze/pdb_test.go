@@ -69,3 +69,16 @@ func TestDecompilePDBPrototypes(t *testing.T) {
 		}
 	}
 }
+
+// Local variables keep their PDB names and types: a structure local is one
+// variable whose members are accessed, not a run of loose stack words.
+func TestDecompilePDBLocals(t *testing.T) {
+	for _, arch := range []string{"x86", "x64"} {
+		out := decompileFixture(t, arch, "entry")
+		for _, want := range []string{"Rect r;", "Point pts [2];", "g_rect = &r;", "r.w_ = 3;", "r.super_Shape.id_ = 1;"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s: output lacks %q:\n%s", arch, want, out)
+			}
+		}
+	}
+}
