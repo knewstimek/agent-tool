@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"golang.org/x/arch/x86/x86asm"
 )
 
 // Gap functions: a body ends where its control flow ends, the next starts
@@ -197,5 +199,81 @@ func TestXrefFieldFixture(t *testing.T) {
 	}
 	if _, err := opXref(context.Background(), AnalyzeInput{FilePath: exe, Field: "geo::Rect::nope"}); err == nil || !strings.Contains(err.Error(), "w_") {
 		t.Errorf("unknown member should list members, got %v", err)
+	}
+}
+
+// x64 switch dispatch, MSVC form: lea r11,[__ImageBase]; mov ecx,
+// [r11+rax*4+tableRVA]; add rcx, r11; jmp rcx with RVA entries, bounded by
+// the cmp before it.
+func TestSwitchTargets64MSVC(t *testing.T) {
+	const imageBase, rva = 0x140000000, 0x1000
+	code := []byte{
+		0x83, 0xF8, 0x02, // cmp eax, 2
+		0x77, 0x00, // ja +0
+		0x4C, 0x8D, 0x1D, 0, 0, 0, 0, // lea r11, [rip+d] (patched: image base)
+		0x41, 0x8B, 0x8C, 0x83, 0, 0, 0, 0, // mov ecx, [r11+rax*4+tableRVA] (patched)
+		0x49, 0x03, 0xCB, // add rcx, r11
+		0xFF, 0xE1, // jmp rcx
+	}
+	jmpPos := len(code) - 2
+	toImageBase := int32(-(rva + 12)) // rip after the lea is image base + rva + 12
+	binary.LittleEndian.PutUint32(code[8:], uint32(toImageBase))
+	table := len(code)
+	binary.LittleEndian.PutUint32(code[16:], uint32(rva+table))
+	for _, c := range []uint32{0x00, 0x0c, 0x14, 0x99} { // 3 cases + a word past the bound
+		code = binary.LittleEndian.AppendUint32(code, rva+c)
+	}
+	secs := []cgSection{{rva: rva, data: code}}
+	read := readerFor(imageBase, secs)
+	inCode := func(va uint64) bool { return va >= imageBase+rva && va < imageBase+rva+uint64(len(code)) }
+	jmp, _ := x86asm.Decode(code[jmpPos:], 64)
+	got := switchCases(code, imageBase+rva, jmpPos, jmp, 64, read, inCode)
+	want := []uint64{imageBase + rva, imageBase + rva + 0x0c, imageBase + rva + 0x14}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("cases %x, want %x", got, want)
+	}
+}
+
+// GCC/Clang form: lea rdx,[table]; movsxd rax,[rdx+rax*4]; add rax, rdx;
+// jmp rax, entries signed offsets from the table.
+func TestSwitchTargets64GCC(t *testing.T) {
+	const imageBase, rva = 0x400000, 0x1000
+	code := []byte{
+		0x83, 0xFF, 0x01, // cmp edi, 1
+		0x77, 0x00, // ja +0
+		0x48, 0x8D, 0x15, 0, 0, 0, 0, // lea rdx, [rip+table] (patched)
+		0x48, 0x63, 0x04, 0x82, // movsxd rax, [rdx+rax*4]
+		0x48, 0x01, 0xD0, // add rax, rdx
+		0xFF, 0xE0, // jmp rax
+	}
+	jmpPos := len(code) - 2
+	table := len(code)
+	binary.LittleEndian.PutUint32(code[8:], uint32(table-12))
+	code = binary.LittleEndian.AppendUint32(code, uint32(int32(-table)))  // case 0: code start
+	code = binary.LittleEndian.AppendUint32(code, uint32(int32(5-table))) // case 1
+	secs := []cgSection{{rva: rva, data: code}}
+	jmp, _ := x86asm.Decode(code[jmpPos:], 64)
+	inCode := func(va uint64) bool { return va >= imageBase+rva && va < imageBase+rva+uint64(len(code)) }
+	got := switchCases(code, imageBase+rva, jmpPos, jmp, 64, readerFor(imageBase, secs), inCode)
+	if want := []uint64{imageBase + rva, imageBase + rva + 5}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cases %x, want %x", got, want)
+	}
+}
+
+// x86asm returns a 32-bit displacement zero-extended: a backward RIP-relative
+// operand (cmp dword [rip-0x1007], 1) must still resolve to its target.
+func TestXrefBackwardRIPRelative(t *testing.T) {
+	code := make([]byte, 0x10)
+	code[0], code[1] = 0x83, 0x3D // cmp dword ptr [rip+disp32], imm8
+	back := int32(0x1000 - 0x2007)
+	binary.LittleEndian.PutUint32(code[2:], uint32(back))
+	code[6] = 0x01
+	target := xrefTargetRange{imageBase: 0x140000000, startVA: 0x140001000, endVA: 0x140001000, startRVA: 0x1000, endRVA: 0x1000}
+	refs, n := collectXref64(code, 0x2000, target, 10, 0, nil)
+	if n != 1 || !strings.Contains(refs[0].line, "0x140002000: CMP") {
+		t.Errorf("backward rip ref: %v", refs)
+	}
+	if d := memDisp(x86asm.Mem{Base: x86asm.RBP, Disp: 0xFFFFFF00}); d != -0x100 {
+		t.Errorf("memDisp = %d", d)
 	}
 }

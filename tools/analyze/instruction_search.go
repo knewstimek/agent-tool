@@ -364,7 +364,7 @@ func instructionMatches(inst x86asm.Inst, spec instructionSearchSpec) bool {
 		// neither is a structure offset.
 		matched := false
 		for _, arg := range inst.Args {
-			if m, ok := arg.(x86asm.Mem); ok && m.Disp == spec.displacement && (m.Base != 0 || m.Index != 0) && !isStackOrRIP(m.Base) {
+			if m, ok := arg.(x86asm.Mem); ok && memDisp(m) == spec.displacement && (m.Base != 0 || m.Index != 0) && !isStackOrRIP(m.Base) {
 				matched = true
 				break
 			}
@@ -718,7 +718,21 @@ func walkFunctionFlow(bin *cgBinary, fn funcRange, frags []funcRange, mode int, 
 			ranges = append(ranges, [2]int{int(f.begin - sec.rva), int(f.end - sec.rva)})
 		}
 	}
-	insts, leaders := functionBlocks(sec.data, start, ranges, mode, sec.rva, starts, budget)
+	read := readerFor(bin.imageBase, bin.execSections, bin.staticSections)
+	inCode := func(va uint64) bool {
+		return va >= bin.imageBase && va-bin.imageBase <= 0xFFFFFFFF && isInExecSection(bin.execSections, uint32(va-bin.imageBase))
+	}
+	baseVA := bin.imageBase + uint64(sec.rva)
+	cases := func(pos int, inst x86asm.Inst) []int {
+		var out []int
+		for _, va := range switchCases(sec.data, baseVA, pos, inst, mode, read, inCode) {
+			if va >= baseVA && va-baseVA < uint64(len(sec.data)) {
+				out = append(out, int(va-baseVA))
+			}
+		}
+		return out
+	}
+	insts, leaders, switches := functionBlocks(sec.data, start, ranges, mode, sec.rva, starts, budget, cases)
 	for pos, inst := range insts {
 		rva := sec.rva + uint32(pos)
 		reachable.set(rva)
@@ -762,6 +776,9 @@ func walkFunctionFlow(bin *cgBinary, fn funcRange, frags []funcRange, mode int, 
 				}
 			}
 			succ := flowSuccessors(sec.data, inst, pos)
+			if sw, ok := switches[pos]; ok {
+				succ = sw
+			}
 			if len(succ) == 1 && succ[0] == pos+inst.Len && !leaders[succ[0]] {
 				pos = succ[0] // straight-line: same block
 				continue
@@ -833,7 +850,8 @@ func flowSuccessors(data []byte, inst x86asm.Inst, pos int) []int {
 // body ranges -- other known function starts are walls -- and marks the
 // basic-block leaders (the start and every instruction with a predecessor
 // other than the one before it). It spends budget per decoded instruction.
-func functionBlocks(data []byte, start int, ranges [][2]int, mode int, secRVA uint32, starts map[uint32]bool, budget *atomic.Int64) (map[int]x86asm.Inst, map[int]bool) {
+func functionBlocks(data []byte, start int, ranges [][2]int, mode int, secRVA uint32, starts map[uint32]bool, budget *atomic.Int64,
+	cases func(int, x86asm.Inst) []int) (map[int]x86asm.Inst, map[int]bool, map[int][]int) {
 	rangeEnd := func(pos int) int {
 		for _, r := range ranges {
 			if pos >= r[0] && pos < r[1] {
@@ -844,6 +862,7 @@ func functionBlocks(data []byte, start int, ranges [][2]int, mode int, secRVA ui
 	}
 	insts := map[int]x86asm.Inst{}
 	leaders := map[int]bool{start: true}
+	switches := map[int][]int{} // switch jump -> its case blocks
 	stack := []int{start}
 	for len(stack) > 0 && budget.Load() > 0 {
 		pos := stack[len(stack)-1]
@@ -862,6 +881,12 @@ func functionBlocks(data []byte, start int, ranges [][2]int, mode int, secRVA ui
 		budget.Add(-1)
 		insts[pos] = inst
 		succ := flowSuccessors(data, inst, pos)
+		if inst.Op == x86asm.JMP && len(succ) == 0 && cases != nil {
+			if cs := cases(pos, inst); len(cs) > 0 {
+				switches[pos] = cs
+				succ = cs
+			}
+		}
 		for _, t := range succ {
 			if t != pos+inst.Len || len(succ) > 1 {
 				leaders[t] = true
@@ -869,7 +894,7 @@ func functionBlocks(data []byte, start int, ranges [][2]int, mode int, secRVA ui
 		}
 		stack = append(stack, succ...)
 	}
-	return insts, leaders
+	return insts, leaders, switches
 }
 
 func analyzeInstructionReachability(bin *cgBinary) (*rvaBits, *rvaBits, bool) {
@@ -956,7 +981,7 @@ func isTailCall(inst x86asm.Inst, state abstractState, bin *cgBinary, rva uint32
 		return value.kind == 1 && len(value.consts) == 1
 	case x86asm.Mem:
 		if bin.is64 && arg.Base == x86asm.RIP {
-			va := bin.imageBase + uint64(rva) + uint64(inst.Len) + uint64(arg.Disp)
+			va := bin.imageBase + uint64(rva) + uint64(inst.Len) + uint64(memDisp(arg))
 			_, known := bin.symbols[va]
 			return known
 		}
@@ -975,7 +1000,7 @@ func describeCallTarget(inst x86asm.Inst, state abstractState, bin *cgBinary, rv
 			return fmt.Sprintf("0x%x", va)
 		case x86asm.Mem:
 			if bin.is64 && arg.Base == x86asm.RIP {
-				va := bin.imageBase + uint64(rva) + uint64(inst.Len) + uint64(arg.Disp)
+				va := bin.imageBase + uint64(rva) + uint64(inst.Len) + uint64(memDisp(arg))
 				if name, ok := bin.symbols[va]; ok {
 					return fmt.Sprintf("[0x%x] %s", va, name)
 				}
@@ -1307,7 +1332,7 @@ func readStaticConstant(bin *cgBinary, va uint64, width int) (uint64, bool) {
 
 func effectiveAddress(state abstractState, mem x86asm.Mem, va uint64, instLen int) abstractValue {
 	if mem.Base == x86asm.RIP {
-		return constantValue(va + uint64(instLen) + uint64(mem.Disp))
+		return constantValue(va + uint64(instLen) + uint64(memDisp(mem)))
 	}
 	base := constantValue(0)
 	if mem.Base != 0 {
@@ -1319,7 +1344,7 @@ func effectiveAddress(state abstractState, mem x86asm.Mem, va uint64, instLen in
 		index = mapConstants(index, func(x uint64) uint64 { return x * uint64(mem.Scale) })
 	}
 	result := binaryAbstract("ADD", base, index, 64)
-	return addSignedConstant(result, mem.Disp)
+	return addSignedConstant(result, memDisp(mem))
 }
 
 func stackMemoryKey(state abstractState, mem x86asm.Mem, va uint64, instLen int) (int64, bool) {

@@ -270,7 +270,7 @@ func isMethodOf(name, class string) bool {
 func addressesField(inst x86asm.Inst, off int64, mode int) bool {
 	for _, a := range inst.Args {
 		m, ok := a.(x86asm.Mem)
-		if !ok || m.Disp != off || m.Base == 0 || m.Base == x86asm.RIP || m.Base == x86asm.RSP || m.Base == x86asm.ESP {
+		if !ok || memDisp(m) != off || m.Base == 0 || m.Base == x86asm.RIP || m.Base == x86asm.RSP || m.Base == x86asm.ESP {
 			continue
 		}
 		if mode == 32 && m.Base == x86asm.EBP {

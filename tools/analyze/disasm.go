@@ -584,7 +584,7 @@ func resolveSymbol(inst x86asm.Inst, instrAddr uint64, symbols map[uint64]string
 		case x86asm.Mem:
 			// RIP-relative memory: FF 15 [rip+disp32], LEA reg, [rip+disp32]
 			if mode == 64 && a.Base == x86asm.RIP && a.Index == 0 && a.Scale == 0 {
-				target := nextAddr + uint64(int64(a.Disp))
+				target := nextAddr + uint64(memDisp(a))
 				if name, ok := symbols[target]; ok {
 					return name
 				}

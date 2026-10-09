@@ -641,6 +641,9 @@ Every hit is named by its function ("; in Class::Method+0x41").
   and loop iteration, "possible" on some (including values seen only before a
   loop widened them). x86 callees that end in ret N pop their own arguments
   (stdcall/thiscall), so stale arguments of earlier calls are not reported.
+  Switch dispatches are followed into their case blocks: MSVC x64 (image-base
+  RVA tables), GCC/Clang x64 (table-relative offsets) and x86 jmp [idx*4+table],
+  bounded by the preceding cmp; so code and values inside cases are confirmed.
   Functions are analyzed in parallel (AGENT_TOOL_ANALYZE_THREADS); a 78 MB x64
   image is analyzed completely in about 20 s with tracing, a few seconds without.
 

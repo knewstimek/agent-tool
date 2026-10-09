@@ -193,3 +193,14 @@ func sameReg(a, b x86asm.Reg) bool {
 	}
 	return norm(a) == norm(b)
 }
+
+// memDisp is m's displacement as a signed offset. x86asm sign-extends an
+// 8-bit displacement but returns a 32-bit one zero-extended, so [rbp-0x100]
+// and a backward [rip-0x39b4] come back as +0xffffff00 and +0xffffc64c.
+// A base-less operand is an absolute address and is left as it is.
+func memDisp(m x86asm.Mem) int64 {
+	if (m.Base != 0 || m.Index != 0) && m.Disp >= 1<<31 && m.Disp < 1<<32 {
+		return m.Disp - 1<<32
+	}
+	return m.Disp
+}

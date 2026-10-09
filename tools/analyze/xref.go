@@ -778,7 +778,7 @@ func decodeXref64RIP(data []byte, instrRVA uint32, targetRange xrefTargetRange) 
 		if !ok || mem.Base != x86asm.RIP {
 			continue
 		}
-		decodedRVA := int64(instrRVA) + int64(inst.Len) + mem.Disp
+		decodedRVA := int64(instrRVA) + int64(inst.Len) + memDisp(mem)
 		decodedVA, matched := targetRange.containsRVA(decodedRVA)
 		if !matched {
 			continue
