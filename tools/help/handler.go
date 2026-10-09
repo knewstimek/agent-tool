@@ -536,7 +536,7 @@ Parameters: session_id, operation, adapter_command, adapter_args, address, launc
 Static binary analysis tool with 23 operations:
 - decompile: Decompile x86/x64 PE/ELF functions to C (Ghidra-equivalent Gosleigh core; va = hex address or symbol, up to 16 comma-separated; timeout_sec; a matching PDB or embedded DWARF supplies names, prototypes, types, globals and locals; Go binaries use Go's ABI; pdb_path to override)
 - disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped)
-- instruction_search: Semantic x86/x64 mnemonic/register/immediate search with exhaustive executable-offset recovery, CFG confidence, target/result filters, and bounded value tracing to call/tail-call arguments
+- instruction_search: Semantic x86/x64 mnemonic/register/immediate/displacement search with exhaustive executable-offset recovery, CFG confidence, function names, target/result filters, and bounded value tracing to call/tail-call arguments
 - pe_info: PE header parsing with RWX section warnings
 - elf_info: ELF header/sections/segments/symbols with RWX warnings
 - macho_info: Mach-O header/segments/sections/symbols (fat binary support)
@@ -612,14 +612,17 @@ Disassemble machine code. Supports x86 (16/32/64-bit) and ARM (32/64-bit).
   x86 uses Intel syntax. Failed decodes show "db 0xNN" / ".word" and skip.
 
 ### instruction_search
-Search decoded x86/x64 instructions by mnemonic, explicit register operand, and/or
-immediate value without requiring a byte encoding.
+Search decoded x86/x64 instructions by mnemonic, explicit register operand,
+immediate value and/or memory displacement without requiring a byte encoding.
+Every hit is named by its function ("; in Class::Method+0x41").
   analyze(operation="instruction_search", file_path="/path/to/module.dll",
           mnemonic="MOV", register="R9D", immediate="0x327")
   analyze(operation="instruction_search", file_path="/path/to/module.dll",
           immediate="0x327", trace_values=true, max_results=300)
   analyze(operation="instruction_search", file_path="/path/to/module.dll",
           immediate="0x327", call_target="DeviceApi")
+  analyze(operation="instruction_search", file_path="/path/to/module.dll",
+          displacement="0x410")          # what reads/writes [reg+0x410]
 
   The search scans every executable-section byte offset so a desynchronized linear
   sweep cannot hide a valid instruction. A function-start-anchored CFG walk labels
@@ -634,11 +637,19 @@ immediate value without requiring a byte encoding.
   matching PE Windows x64, ELF/Mach-O SysV x64, or x86 stack arguments and resolves
   constant-register indirect call targets. Unsupported writes invalidate facts;
   unknown memory aliases and inter-procedural return values are not guessed.
+  States are run to a fixpoint before reporting: "confirmed" holds on every path
+  and loop iteration, "possible" on some (including values seen only before a
+  loop widened them). x86 callees that end in ret N pop their own arguments
+  (stdcall/thiscall), so stale arguments of earlier calls are not reported.
+  Functions are analyzed in parallel (AGENT_TOOL_ANALYZE_THREADS); a 78 MB x64
+  image is analyzed completely in about 20 s with tracing, a few seconds without.
 
   Parameters:
     mnemonic: Optional mnemonic such as MOV, ADD, or CALL (case-insensitive)
     register: Optional explicit GPR operand such as R9D, EAX, or RCX
     immediate: Optional hex or decimal value such as 0x327 or 807
+    displacement: Optional memory displacement such as 0x410: operands
+                  [reg+0x410] (stack-pointer and RIP-relative bases excluded)
     call_target: Optional case-insensitive target symbol/address substring; when set,
                  findings defaults to call to keep results compact
     findings: all (default), call, or producer

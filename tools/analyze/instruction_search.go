@@ -12,9 +12,12 @@ package analyze
 import (
 	"encoding/binary"
 	"fmt"
+	"math/bits"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"golang.org/x/arch/x86/x86asm"
 )
@@ -22,7 +25,7 @@ import (
 const (
 	defaultInstructionSearchResults = 200
 	maxInstructionSearchResults     = 1000
-	instructionSearchBudget         = 8_000_000
+	instructionSearchBudget         = 40_000_000
 	maxAbstractConstants            = 8
 )
 
@@ -33,6 +36,8 @@ type instructionSearchSpec struct {
 	hasRegister  bool
 	immediate    uint64
 	hasImmediate bool
+	displacement int64
+	hasDisp      bool
 	callTarget   string
 	findings     string
 }
@@ -41,8 +46,6 @@ type instructionHit struct {
 	rva        uint32
 	text       string
 	confidence string
-	function   uint32
-	hasFunc    bool
 }
 
 type valueTraceHit struct {
@@ -90,6 +93,15 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 		hits, totalMatches = exhaustiveInstructionMatches(bin, spec, reachable, interiors, maxResults)
 	}
 
+	// Name the function of each hit (PDB, export and symbol names, else sub_).
+	loc := &xrefLocator{imageBase: bin.imageBase, funcs: bin.funcTable, symbols: bin.symbols}
+	where := func(rva uint32) string {
+		if name, _ := loc.function(bin.imageBase + uint64(rva)); name != "" {
+			return "  ; in " + name
+		}
+		return ""
+	}
+
 	var sb strings.Builder
 	sb.WriteString("Instruction search: " + formatInstructionFilter(spec) + "\n")
 
@@ -103,11 +115,7 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 		sb.WriteString("):\n")
 		for _, hit := range hits {
 			va := bin.imageBase + uint64(hit.rva)
-			fn := ""
-			if hit.hasFunc {
-				fn = fmt.Sprintf(" function=0x%x", bin.imageBase+uint64(hit.function))
-			}
-			sb.WriteString(fmt.Sprintf("  [%s] VA 0x%x RVA 0x%x%s: %s\n", hit.confidence, va, hit.rva, fn, hit.text))
+			sb.WriteString(fmt.Sprintf("  [%s] 0x%x: %s%s\n", hit.confidence, va, hit.text, where(hit.rva)))
 		}
 		for _, hit := range hits {
 			if hit.confidence == "candidate" {
@@ -130,8 +138,8 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 				if hit.possible {
 					confidence = "possible"
 				}
-				sb.WriteString(fmt.Sprintf("  [%s] VA 0x%x RVA 0x%x: %s\n", confidence,
-					bin.imageBase+uint64(hit.rva), hit.rva, hit.text))
+				sb.WriteString(fmt.Sprintf("  [%s] 0x%x: %s%s\n", confidence,
+					bin.imageBase+uint64(hit.rva), hit.text, where(hit.rva)))
 			}
 		}
 	}
@@ -177,8 +185,15 @@ func parseInstructionSearchSpec(input AnalyzeInput) (instructionSearchSpec, erro
 		}
 		spec.immediate, spec.hasImmediate = value, true
 	}
-	if spec.mnemonic == "" && !spec.hasRegister && !spec.hasImmediate {
-		return spec, fmt.Errorf("instruction_search requires at least one of mnemonic, register, or immediate")
+	if strings.TrimSpace(input.Displacement) != "" {
+		value, err := parseInstructionImmediate(input.Displacement)
+		if err != nil {
+			return spec, fmt.Errorf("invalid displacement %q", input.Displacement)
+		}
+		spec.displacement, spec.hasDisp = int64(value), true
+	}
+	if spec.mnemonic == "" && !spec.hasRegister && !spec.hasImmediate && !spec.hasDisp {
+		return spec, fmt.Errorf("instruction_search requires at least one of mnemonic, register, immediate, or displacement")
 	}
 	if input.TraceValues != nil && *input.TraceValues && !spec.hasImmediate {
 		return spec, fmt.Errorf("trace_values requires immediate")
@@ -233,6 +248,9 @@ func formatInstructionFilter(spec instructionSearchSpec) string {
 	if spec.hasImmediate {
 		parts = append(parts, fmt.Sprintf("immediate=0x%x", spec.immediate))
 	}
+	if spec.hasDisp {
+		parts = append(parts, fmt.Sprintf("displacement=%#x", spec.displacement))
+	}
 	if spec.callTarget != "" {
 		parts = append(parts, "call_target="+spec.callTarget)
 	}
@@ -242,55 +260,79 @@ func formatInstructionFilter(spec instructionSearchSpec) string {
 	return strings.Join(parts, ", ")
 }
 
-func exhaustiveInstructionMatches(bin *cgBinary, spec instructionSearchSpec, reachable, interiors map[uint32]bool, maxResults int) ([]instructionHit, int) {
+func exhaustiveInstructionMatches(bin *cgBinary, spec instructionSearchSpec, reachable, interiors *rvaBits, maxResults int) ([]instructionHit, int) {
 	mode := 32
 	if bin.is64 {
 		mode = 64
 	}
-	var confirmed []instructionHit
-	var candidates []instructionHit
-	total := 0
+	// Every executable byte is a possible instruction start; the sections are
+	// cut into chunks decoded in parallel (a decode may read past its chunk).
+	type chunk struct {
+		sec    cgSection
+		lo, hi int
+	}
+	var chunks []chunk
+	const chunkSize = 1 << 20
 	for _, sec := range bin.execSections {
-		for off := 0; off < len(sec.data); off++ {
-			rva := sec.rva + uint32(off)
-			// A byte inside a CFG-confirmed instruction cannot independently be
-			// another instruction start. This removes REX-prefix false duplicates
-			// and immediate bytes that happen to decode as plausible opcodes.
-			if interiors[rva] {
-				continue
-			}
-			inst, err := x86asm.Decode(sec.data[off:], mode)
-			if err != nil || inst.Len <= 0 || !instructionMatches(inst, spec) {
-				continue
-			}
-			total++
-			hit := instructionHit{
-				rva:        rva,
-				text:       x86asm.IntelSyntax(inst, bin.imageBase+uint64(rva), nil),
-				confidence: "candidate",
-			}
-			if reachable[rva] {
-				hit.confidence = "confirmed"
-			}
-			if fn := findFunc(bin.funcTable, rva); fn != nil {
-				hit.function, hit.hasFunc = fn.entry(), true
-			}
-			if hit.confidence == "confirmed" {
-				if len(confirmed) < maxResults {
-					confirmed = append(confirmed, hit)
-				}
-			} else if len(candidates) < maxResults {
-				candidates = append(candidates, hit)
-			}
+		for lo := 0; lo < len(sec.data); lo += chunkSize {
+			chunks = append(chunks, chunk{sec, lo, min(lo+chunkSize, len(sec.data))})
 		}
+	}
+	type part struct {
+		confirmed, candidates []instructionHit
+		total                 int
+	}
+	parts := make([]part, len(chunks))
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for w := 0; w < analysisThreads(); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				i := int(next.Add(1) - 1)
+				if i >= len(chunks) {
+					return
+				}
+				c, out := chunks[i], &parts[i]
+				for off := c.lo; off < c.hi; off++ {
+					rva := c.sec.rva + uint32(off)
+					// A byte inside a CFG-confirmed instruction cannot independently be
+					// another instruction start. This removes REX-prefix false duplicates
+					// and immediate bytes that happen to decode as plausible opcodes.
+					if interiors.has(rva) {
+						continue
+					}
+					inst, err := x86asm.Decode(c.sec.data[off:], mode)
+					if err != nil || inst.Len <= 0 || !instructionMatches(inst, spec) {
+						continue
+					}
+					out.total++
+					hit := instructionHit{rva: rva, text: x86asm.IntelSyntax(inst, bin.imageBase+uint64(rva), nil), confidence: "candidate"}
+					if reachable.has(rva) {
+						hit.confidence = "confirmed"
+						if len(out.confirmed) < maxResults {
+							out.confirmed = append(out.confirmed, hit)
+						}
+					} else if len(out.candidates) < maxResults {
+						out.candidates = append(out.candidates, hit)
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	var confirmed, candidates []instructionHit
+	total := 0
+	for _, p := range parts {
+		confirmed = append(confirmed, p.confirmed...)
+		candidates = append(candidates, p.candidates...)
+		total += p.total
 	}
 	sort.Slice(confirmed, func(i, j int) bool { return confirmed[i].rva < confirmed[j].rva })
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].rva < candidates[j].rva })
-	hits := append([]instructionHit(nil), confirmed...)
-	remaining := maxResults - len(hits)
-	if remaining > len(candidates) {
-		remaining = len(candidates)
-	}
+	hits := append([]instructionHit(nil), confirmed[:min(len(confirmed), maxResults)]...)
+	remaining := min(maxResults-len(hits), len(candidates))
 	hits = append(hits, candidates[:remaining]...)
 	return hits, total
 }
@@ -316,6 +358,21 @@ func instructionMatches(inst x86asm.Inst, spec instructionSearchSpec) bool {
 			return false
 		}
 	}
+	if spec.hasDisp {
+		// [base+index*scale+disp] through a register. Stack-pointer bases are
+		// locals and arguments, RIP-relative operands a distance to data:
+		// neither is a structure offset.
+		matched := false
+		for _, arg := range inst.Args {
+			if m, ok := arg.(x86asm.Mem); ok && m.Disp == spec.displacement && (m.Base != 0 || m.Index != 0) && !isStackOrRIP(m.Base) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
 	if spec.hasImmediate {
 		matched := false
 		for _, arg := range inst.Args {
@@ -329,6 +386,10 @@ func instructionMatches(inst x86asm.Inst, spec instructionSearchSpec) bool {
 		}
 	}
 	return true
+}
+
+func isStackOrRIP(r x86asm.Reg) bool {
+	return r == x86asm.RSP || r == x86asm.ESP || r == x86asm.RIP
 }
 
 func immediateEquivalent(actual, wanted uint64, dataSize int) bool {
@@ -476,146 +537,113 @@ func abstractValueEqual(a, b abstractValue) bool {
 	return true
 }
 
-func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bool, maxResults int) (map[uint32]bool, map[uint32]bool, []valueTraceHit, bool) {
-	if !trace {
-		reachable, interiors, complete := analyzeInstructionReachability(bin)
-		return reachable, interiors, nil, complete
+// rvaBits is a set of RVAs within the executable sections, one bit per byte:
+// the reached-instruction and instruction-interior sets cover every decoded
+// instruction of the binary, too many for maps. Safe for concurrent set.
+type rvaBits struct {
+	secs []cgSection
+	bits [][]uint64
+}
+
+func newRVABits(secs []cgSection) *rvaBits {
+	b := &rvaBits{secs: secs, bits: make([][]uint64, len(secs))}
+	for i, s := range secs {
+		b.bits[i] = make([]uint64, (len(s.data)+63)/64)
 	}
-	reachable := make(map[uint32]bool)
-	interiors := make(map[uint32]bool)
-	var traces []valueTraceHit
-	traceIndex := make(map[string]int)
-	addTrace := func(rva uint32, text string, possible bool, kind string) {
-		if (spec.findings == "call" && kind != "call") || (spec.findings == "producer" && kind != "producer") {
-			return
+	return b
+}
+
+func (b *rvaBits) locate(rva uint32) (int, int) {
+	for i, s := range b.secs {
+		if rva >= s.rva && uint64(rva) < uint64(s.rva)+uint64(len(s.data)) {
+			return i, int(rva - s.rva)
 		}
-		key := fmt.Sprintf("%x:%s", rva, text)
-		if index, exists := traceIndex[key]; exists {
-			// A later CFG merge may reveal alternative values that were not
-			// present on the first path processed through this instruction.
-			traces[index].possible = traces[index].possible || possible
-			return
-		}
-		if len(traces) >= maxResults {
-			return
-		}
-		traceIndex[key] = len(traces)
-		traces = append(traces, valueTraceHit{rva: rva, text: text, possible: possible, kind: kind})
 	}
+	return -1, 0
+}
+
+func (b *rvaBits) set(rva uint32) {
+	if i, off := b.locate(rva); i >= 0 {
+		atomic.OrUint64(&b.bits[i][off/64], 1<<(off%64))
+	}
+}
+
+func (b *rvaBits) has(rva uint32) bool {
+	i, off := b.locate(rva)
+	return i >= 0 && atomic.LoadUint64(&b.bits[i][off/64])&(1<<(off%64)) != 0
+}
+
+func (b *rvaBits) count() int {
+	n := 0
+	for _, s := range b.bits {
+		for _, w := range s {
+			n += bits.OnesCount64(w)
+		}
+	}
+	return n
+}
+
+// analyzeInstructionFlows walks every known function's control flow,
+// recording reached instructions and, with trace, the value-flow findings
+// for spec.immediate. Functions are independent and spread over
+// analysisThreads() workers; the decode budget is shared.
+func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bool, maxResults int) (*rvaBits, *rvaBits, []valueTraceHit, bool) {
+	reachable := newRVABits(bin.execSections)
+	interiors := newRVABits(bin.execSections)
 	starts := make(map[uint32]bool, len(bin.funcTable))
+	frags := map[uint32][]funcRange{} // owner -> its split-off cold blocks
 	for _, fn := range bin.funcTable {
-		starts[fn.begin] = true
+		if fn.owner == 0 { // a chained fragment continues its owner
+			starts[fn.begin] = true
+		} else {
+			frags[fn.owner] = append(frags[fn.owner], fn)
+		}
 	}
-	budget := instructionSearchBudget
+	var budget atomic.Int64
+	budget.Store(instructionSearchBudget)
+	mode := 32
+	if bin.is64 {
+		mode = 64
+	}
 
-	for _, fn := range bin.funcTable {
-		if budget <= 0 {
-			break
-		}
-		sec := sectionContainingRVA(bin.execSections, fn.begin)
-		if sec == nil {
-			continue
-		}
-		mode := 32
-		if bin.is64 {
-			mode = 64
-		}
-		start := int(fn.begin - sec.rva)
-		end := int(fn.end - sec.rva)
-		if end > len(sec.data) {
-			end = len(sec.data)
-		}
-		if start < 0 || start >= end {
-			continue
-		}
-
-		states := map[int]abstractState{start: newAbstractState(bin.is64)}
-		queued := map[int]bool{start: true}
-		queue := []int{start}
-		for len(queue) > 0 && budget > 0 {
-			pos := queue[0]
-			queue = queue[1:]
-			queued[pos] = false
-			if pos < start || pos >= end {
-				continue
-			}
-			rva := sec.rva + uint32(pos)
-			if pos != start && starts[rva] {
-				continue
-			}
-			inst, err := x86asm.Decode(sec.data[pos:], mode)
-			if err != nil || inst.Len <= 0 || pos+inst.Len > end {
-				continue
-			}
-			budget--
-			reachable[rva] = true
-			for byteOff := 1; byteOff < inst.Len; byteOff++ {
-				interiors[rva+uint32(byteOff)] = true
-			}
-			before := states[pos]
-			after := before.clone()
-
-			if trace && spec.hasImmediate && (inst.Op == x86asm.CALL || inst.Op == x86asm.LCALL) {
-				for _, fact := range callArgumentFacts(inst, before, bin, rva, spec.immediate, "call", spec.callTarget) {
-					addTrace(rva, fact.text, fact.possible, "call")
+	workers := analysisThreads()
+	results := make([]*traceCollector, workers)
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		tc := newTraceCollector(spec, maxResults)
+		results[w] = tc
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				i := int(next.Add(1) - 1)
+				if i >= len(bin.funcTable) || budget.Load() <= 0 {
+					return
 				}
-			}
-			if trace && spec.hasImmediate && inst.Op == x86asm.JMP && isTailCall(inst, before, bin, rva, fn) {
-				for _, fact := range callArgumentFacts(inst, before, bin, rva, spec.immediate, "tail-call", spec.callTarget) {
-					addTrace(rva, fact.text, fact.possible, "call")
-				}
-			}
-
-			writtenFamily, writtenWidth, beforeWritten, wrote := executeAbstractInstruction(&after, inst, bin, bin.imageBase+uint64(rva))
-			if trace && spec.hasImmediate && wrote {
-				now := readFamilyWidth(after, writtenFamily, writtenWidth)
-				if now.contains(spec.immediate) && !beforeWritten.contains(spec.immediate) {
-					text := fmt.Sprintf("%s produced %s=0x%x", x86asm.IntelSyntax(inst, bin.imageBase+uint64(rva), nil),
-						gprDisplayName(writtenFamily, writtenWidth), spec.immediate)
-					addTrace(rva, text, now.possible(spec.immediate), "producer")
-				}
-			}
-
-			next := pos + inst.Len
-			var successors []int
-			if sec.data[pos] != 0xCC {
-				switch inst.Op {
-				case x86asm.RET, x86asm.LRET, x86asm.IRET, x86asm.IRETD, x86asm.IRETQ:
-				case x86asm.JMP:
-					if target, ok := branchTargetOff(inst, pos); ok {
-						successors = append(successors, target)
-					}
-				default:
-					if target, ok := branchTargetOff(inst, pos); ok {
-						successors = append(successors, target)
-					}
-					successors = append(successors, next)
-				}
-			}
-			for _, successor := range successors {
-				if successor < start || successor >= end {
+				fn := bin.funcTable[i]
+				if fn.owner != 0 {
 					continue
 				}
-				succRVA := sec.rva + uint32(successor)
-				if successor != start && starts[succRVA] {
-					continue
-				}
-				old, exists := states[successor]
-				changed := false
-				if !exists {
-					states[successor] = after.clone()
-					changed = true
-				} else {
-					changed = mergeAbstractState(&old, after)
-					if changed {
-						states[successor] = old
-					}
-				}
-				if changed && !queued[successor] {
-					queue = append(queue, successor)
-					queued[successor] = true
-				}
+				walkFunctionFlow(bin, fn, frags[fn.begin], mode, starts, &budget, reachable, interiors, spec, trace, tc)
 			}
+		}()
+	}
+	wg.Wait()
+
+	// Merge: a finding seen by several workers (overlapping bounds) is
+	// possible if any saw it as possible.
+	merged := map[string]int{}
+	var traces []valueTraceHit
+	for _, tc := range results {
+		for _, h := range tc.traces {
+			key := fmt.Sprintf("%x:%s", h.rva, h.text)
+			if i, ok := merged[key]; ok {
+				traces[i].possible = traces[i].possible || h.possible
+				continue
+			}
+			merged[key] = len(traces)
+			traces = append(traces, h)
 		}
 	}
 	sort.Slice(traces, func(i, j int) bool {
@@ -624,75 +652,229 @@ func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bo
 		}
 		return traces[i].rva < traces[j].rva
 	})
-	return reachable, interiors, traces, budget > 0
+	if len(traces) > maxResults {
+		traces = traces[:maxResults]
+	}
+	return reachable, interiors, traces, budget.Load() > 0
 }
 
-func analyzeInstructionReachability(bin *cgBinary) (map[uint32]bool, map[uint32]bool, bool) {
-	reachable := make(map[uint32]bool)
-	interiors := make(map[uint32]bool)
-	starts := make(map[uint32]bool, len(bin.funcTable))
-	for _, fn := range bin.funcTable {
-		starts[fn.begin] = true
+// traceCollector gathers one worker's value-flow findings. Findings come
+// from two passes per function: the fixpoint pass sees states before loops
+// have widened them, and what it alone finds is kept as possible (a value
+// some iteration or path holds); the final pass runs on the converged states
+// and decides confirmed versus possible.
+type traceCollector struct {
+	spec      instructionSearchSpec
+	max       int
+	traces    []valueTraceHit
+	index     map[string]int
+	settled   map[string]bool
+	finalPass bool
+}
+
+func newTraceCollector(spec instructionSearchSpec, max int) *traceCollector {
+	return &traceCollector{spec: spec, max: max, index: map[string]int{}, settled: map[string]bool{}}
+}
+
+func (c *traceCollector) add(rva uint32, text string, possible bool, kind string) {
+	if (c.spec.findings == "call" && kind != "call") || (c.spec.findings == "producer" && kind != "producer") {
+		return
 	}
-	budget := instructionSearchBudget
-	mode := 32
-	if bin.is64 {
-		mode = 64
+	key := fmt.Sprintf("%x:%s", rva, text)
+	index, exists := c.index[key]
+	switch {
+	case exists && c.finalPass && !c.settled[key]:
+		c.traces[index].possible = possible
+		c.settled[key] = true
+	case exists && c.finalPass:
+		// Several converged blocks may reach it with different values.
+		c.traces[index].possible = c.traces[index].possible || possible
+	case exists:
+	case len(c.traces) < c.max:
+		c.index[key] = len(c.traces)
+		c.traces = append(c.traces, valueTraceHit{rva: rva, text: text, possible: possible || !c.finalPass, kind: kind})
+		c.settled[key] = c.finalPass
 	}
-	for _, fn := range bin.funcTable {
-		if budget <= 0 {
-			break
+}
+
+// walkFunctionFlow decodes one function's reachable instructions and, with
+// trace, runs its abstract states to a fixpoint and reports on them.
+func walkFunctionFlow(bin *cgBinary, fn funcRange, frags []funcRange, mode int, starts map[uint32]bool, budget *atomic.Int64,
+	reachable, interiors *rvaBits, spec instructionSearchSpec, trace bool, tc *traceCollector) {
+	sec := sectionContainingRVA(bin.execSections, fn.begin)
+	if sec == nil {
+		return
+	}
+	start := int(fn.begin - sec.rva)
+	end := min(int(fn.end-sec.rva), len(sec.data))
+	if start < 0 || start >= end {
+		return
+	}
+	// The body is the function's range plus its split-off cold blocks in the
+	// same section, which its branches jump into and back from.
+	ranges := [][2]int{{start, end}}
+	for _, f := range frags {
+		if f.begin >= sec.rva && uint64(f.end) <= uint64(sec.rva)+uint64(len(sec.data)) {
+			ranges = append(ranges, [2]int{int(f.begin - sec.rva), int(f.end - sec.rva)})
 		}
-		sec := sectionContainingRVA(bin.execSections, fn.begin)
-		if sec == nil {
-			continue
+	}
+	insts, leaders := functionBlocks(sec.data, start, ranges, mode, sec.rva, starts, budget)
+	for pos, inst := range insts {
+		rva := sec.rva + uint32(pos)
+		reachable.set(rva)
+		for byteOff := 1; byteOff < inst.Len; byteOff++ {
+			interiors.set(rva + uint32(byteOff))
 		}
-		start := int(fn.begin - sec.rva)
-		end := int(fn.end - sec.rva)
-		if end > len(sec.data) {
-			end = len(sec.data)
-		}
-		visited := make(map[int]bool)
-		stack := []int{start}
-		for len(stack) > 0 && budget > 0 {
-			pos := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			if pos < start || pos >= end || visited[pos] {
-				continue
+	}
+	if !trace || !spec.hasImmediate {
+		return
+	}
+
+	// Abstract states are kept per basic block: a block's instructions have
+	// one predecessor each, so the state runs through them in place and is
+	// copied and merged only at block edges.
+	states := map[int]abstractState{start: newAbstractState(bin.is64)}
+	runBlock := func(leader int) (abstractState, []int) {
+		st := states[leader].clone()
+		for pos := leader; ; {
+			inst, ok := insts[pos]
+			if !ok {
+				return st, nil
 			}
 			rva := sec.rva + uint32(pos)
-			if pos != start && starts[rva] {
-				continue
-			}
-			inst, err := x86asm.Decode(sec.data[pos:], mode)
-			if err != nil || inst.Len <= 0 || pos+inst.Len > end {
-				continue
-			}
-			visited[pos] = true
-			budget--
-			reachable[rva] = true
-			for byteOff := 1; byteOff < inst.Len; byteOff++ {
-				interiors[rva+uint32(byteOff)] = true
-			}
-			if sec.data[pos] == 0xCC {
-				continue
-			}
-			next := pos + inst.Len
-			switch inst.Op {
-			case x86asm.RET, x86asm.LRET, x86asm.IRET, x86asm.IRETD, x86asm.IRETQ:
-			case x86asm.JMP:
-				if target, ok := branchTargetOff(inst, pos); ok {
-					stack = append(stack, target)
+			if inst.Op == x86asm.CALL || inst.Op == x86asm.LCALL {
+				for _, fact := range callArgumentFacts(inst, st, bin, rva, spec.immediate, "call", spec.callTarget) {
+					tc.add(rva, fact.text, fact.possible, "call")
 				}
-			default:
-				if target, ok := branchTargetOff(inst, pos); ok {
-					stack = append(stack, target)
+			}
+			if inst.Op == x86asm.JMP && isTailCall(inst, st, bin, rva, fn) {
+				for _, fact := range callArgumentFacts(inst, st, bin, rva, spec.immediate, "tail-call", spec.callTarget) {
+					tc.add(rva, fact.text, fact.possible, "call")
 				}
-				stack = append(stack, next)
+			}
+			writtenFamily, writtenWidth, beforeWritten, wrote := executeAbstractInstruction(&st, inst, bin, bin.imageBase+uint64(rva))
+			if wrote {
+				now := readFamilyWidth(st, writtenFamily, writtenWidth)
+				if now.contains(spec.immediate) && !beforeWritten.contains(spec.immediate) {
+					text := fmt.Sprintf("%s produced %s=0x%x", x86asm.IntelSyntax(inst, bin.imageBase+uint64(rva), nil),
+						gprDisplayName(writtenFamily, writtenWidth), spec.immediate)
+					tc.add(rva, text, now.possible(spec.immediate), "producer")
+				}
+			}
+			succ := flowSuccessors(sec.data, inst, pos)
+			if len(succ) == 1 && succ[0] == pos+inst.Len && !leaders[succ[0]] {
+				pos = succ[0] // straight-line: same block
+				continue
+			}
+			return st, succ
+		}
+	}
+	tc.finalPass = false
+	queued := map[int]bool{start: true}
+	queue := []int{start}
+	for len(queue) > 0 {
+		leader := queue[0]
+		queue = queue[1:]
+		queued[leader] = false
+		st, succ := runBlock(leader)
+		for _, successor := range succ {
+			if _, ok := insts[successor]; !ok {
+				continue
+			}
+			old, exists := states[successor]
+			changed := false
+			if !exists {
+				states[successor] = st.clone()
+				changed = true
+			} else if changed = mergeAbstractState(&old, st); changed {
+				states[successor] = old
+			}
+			if changed && !queued[successor] {
+				queue = append(queue, successor)
+				queued[successor] = true
 			}
 		}
 	}
-	return reachable, interiors, budget > 0
+	tc.finalPass = true
+	leadersSorted := make([]int, 0, len(states))
+	for l := range states {
+		leadersSorted = append(leadersSorted, l)
+	}
+	sort.Ints(leadersSorted)
+	for _, l := range leadersSorted {
+		runBlock(l)
+	}
+}
+
+// flowSuccessors are the in-function successors of inst at pos: none after a
+// return or int3, the target of a direct jmp, else the fall-through and any
+// direct branch target.
+func flowSuccessors(data []byte, inst x86asm.Inst, pos int) []int {
+	if data[pos] == 0xCC {
+		return nil
+	}
+	switch inst.Op {
+	case x86asm.RET, x86asm.LRET, x86asm.IRET, x86asm.IRETD, x86asm.IRETQ:
+		return nil
+	case x86asm.JMP:
+		if target, ok := branchTargetOff(inst, pos); ok {
+			return []int{target}
+		}
+		return nil
+	}
+	next := pos + inst.Len
+	if target, ok := branchTargetOff(inst, pos); ok {
+		return []int{target, next}
+	}
+	return []int{next}
+}
+
+// functionBlocks decodes the instructions reachable from start within the
+// body ranges -- other known function starts are walls -- and marks the
+// basic-block leaders (the start and every instruction with a predecessor
+// other than the one before it). It spends budget per decoded instruction.
+func functionBlocks(data []byte, start int, ranges [][2]int, mode int, secRVA uint32, starts map[uint32]bool, budget *atomic.Int64) (map[int]x86asm.Inst, map[int]bool) {
+	rangeEnd := func(pos int) int {
+		for _, r := range ranges {
+			if pos >= r[0] && pos < r[1] {
+				return r[1]
+			}
+		}
+		return -1
+	}
+	insts := map[int]x86asm.Inst{}
+	leaders := map[int]bool{start: true}
+	stack := []int{start}
+	for len(stack) > 0 && budget.Load() > 0 {
+		pos := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		end := rangeEnd(pos)
+		if end < 0 {
+			continue
+		}
+		if _, seen := insts[pos]; seen || (pos != start && starts[secRVA+uint32(pos)]) {
+			continue
+		}
+		inst, err := x86asm.Decode(data[pos:], mode)
+		if err != nil || inst.Len <= 0 || pos+inst.Len > end {
+			continue
+		}
+		budget.Add(-1)
+		insts[pos] = inst
+		succ := flowSuccessors(data, inst, pos)
+		for _, t := range succ {
+			if t != pos+inst.Len || len(succ) > 1 {
+				leaders[t] = true
+			}
+		}
+		stack = append(stack, succ...)
+	}
+	return insts, leaders
+}
+
+func analyzeInstructionReachability(bin *cgBinary) (*rvaBits, *rvaBits, bool) {
+	reachable, interiors, _, complete := analyzeInstructionFlows(bin, instructionSearchSpec{}, false, 0)
+	return reachable, interiors, complete
 }
 
 func sectionContainingRVA(sections []cgSection, rva uint32) *cgSection {
@@ -947,6 +1129,17 @@ func executeAbstractInstruction(state *abstractState, inst x86asm.Inst, bin *cgB
 		}
 	case "CALL", "LCALL":
 		clobberCallRegisters(state, bin)
+		// A 32-bit callee that ends in ret N pops its own arguments (stdcall,
+		// thiscall): without this the stack pointer drifts by N per call and
+		// a loop around the call widens it to unknown at the loop head.
+		if n := calleePurge(bin, inst, va); n > 0 && state.regs[4].kind == 2 {
+			sp := state.regs[4]
+			for off := sp.stack; off < sp.stack+int64(n); off++ {
+				delete(state.stack, off)
+			}
+			sp.stack += int64(n)
+			state.regs[4] = sp
+		}
 		return 0, 0, unknownValue(), false
 	case "XCHG":
 		if len(inst.Args) >= 2 && hasDst {
@@ -979,6 +1172,56 @@ func instructionUsuallyWritesFirst(op string) bool {
 		return false
 	}
 	return true
+}
+
+// calleePurge is the byte count a direct 32-bit callee pops on return (the
+// N of its ret N), found by walking the callee's control flow; 0 when it
+// returns with a plain ret, is not found, or the call is indirect.
+func calleePurge(bin *cgBinary, inst x86asm.Inst, va uint64) int {
+	if bin.is64 || len(inst.Args) == 0 {
+		return 0
+	}
+	rel, ok := inst.Args[0].(x86asm.Rel)
+	if !ok {
+		return 0
+	}
+	target := uint32(int64(va-bin.imageBase) + int64(inst.Len) + int64(rel))
+	bin.purgeMu.Lock()
+	n, ok := bin.purge[target]
+	bin.purgeMu.Unlock()
+	if ok {
+		return n
+	}
+	if sec := sectionContainingRVA(bin.execSections, target); sec != nil {
+		seen := map[int]bool{}
+		stack := []int{int(target - sec.rva)}
+		for len(stack) > 0 && len(seen) < 4000 {
+			pos := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if pos < 0 || pos >= len(sec.data) || seen[pos] {
+				continue
+			}
+			seen[pos] = true
+			in, err := x86asm.Decode(sec.data[pos:], 32)
+			if err != nil || in.Len == 0 || sec.data[pos] == 0xCC {
+				continue
+			}
+			if in.Op == x86asm.RET {
+				if imm, ok := in.Args[0].(x86asm.Imm); ok {
+					n = int(imm)
+				}
+				break
+			}
+			stack = append(stack, flowSuccessors(sec.data, in, pos)...)
+		}
+	}
+	bin.purgeMu.Lock()
+	if bin.purge == nil {
+		bin.purge = map[uint32]int{}
+	}
+	bin.purge[target] = n
+	bin.purgeMu.Unlock()
+	return n
 }
 
 func clobberCallRegisters(state *abstractState, bin *cgBinary) {

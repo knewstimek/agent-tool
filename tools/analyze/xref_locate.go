@@ -72,7 +72,7 @@ func (l *xrefLocator) function(va uint64) (string, uint64) {
 	if name == "" {
 		name = fmt.Sprintf("sub_%x", start)
 	}
-	if fn.owner != 0 { // a split-off cold block, possibly placed before its function
+	if va < start { // a split-off cold block placed before its function
 		return fmt.Sprintf("%s (cold part at 0x%x)", name, l.imageBase+uint64(fn.begin)), start
 	}
 	return withOffset(name, va-start), start

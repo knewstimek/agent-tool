@@ -347,3 +347,59 @@ func traceText(hits []valueTraceHit) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// A thiscall/stdcall callee pops its arguments (ret 4): the argument pushed
+// for the first call must not be read again as an argument of the second.
+func TestInstructionSearchX86CalleePurge(t *testing.T) {
+	code := []byte{
+		0x68, 0x27, 0x03, 0x00, 0x00, // push 0x327
+		0xE8, 0x0B, 0x00, 0x00, 0x00, // call callee (pops 4)
+		0x6A, 0x01, // push 1
+		0xE8, 0x04, 0x00, 0x00, 0x00, // call callee
+		0xC3,
+		0xCC, 0xCC, 0xCC,
+		0xC2, 0x04, 0x00, // callee: ret 4
+	}
+	bin := testSearchBinary(code, funcRange{begin: 0x1000, end: 0x1012}, funcRange{begin: 0x1015, end: 0x1018})
+	bin.is64, bin.arch = false, "x86"
+	spec := instructionSearchSpec{immediate: 0x327, hasImmediate: true}
+	_, _, traces, _ := analyzeInstructionFlows(bin, spec, true, 20)
+	if len(traces) != 1 || traces[0].rva != 0x1005 || !strings.Contains(traces[0].text, "arg1=0x327") {
+		t.Fatalf("want arg1=0x327 at the first call only: %+v", traces)
+	}
+}
+
+// A value a loop changes is possible, not confirmed: the finding taken on the
+// first iteration does not hold once the loop head widens the register.
+func TestInstructionSearchLoopValueIsPossible(t *testing.T) {
+	code := []byte{
+		0xB9, 0x08, 0x00, 0x00, 0x00, // mov ecx, 8
+		0x83, 0xC1, 0x08, // loop: add ecx, 8
+		0x83, 0xF9, 0x40, // cmp ecx, 0x40
+		0x72, 0xF8, // jb loop
+		0xC3,
+	}
+	bin := testSearchBinary(code, funcRange{begin: 0x1000, end: 0x100E})
+	spec := instructionSearchSpec{immediate: 0x10, hasImmediate: true}
+	_, _, traces, _ := analyzeInstructionFlows(bin, spec, true, 20)
+	for _, h := range traces {
+		if strings.Contains(h.text, "add ecx") && !h.possible {
+			t.Fatalf("loop-carried value reported as confirmed: %+v", h)
+		}
+	}
+}
+
+func TestInstructionSearchDisplacement(t *testing.T) {
+	code := []byte{
+		0x8B, 0x81, 0x10, 0x04, 0x00, 0x00, // mov eax, [rcx+0x410]
+		0x8B, 0x84, 0x24, 0x10, 0x04, 0x00, 0x00, // mov eax, [rsp+0x410] (a local)
+		0xC3,
+	}
+	bin := testSearchBinary(code, funcRange{begin: 0x1000, end: 0x100E})
+	spec := instructionSearchSpec{displacement: 0x410, hasDisp: true}
+	reach, inter, _, _ := analyzeInstructionFlows(bin, spec, false, 20)
+	hits, total := exhaustiveInstructionMatches(bin, spec, reach, inter, 20)
+	if total != 1 || hits[0].rva != 0x1000 || hits[0].confidence != "confirmed" {
+		t.Fatalf("displacement hits %+v total %d", hits, total)
+	}
+}

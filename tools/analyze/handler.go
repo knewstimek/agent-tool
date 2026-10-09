@@ -51,12 +51,13 @@ type AnalyzeInput struct {
 	Pattern string `json:"pattern,omitempty" jsonschema:"Hex byte pattern with ?? wildcards (e.g. '4D 5A ?? ?? 50 45'). For pattern_search"`
 
 	// instruction_search parameters
-	Mnemonic    string `json:"mnemonic,omitempty" jsonschema:"Optional assembly mnemonic filter such as MOV, ADD, or CALL. For instruction_search"`
-	Register    string `json:"register,omitempty" jsonschema:"Optional explicit register operand filter such as R9D, EAX, or RCX. For instruction_search"`
-	Immediate   string `json:"immediate,omitempty" jsonschema:"Optional immediate value filter in hex or decimal, e.g. 0x327 or 807. For instruction_search"`
-	TraceValues *bool  `json:"trace_values,omitempty" jsonschema:"Trace the immediate through bounded function-local register and stack data flow and report matching call arguments. Default: true when immediate is set. For instruction_search"`
-	CallTarget  string `json:"call_target,omitempty" jsonschema:"Optional case-insensitive call target symbol/address substring, e.g. DeviceApi or 0x140002000. Requires immediate value tracing. Defaults findings to call. For instruction_search"`
-	Findings    string `json:"findings,omitempty" jsonschema:"Result kind: all (default), call (CALL/tail-call value arguments only), or producer (direct instructions and value producers only). For instruction_search"`
+	Mnemonic     string `json:"mnemonic,omitempty" jsonschema:"Optional assembly mnemonic filter such as MOV, ADD, or CALL. For instruction_search"`
+	Register     string `json:"register,omitempty" jsonschema:"Optional explicit register operand filter such as R9D, EAX, or RCX. For instruction_search"`
+	Immediate    string `json:"immediate,omitempty" jsonschema:"Optional immediate value filter in hex or decimal, e.g. 0x327 or 807. For instruction_search"`
+	Displacement string `json:"displacement,omitempty" jsonschema:"Optional memory displacement filter (hex or decimal): instructions addressing [reg+0x410] style operands, e.g. who reads or writes a struct field at that offset. For instruction_search"`
+	TraceValues  *bool  `json:"trace_values,omitempty" jsonschema:"Trace the immediate through bounded function-local register and stack data flow and report matching call arguments. Default: true when immediate is set. For instruction_search"`
+	CallTarget   string `json:"call_target,omitempty" jsonschema:"Optional case-insensitive call target symbol/address substring, e.g. DeviceApi or 0x140002000. Requires immediate value tracing. Defaults findings to call. For instruction_search"`
+	Findings     string `json:"findings,omitempty" jsonschema:"Result kind: all (default), call (CALL/tail-call value arguments only), or producer (direct instructions and value producers only). For instruction_search"`
 
 	// xref parameters
 	TargetVA    string `json:"target_va,omitempty" jsonschema:"Target virtual address to find references to, or inclusive range start when target_end_va is set (hex). For xref operation."`

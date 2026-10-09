@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"golang.org/x/arch/x86/x86asm"
 )
@@ -1022,7 +1023,10 @@ type cgBinary struct {
 	// layoutStarts are table entries found only from the padding layout; the
 	// decompile host leaves them out for the same reason.
 	layoutStarts map[uint32]bool
-	closer       func()
+	// purge caches the stack bytes a 32-bit callee pops (instruction_search).
+	purge   map[uint32]int
+	purgeMu sync.Mutex
+	closer  func()
 }
 
 // cgOpenBinary tries PE, ELF, Mach-O in order and returns a cgBinary. A PE's
