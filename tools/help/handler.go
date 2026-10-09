@@ -648,8 +648,13 @@ Every hit is named by its function ("; in Class::Method+0x41").
   Switch dispatches are followed into their case blocks: MSVC x64 (image-base
   RVA tables), GCC/Clang x64 (table-relative offsets) and x86 jmp [idx*4+table],
   bounded by the preceding cmp; so code and values inside cases are confirmed.
-  Functions are analyzed in parallel (AGENT_TOOL_ANALYZE_THREADS); a 78 MB x64
-  image is analyzed completely in about 20 s with tracing, a few seconds without.
+  By default only the functions that hold the value (as an immediate or a
+  read-only constant they load) are traced; trace_scope=all traces every
+  function and also finds values computed from other constants (40*25, loop
+  counters), several times slower. Functions are analyzed in parallel
+  (AGENT_TOOL_ANALYZE_THREADS), and the last binary's function table and
+  reached code stay cached until the file changes or the server goes idle:
+  on a 78 MB x64 image a first search takes about 4 s, the next ones under 1 s.
 
   Parameters:
     mnemonic: Optional mnemonic such as MOV, ADD, or CALL (case-insensitive)
@@ -662,6 +667,7 @@ Every hit is named by its function ("; in Class::Method+0x41").
     findings: all (default), call, or producer
     trace_values: Trace immediate values into computed results and call arguments
                   (default true when immediate is supplied)
+    trace_scope: seeded (default) or all
     max_results: Maximum direct and trace results (default 200, max 1000)
 
 ### pe_info

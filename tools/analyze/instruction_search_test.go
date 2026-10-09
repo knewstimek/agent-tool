@@ -403,3 +403,27 @@ func TestInstructionSearchDisplacement(t *testing.T) {
 		t.Fatalf("displacement hits %+v total %d", hits, total)
 	}
 }
+
+// Seeded tracing only walks functions that hold the value: one computing it
+// from other constants is found with trace_scope=all only.
+func TestInstructionSearchSeededScope(t *testing.T) {
+	code := []byte{
+		0xB8, 0xE8, 0x03, 0x00, 0x00, // f1: mov eax, 0x3e8
+		0xC3,
+		0xB8, 0xE0, 0x03, 0x00, 0x00, // f2: mov eax, 0x3e0
+		0x83, 0xC0, 0x08, // add eax, 8
+		0xC3,
+	}
+	bin := testSearchBinary(code, funcRange{begin: 0x1000, end: 0x1006}, funcRange{begin: 0x1006, end: 0x100F})
+	spec := instructionSearchSpec{immediate: 0x3e8, hasImmediate: true}
+	reach, inter, _ := analyzeInstructionReachability(bin)
+	_, _, seeds := scanInstructions(bin, spec, reach, inter, 20)
+	if !seeds[0x1000] || seeds[0x1006] {
+		t.Fatalf("seeds %v", seeds)
+	}
+	seeded, _ := flowsFor(bin, spec, true, 20, seeds, reach, inter)
+	all, _ := flowsFor(bin, spec, true, 20, nil, reach, inter)
+	if len(seeded) != 1 || len(all) != 2 || !strings.Contains(traceText(all), "add eax, 0x8") {
+		t.Fatalf("seeded %v\nall %v", seeded, all)
+	}
+}

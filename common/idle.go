@@ -2,6 +2,7 @@ package common
 
 import (
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -13,7 +14,27 @@ const IdleReleaseAfter = 30 * time.Minute
 var (
 	lastActivity   atomic.Int64 // unix nanos of the most recent tool call
 	pendingRelease atomic.Bool  // work has happened since the last release
+
+	idleHooksMu sync.Mutex
+	idleHooks   []func()
 )
+
+// OnIdleRelease registers f to run when the idle release fires, before the
+// heap is handed back: caches drop what they hold so it can be freed.
+func OnIdleRelease(f func()) {
+	idleHooksMu.Lock()
+	idleHooks = append(idleHooks, f)
+	idleHooksMu.Unlock()
+}
+
+func runIdleHooks() {
+	idleHooksMu.Lock()
+	hooks := append([]func(){}, idleHooks...)
+	idleHooksMu.Unlock()
+	for _, f := range hooks {
+		f()
+	}
+}
 
 // MarkActivity records that a tool call ran. Called from the single place every
 // tool invocation passes through.
@@ -39,7 +60,10 @@ func MarkActivity() {
 // server has gone quiet: there is nobody waiting on the pause, and the next
 // request arrives to a small heap.
 func StartIdleMemoryRelease(after time.Duration) {
-	startIdleRelease(after, debug.FreeOSMemory)
+	startIdleRelease(after, func() {
+		runIdleHooks()
+		debug.FreeOSMemory()
+	})
 }
 
 // startIdleRelease is StartIdleMemoryRelease with the release action injected,

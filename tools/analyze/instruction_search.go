@@ -61,13 +61,11 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 		return "", err
 	}
 
-	bin, err := cgOpenBinary(input.FilePath)
+	sb0, err := loadSearchBinary(input.FilePath)
 	if err != nil {
 		return "", err
 	}
-	if bin.closer != nil {
-		defer bin.closer()
-	}
+	bin := sb0.bin
 	if bin.arch != "x86" && bin.arch != "x64" {
 		return "", fmt.Errorf("instruction_search currently supports x86/x64 binaries (got %s)", bin.arch)
 	}
@@ -85,12 +83,21 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 		traceValues = *input.TraceValues
 	}
 
-	reachable, interiors, traces, budgetComplete := analyzeInstructionFlows(bin, spec, traceValues, maxResults)
-	var hits []instructionHit
-	var totalMatches int
+	reachable, interiors, budgetComplete := sb0.reachable, sb0.interiors, sb0.complete
+	hits, totalMatches, seeds := scanInstructions(bin, spec, reachable, interiors, maxResults)
 	showDirect := spec.findings != "call"
-	if showDirect {
-		hits, totalMatches = exhaustiveInstructionMatches(bin, spec, reachable, interiors, maxResults)
+	if !showDirect {
+		hits, totalMatches = nil, 0
+	}
+	var traces []valueTraceHit
+	if traceValues {
+		only := seeds
+		if strings.EqualFold(strings.TrimSpace(input.TraceScope), "all") {
+			only = nil
+		}
+		var traceComplete bool
+		traces, traceComplete = flowsFor(bin, spec, true, maxResults, only, reachable, interiors)
+		budgetComplete = budgetComplete && traceComplete
 	}
 
 	// Name the function of each hit (PDB, export and symbol names, else sub_).
@@ -129,7 +136,11 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 		if showDirect {
 			sb.WriteString("\n")
 		}
-		sb.WriteString("Value-flow findings:\n")
+		if strings.EqualFold(strings.TrimSpace(input.TraceScope), "all") {
+			sb.WriteString("Value-flow findings (every function traced):\n")
+		} else {
+			sb.WriteString(fmt.Sprintf("Value-flow findings (traced in the %d function(s) holding 0x%x; trace_scope=all also finds values computed from other constants):\n", len(seeds), spec.immediate))
+		}
 		if len(traces) == 0 {
 			sb.WriteString(fmt.Sprintf("  none for 0x%x\n", spec.immediate))
 		} else {
@@ -170,6 +181,9 @@ func parseInstructionSearchSpec(input AnalyzeInput) (instructionSearchSpec, erro
 	}
 	if spec.findings != "all" && spec.findings != "call" && spec.findings != "producer" {
 		return spec, fmt.Errorf("findings must be all, call, or producer")
+	}
+	if scope := strings.ToLower(strings.TrimSpace(input.TraceScope)); scope != "" && scope != "seeded" && scope != "all" {
+		return spec, fmt.Errorf("trace_scope must be seeded (default) or all")
 	}
 	if input.Register != "" {
 		family, width, ok := parseGPRName(input.Register)
@@ -261,6 +275,18 @@ func formatInstructionFilter(spec instructionSearchSpec) string {
 }
 
 func exhaustiveInstructionMatches(bin *cgBinary, spec instructionSearchSpec, reachable, interiors *rvaBits, maxResults int) ([]instructionHit, int) {
+	hits, total, _ := scanInstructions(bin, spec, reachable, interiors, maxResults)
+	return hits, total
+}
+
+// scanInstructions decodes every executable byte not inside a confirmed
+// instruction and returns the matches. With an immediate it also returns
+// the seed functions for value tracing: those whose reached code holds the
+// value as an immediate or loads it from read-only data. Any value the
+// tracer can report starts at such an instruction unless it is computed
+// from other constants (a loop counter, a sum), which is what
+// trace_scope=all is for.
+func scanInstructions(bin *cgBinary, spec instructionSearchSpec, reachable, interiors *rvaBits, maxResults int) ([]instructionHit, int, map[uint32]bool) {
 	mode := 32
 	if bin.is64 {
 		mode = 64
@@ -281,6 +307,7 @@ func exhaustiveInstructionMatches(bin *cgBinary, spec instructionSearchSpec, rea
 	type part struct {
 		confirmed, candidates []instructionHit
 		total                 int
+		seeds                 []uint32 // instruction RVAs holding the value
 	}
 	parts := make([]part, len(chunks))
 	var next atomic.Int64
@@ -304,7 +331,13 @@ func exhaustiveInstructionMatches(bin *cgBinary, spec instructionSearchSpec, rea
 						continue
 					}
 					inst, err := x86asm.Decode(c.sec.data[off:], mode)
-					if err != nil || inst.Len <= 0 || !instructionMatches(inst, spec) {
+					if err != nil || inst.Len <= 0 {
+						continue
+					}
+					if spec.hasImmediate && reachable.has(rva) && holdsValue(bin, inst, bin.imageBase+uint64(rva), spec.immediate) {
+						out.seeds = append(out.seeds, rva)
+					}
+					if !instructionMatches(inst, spec) {
 						continue
 					}
 					out.total++
@@ -324,17 +357,51 @@ func exhaustiveInstructionMatches(bin *cgBinary, spec instructionSearchSpec, rea
 	wg.Wait()
 	var confirmed, candidates []instructionHit
 	total := 0
+	seeds := map[uint32]bool{}
 	for _, p := range parts {
 		confirmed = append(confirmed, p.confirmed...)
 		candidates = append(candidates, p.candidates...)
 		total += p.total
+		for _, rva := range p.seeds {
+			if fn := findFunc(bin.funcTable, rva); fn != nil {
+				seeds[fn.entry()] = true
+			}
+		}
 	}
 	sort.Slice(confirmed, func(i, j int) bool { return confirmed[i].rva < confirmed[j].rva })
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].rva < candidates[j].rva })
 	hits := append([]instructionHit(nil), confirmed[:min(len(confirmed), maxResults)]...)
 	remaining := min(maxResults-len(hits), len(candidates))
 	hits = append(hits, candidates[:remaining]...)
-	return hits, total
+	return hits, total, seeds
+}
+
+// holdsValue reports an immediate equal to value, or a load of value from a
+// read-only static location (RIP-relative or absolute).
+func holdsValue(bin *cgBinary, inst x86asm.Inst, va uint64, value uint64) bool {
+	for _, a := range inst.Args {
+		switch x := a.(type) {
+		case x86asm.Imm:
+			if immediateEquivalent(uint64(int64(x)), value, inst.DataSize) {
+				return true
+			}
+		case x86asm.Mem:
+			var at uint64
+			switch {
+			case x.Base == x86asm.RIP:
+				at = va + uint64(inst.Len) + uint64(memDisp(x))
+			case x.Base == 0 && x.Index == 0:
+				at = uint64(uint32(x.Disp))
+			default:
+				continue
+			}
+			width := inst.MemBytes * 8
+			if c, ok := readStaticConstant(bin, at, width); ok && immediateEquivalent(c, value, width) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func instructionMatches(inst x86asm.Inst, spec instructionSearchSpec) bool {
@@ -590,6 +657,15 @@ func (b *rvaBits) count() int {
 func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bool, maxResults int) (*rvaBits, *rvaBits, []valueTraceHit, bool) {
 	reachable := newRVABits(bin.execSections)
 	interiors := newRVABits(bin.execSections)
+	traces, complete := flowsFor(bin, spec, trace, maxResults, nil, reachable, interiors)
+	return reachable, interiors, traces, complete
+}
+
+// flowsFor walks the functions whose entries are in only (all when nil),
+// recording reached instructions into reachable/interiors and, with trace,
+// the value-flow findings.
+func flowsFor(bin *cgBinary, spec instructionSearchSpec, trace bool, maxResults int, only map[uint32]bool,
+	reachable, interiors *rvaBits) ([]valueTraceHit, bool) {
 	starts := make(map[uint32]bool, len(bin.funcTable))
 	frags := map[uint32][]funcRange{} // owner -> its split-off cold blocks
 	for _, fn := range bin.funcTable {
@@ -622,7 +698,7 @@ func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bo
 					return
 				}
 				fn := bin.funcTable[i]
-				if fn.owner != 0 {
+				if fn.owner != 0 || (only != nil && !only[fn.begin]) {
 					continue
 				}
 				walkFunctionFlow(bin, fn, frags[fn.begin], mode, starts, &budget, reachable, interiors, spec, trace, tc)
@@ -655,7 +731,7 @@ func analyzeInstructionFlows(bin *cgBinary, spec instructionSearchSpec, trace bo
 	if len(traces) > maxResults {
 		traces = traces[:maxResults]
 	}
-	return reachable, interiors, traces, budget.Load() > 0
+	return traces, budget.Load() > 0
 }
 
 // traceCollector gathers one worker's value-flow findings. Findings come

@@ -55,6 +55,7 @@ type AnalyzeInput struct {
 	Register     string `json:"register,omitempty" jsonschema:"Optional explicit register operand filter such as R9D, EAX, or RCX. For instruction_search"`
 	Immediate    string `json:"immediate,omitempty" jsonschema:"Optional immediate value filter in hex or decimal, e.g. 0x327 or 807. For instruction_search"`
 	Displacement string `json:"displacement,omitempty" jsonschema:"Optional memory displacement filter (hex or decimal): instructions addressing [reg+0x410] style operands, e.g. who reads or writes a struct field at that offset. For instruction_search"`
+	TraceScope   string `json:"trace_scope,omitempty" jsonschema:"Value tracing scope: seeded (default; functions holding the value as an immediate or read-only constant) or all (every function, also values computed from other constants; slower). For instruction_search"`
 	TraceValues  *bool  `json:"trace_values,omitempty" jsonschema:"Trace the immediate through bounded function-local register and stack data flow and report matching call arguments. Default: true when immediate is set. For instruction_search"`
 	CallTarget   string `json:"call_target,omitempty" jsonschema:"Optional case-insensitive call target symbol/address substring, e.g. DeviceApi or 0x140002000. Requires immediate value tracing. Defaults findings to call. For instruction_search"`
 	Findings     string `json:"findings,omitempty" jsonschema:"Result kind: all (default), call (CALL/tail-call value arguments only), or producer (direct instructions and value producers only). For instruction_search"`
