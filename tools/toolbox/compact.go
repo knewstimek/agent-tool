@@ -56,6 +56,7 @@ var compactOperationShapes = map[string]map[string]operationShape{
 		"bin_diff":       {fields: []string{"operation", "file_path", "file_path_b", "max_results"}, required: []string{"operation", "file_path", "file_path_b"}},
 		"xref":           {fields: []string{"operation", "file_path", "target_va", "target_end_va", "max_results"}, required: []string{"operation", "file_path", "target_va"}},
 		"function_at":    {fields: []string{"operation", "file_path", "va", "count"}, required: []string{"operation", "file_path", "va"}},
+		"decompile":      {fields: []string{"operation", "file_path", "va", "timeout_sec", "max_output_chars"}, required: []string{"operation", "file_path", "va"}},
 		"call_graph":     {fields: []string{"operation", "file_path", "va", "count", "max_results"}, required: []string{"operation", "file_path", "va"}},
 		"follow_ptr":     {fields: []string{"operation", "file_path", "va", "count"}, required: []string{"operation", "file_path", "va"}},
 		"rtti_dump":      {fields: []string{"operation", "file_path", "va"}, required: []string{"operation", "file_path", "va"}},

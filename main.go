@@ -72,6 +72,14 @@ const Version = "v0.9.7"
 func main() {
 	args := os.Args[1:]
 
+	// Decompile worker: the server re-executes itself with this hidden
+	// subcommand (see analyze.DecompileWorkerArg). The parent watch is the
+	// orphan guard on platforms without a kill-on-parent-exit primitive.
+	if len(args) > 0 && args[0] == analyze.DecompileWorkerArg {
+		go monitorParent()
+		os.Exit(analyze.RunDecompileWorker(os.Stdin, os.Stdout))
+	}
+
 	// version flag — print version and exit immediately
 	if len(args) > 0 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v") {
 		fmt.Println("agent-tool " + Version)
@@ -233,7 +241,7 @@ Groups: core, file, coding, system, remote, data, analysis, windows. Use agent_t
 		{Name: "redis", Group: "data", Register: func() { redistool.Register(server) }},
 
 		{Name: "debug", Group: "analysis", Register: func() { debug.Register(server) }},
-		{Name: "analyze", Group: "analysis", Hint: "binary disassembly and assembly/value search", Register: func() { analyze.Register(server) }},
+		{Name: "analyze", Group: "analysis", Hint: "binary disassembly, decompilation to C, and assembly/value search", Register: func() { analyze.Register(server) }},
 		{Name: "codegraph", Group: "analysis", Register: func() { codegraph.Register(server) }},
 		{Name: "memtool", Group: "analysis", Register: func() { memtool.Register(server) }},
 		{Name: "wintool", Group: "windows", Register: func() { wintool.Register(server) }},

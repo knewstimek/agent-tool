@@ -20,13 +20,13 @@ const (
 
 // AnalyzeInput defines parameters for the static binary analysis tool.
 type AnalyzeInput struct {
-	Operation string `json:"operation" jsonschema:"Operation: disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan,required"`
+	Operation string `json:"operation" jsonschema:"Operation: disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan, decompile,required"`
 	FilePath  string `json:"file_path,omitempty" jsonschema:"Binary file path. Relative paths use workspace/MCP root,required"`
 	Path      string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 
 	// disassemble / function_at / follow_ptr parameters
 	Offset    int         `json:"offset,omitempty" jsonschema:"Byte offset to start from. Default: 0"`
-	VA        string      `json:"va,omitempty" jsonschema:"Virtual address for PE files (hex, e.g. '0x140001000'). Auto-converts to file offset. For disassemble, function_at, follow_ptr, rtti_dump, struct_layout. Preferred over offset+base_addr for PE analysis."`
+	VA        string      `json:"va,omitempty" jsonschema:"Virtual address for PE files (hex, e.g. '0x140001000'). Auto-converts to file offset. For disassemble, function_at, follow_ptr, rtti_dump, struct_layout. Preferred over offset+base_addr for PE analysis. For decompile: function entry as hex VA or symbol name, up to 16 comma-separated."`
 	Count     int         `json:"count,omitempty" jsonschema:"Number of instructions (disassemble) or depth (follow_ptr). Default: 50/4, Max: 1000/10. For a large function, raise count or set stop_at_ret=true; if output hits the cap it prints a truncation note with a resume va to continue from."`
 	StopAtRet interface{} `json:"stop_at_ret,omitempty" jsonschema:"Stop disassembly at function return (RET/RETF). Confirms boundary via INT3/NOP padding or new prologue. For disassemble only: true or false. Default: false"`
 	Mode      int         `json:"mode,omitempty" jsonschema:"CPU mode: 32 or 64. Default: 64"`
@@ -66,6 +66,9 @@ type AnalyzeInput struct {
 	FilePathB string `json:"file_path_b,omitempty" jsonschema:"Second file for bin_diff. Relative paths use workspace/MCP root"`
 
 	// call_graph parameters are reused from VA + Count fields above
+
+	// decompile parameters (also uses VA)
+	TimeoutSec int `json:"timeout_sec,omitempty" jsonschema:"Seconds before the decompile worker is killed. Default: 60, Max: 600. For decompile"`
 }
 
 // Note: follow_ptr uses VA + Count, rtti_dump uses VA, struct_layout uses VA + Length
@@ -98,12 +101,13 @@ var validOperations = map[string]bool{
 	"rtti_dump":          true,
 	"struct_layout":      true,
 	"vtable_scan":        true,
+	"decompile":          true,
 }
 
 // Handle dispatches to the appropriate operation.
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (*mcp.CallToolResult, AnalyzeOutput, error) {
 	op := strings.ToLower(strings.TrimSpace(input.Operation))
-	allOps := "disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan"
+	allOps := "disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan, decompile"
 	if op == "" {
 		return errorResult("operation is required (" + allOps + ")")
 	}
@@ -216,6 +220,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 		result, err = opStructLayout(input)
 	case "vtable_scan":
 		result, err = opVtableScan(input)
+	case "decompile":
+		result, err = opDecompile(ctx, input)
 	}
 
 	if err != nil {
@@ -231,7 +237,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name:        "analyze",
-		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, and vtables. Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Prefer va for PE addresses. Use debug for runtime inspection.`,
+		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Prefer va for PE addresses. Use debug for runtime inspection.`,
 	}, Handle)
 }
 

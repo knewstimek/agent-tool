@@ -130,7 +130,7 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - externalip: Get your external (public) IP address
 - sloc: Count source lines of code (SLOC) with per-language summary
 - debug: Interactive debugger via DAP (breakpoints, stepping, variables, stack traces)
-- analyze: Static binary analysis (22 operations: disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
+- analyze: Static binary analysis (23 operations: decompile to C (x86/x64 PE/ELF), disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
 - set_config: Change runtime settings (encoding, file size, SSRF policy, DoH/ECH toggle)
 - agent_tool_help: This help tool
 - toolbox: Describe/call any tool through one stable gateway; optionally manage direct bindings
@@ -629,7 +629,8 @@ Parameters: session_id, operation, adapter_command, adapter_args, address, launc
   max_output_chars, variable_filter, start_module, module_count
 
 ## analyze
-Static binary analysis tool with 22 operations:
+Static binary analysis tool with 23 operations:
+- decompile: Decompile x86/x64 PE/ELF functions to C (Ghidra-equivalent Gosleigh core; va = hex address or symbol, up to 16 comma-separated; timeout_sec)
 - disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped)
 - instruction_search: Semantic x86/x64 mnemonic/register/immediate search with exhaustive executable-offset recovery, CFG confidence, target/result filters, and bounded value tracing to call/tail-call arguments
 - pe_info: PE header parsing with RWX section warnings
@@ -655,7 +656,7 @@ Static binary analysis tool with 22 operations:
 Parameters: operation, file_path, offset, count, mode, arch (x86/arm),
   base_addr, min_length, max_results, length, section, pattern, mnemonic,
   register, immediate, trace_values, file_path_b, va, target_va,
-  target_end_va, stop_at_ret, result_offset, max_output_chars
+  target_end_va, stop_at_ret, result_offset, max_output_chars, timeout_sec
 Use topic='analyze' for detailed guide with examples.
 
 ## set_config
@@ -1057,6 +1058,35 @@ Scan PE .rdata for all MSVC vtables with RTTI. Auto-discovers C++ classes with v
 
   Parameters: none (auto-detects architecture)
 
+### decompile
+Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompiler core).
+  analyze(operation="decompile", file_path="/path/to/game.exe", va="0x140001000")
+  analyze(operation="decompile", file_path="/path/to/libfoo.so", va="parse_header, 0x401230")
+
+  Supports x86 and x64 PE (Visual Studio conventions) and ELF (gcc conventions). The
+  architecture, image layout and calling convention are detected from the file.
+
+  What the host knows comes from the file only: function starts (.pdata, exports,
+  symbol tables, call targets, entry point), import names, and tail-call jumps (the
+  same Shared Return rule Ghidra's analysis applies). PDB/DWARF types and prototypes
+  are NOT applied, so callee signatures, parameter/local types and struct fields are
+  inferred by the decompiler -- expect param_1/local_10 and undefined* types where a
+  Ghidra project with symbols would show names. Calls to statically linked
+  non-returning functions (e.g. _CxxThrowException) are not detected and may show
+  code after them.
+
+  An address inside a function is moved to its start when x64 .pdata gives exact
+  extents; otherwise the output carries a note -- confirm the start with function_at.
+
+  Each call runs in a separate worker process (same executable) with a 2 GB heap
+  limit and timeout_sec (default 60, max 600); a timeout or memory blow-up kills only
+  the worker, and the result reports which functions completed.
+
+  Parameters:
+    va: Function entry as hex VA or symbol name; up to 16, comma-separated
+    timeout_sec: Worker time limit (default 60, max 600)
+    max_output_chars: Output cap (default 32768)
+
 ## Typical Workflow
 
 1. pe_info/elf_info/macho_info -- Get section layout, check for W+X sections
@@ -1068,6 +1098,7 @@ Scan PE .rdata for all MSVC vtables with RTTI. Auto-discovers C++ classes with v
 7. pattern_search -- Locate specific byte sequences (signatures, opcodes)
 8. hexdump -- Examine specific data regions at file offsets
 9. disassemble -- Decode machine code (use va= for PE virtual addresses)
+   decompile -- Read a function as C once its start is known (x86/x64 PE/ELF)
 10. instruction_search -- Find decoded instructions/constants and trace bounded values into call arguments
 11. function_at -- Find function boundaries (.pdata or heuristic fallback)
 12. xref -- Find all call/jump/data references to an address (PE/ELF/Mach-O)

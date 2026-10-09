@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"bytes"
 	"debug/pe"
 	"encoding/binary"
 	"fmt"
@@ -934,19 +935,15 @@ func readPEString(f *pe.File, rva uint32) string {
 	}
 	for _, s := range f.Sections {
 		if rva >= s.VirtualAddress && rva < s.VirtualAddress+s.VirtualSize {
-			secData, err := s.Data()
-			if err != nil {
-				return ""
+			// ReadAt, not Data(): Data() reads the whole section, and callers
+			// look up one string per import (seconds on a large binary).
+			buf := make([]byte, 260)
+			n, _ := s.ReadAt(buf, int64(rva-s.VirtualAddress))
+			buf = buf[:n]
+			if end := bytes.IndexByte(buf, 0); end >= 0 {
+				buf = buf[:end]
 			}
-			off := rva - s.VirtualAddress
-			if int(off) >= len(secData) {
-				return ""
-			}
-			end := int(off)
-			for end < len(secData) && secData[end] != 0 && end-int(off) < 260 {
-				end++
-			}
-			return string(secData[off:end])
+			return string(buf)
 		}
 	}
 	return ""
@@ -1357,6 +1354,7 @@ func parseImportsWithIAT(f *pe.File, imageBase uint64, sb *strings.Builder, resu
 // peSymbolMap builds a map of VA -> symbol name from imports (IAT slots) and exports.
 // Used by disassembler for inline annotations (e.g. "call [rip+0x1234] ; CreateFileW").
 func peSymbolMap(f *pe.File, imageBase uint64) map[uint64]string {
+	secCache := map[*pe.Section][]byte{}
 	syms := make(map[uint64]string)
 
 	is64 := false
@@ -1408,13 +1406,19 @@ func peSymbolMap(f *pe.File, imageBase uint64) map[uint64]string {
 					if lookupThunk == 0 {
 						lookupThunk = firstThunk
 					}
-					// Read thunk array
+					// Read thunk array (section data cached: one read per section,
+					// not per imported DLL)
 					var thunkData []byte
 					for _, s := range f.Sections {
 						if lookupThunk >= s.VirtualAddress &&
 							lookupThunk < s.VirtualAddress+s.VirtualSize {
-							if sd, err := s.Data(); err == nil {
-								thunkData = sd[lookupThunk-s.VirtualAddress:]
+							sd, ok := secCache[s]
+							if !ok {
+								sd, _ = s.Data()
+								secCache[s] = sd
+							}
+							if off := lookupThunk - s.VirtualAddress; int(off) < len(sd) {
+								thunkData = sd[off:]
 							}
 							break
 						}

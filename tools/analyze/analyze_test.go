@@ -12,6 +12,11 @@ import (
 var testBinary string
 
 func TestMain(m *testing.M) {
+	// opDecompile re-executes os.Executable(), which is this test binary.
+	if len(os.Args) > 1 && os.Args[1] == DecompileWorkerArg {
+		os.Exit(RunDecompileWorker(os.Stdin, os.Stdout))
+	}
+
 	tmp, err := os.MkdirTemp("", "agent-tool-analyze-test-*")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "create analyze test directory:", err)
