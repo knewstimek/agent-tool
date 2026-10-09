@@ -641,6 +641,10 @@ Every hit is named by its function ("; in Class::Method+0x41").
   and loop iteration, "possible" on some (including values seen only before a
   loop widened them). x86 callees that end in ret N pop their own arguments
   (stdcall/thiscall), so stale arguments of earlier calls are not reported.
+  For x86 imports the size comes from the 32-bit DLL itself (beside the binary,
+  then SysWOW64), through forwarders and API set names; import calls are shown
+  as dll!Function. Without the DLL (non-Windows hosts) the callee is assumed to
+  leave its arguments.
   Switch dispatches are followed into their case blocks: MSVC x64 (image-base
   RVA tables), GCC/Clang x64 (table-relative offsets) and x86 jmp [idx*4+table],
   bounded by the preceding cmp; so code and values inside cases are confirmed.

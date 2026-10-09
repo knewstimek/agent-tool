@@ -1353,21 +1353,35 @@ func parseImportsWithIAT(f *pe.File, imageBase uint64, sb *strings.Builder, resu
 
 // peSymbolMap builds a map of VA -> symbol name from imports (IAT slots) and exports.
 // Used by disassembler for inline annotations (e.g. "call [rip+0x1234] ; CreateFileW").
-func peSymbolMap(f *pe.File, imageBase uint64) map[uint64]string {
+// importRef is one imported function: the DLL it comes from and its name,
+// or its ordinal when imported by ordinal (name empty).
+type importRef struct {
+	dll     string
+	name    string
+	ordinal uint32
+}
+
+func (r importRef) display() string {
+	if r.name != "" {
+		return r.name
+	}
+	return fmt.Sprintf("Ordinal_%d", r.ordinal)
+}
+
+// peImports maps each IAT slot VA to the function imported into it.
+func peImports(f *pe.File, imageBase uint64) map[uint64]importRef {
 	secCache := map[*pe.Section][]byte{}
-	syms := make(map[uint64]string)
+	out := make(map[uint64]importRef)
 
 	is64 := false
 	if _, ok := f.OptionalHeader.(*pe.OptionalHeader64); ok {
 		is64 = true
 	}
-
 	ptrSize := uint32(4)
 	if is64 {
 		ptrSize = 8
 	}
 
-	// Imports: map IAT slot VA -> function name
 	var importDir pe.DataDirectory
 	switch oh := f.OptionalHeader.(type) {
 	case *pe.OptionalHeader32:
@@ -1379,80 +1393,94 @@ func peSymbolMap(f *pe.File, imageBase uint64) map[uint64]string {
 			importDir = oh.DataDirectory[1]
 		}
 	}
-	if importDir.VirtualAddress != 0 && importDir.Size != 0 {
-		var sec *pe.Section
+	if importDir.VirtualAddress == 0 || importDir.Size == 0 {
+		return out
+	}
+	var sec *pe.Section
+	for _, s := range f.Sections {
+		if importDir.VirtualAddress >= s.VirtualAddress &&
+			importDir.VirtualAddress < s.VirtualAddress+s.VirtualSize {
+			sec = s
+			break
+		}
+	}
+	if sec == nil {
+		return out
+	}
+	secData, err := sec.Data()
+	if err != nil {
+		return out
+	}
+	dirOff := importDir.VirtualAddress - sec.VirtualAddress
+	for i := 0; i < 500; i++ {
+		off := int(dirOff) + i*20
+		if off+20 > len(secData) {
+			break
+		}
+		origThunk := binary.LittleEndian.Uint32(secData[off:])
+		nameRVA := binary.LittleEndian.Uint32(secData[off+12:])
+		firstThunk := binary.LittleEndian.Uint32(secData[off+16:])
+		if origThunk == 0 && nameRVA == 0 && firstThunk == 0 {
+			break
+		}
+		dll := readPEString(f, nameRVA)
+		lookupThunk := origThunk
+		if lookupThunk == 0 {
+			lookupThunk = firstThunk
+		}
+		// Read thunk array (section data cached: one read per section,
+		// not per imported DLL)
+		var thunkData []byte
 		for _, s := range f.Sections {
-			if importDir.VirtualAddress >= s.VirtualAddress &&
-				importDir.VirtualAddress < s.VirtualAddress+s.VirtualSize {
-				sec = s
+			if lookupThunk >= s.VirtualAddress &&
+				lookupThunk < s.VirtualAddress+s.VirtualSize {
+				sd, ok := secCache[s]
+				if !ok {
+					sd, _ = s.Data()
+					secCache[s] = sd
+				}
+				if off := lookupThunk - s.VirtualAddress; int(off) < len(sd) {
+					thunkData = sd[off:]
+				}
 				break
 			}
 		}
-		if sec != nil {
-			if secData, err := sec.Data(); err == nil {
-				dirOff := importDir.VirtualAddress - sec.VirtualAddress
-				for i := 0; i < 500; i++ {
-					off := int(dirOff) + i*20
-					if off+20 > len(secData) {
-						break
-					}
-					origThunk := binary.LittleEndian.Uint32(secData[off:])
-					nameRVA := binary.LittleEndian.Uint32(secData[off+12:])
-					firstThunk := binary.LittleEndian.Uint32(secData[off+16:])
-					if origThunk == 0 && nameRVA == 0 && firstThunk == 0 {
-						break
-					}
-					lookupThunk := origThunk
-					if lookupThunk == 0 {
-						lookupThunk = firstThunk
-					}
-					// Read thunk array (section data cached: one read per section,
-					// not per imported DLL)
-					var thunkData []byte
-					for _, s := range f.Sections {
-						if lookupThunk >= s.VirtualAddress &&
-							lookupThunk < s.VirtualAddress+s.VirtualSize {
-							sd, ok := secCache[s]
-							if !ok {
-								sd, _ = s.Data()
-								secCache[s] = sd
-							}
-							if off := lookupThunk - s.VirtualAddress; int(off) < len(sd) {
-								thunkData = sd[off:]
-							}
-							break
-						}
-					}
-					iatRVA := firstThunk
-					for j := 0; len(thunkData) >= int(ptrSize) && j < 2000; j++ {
-						var tv uint64
-						if is64 {
-							tv = binary.LittleEndian.Uint64(thunkData[:8])
-						} else {
-							tv = uint64(binary.LittleEndian.Uint32(thunkData[:4]))
-						}
-						if tv == 0 {
-							break
-						}
-						ordFlag := uint64(1) << 63
-						if !is64 {
-							ordFlag = uint64(1) << 31
-						}
-						var name string
-						if tv&ordFlag != 0 {
-							name = fmt.Sprintf("Ordinal_%d", tv&0xFFFF)
-						} else {
-							name = readPEString(f, uint32(tv)+2)
-						}
-						if name != "" {
-							syms[imageBase+uint64(iatRVA)] = name
-						}
-						thunkData = thunkData[ptrSize:]
-						iatRVA += ptrSize
-					}
-				}
+		iatRVA := firstThunk
+		for j := 0; len(thunkData) >= int(ptrSize) && j < 2000; j++ {
+			var tv uint64
+			if is64 {
+				tv = binary.LittleEndian.Uint64(thunkData[:8])
+			} else {
+				tv = uint64(binary.LittleEndian.Uint32(thunkData[:4]))
 			}
+			if tv == 0 {
+				break
+			}
+			ordFlag := uint64(1) << 63
+			if !is64 {
+				ordFlag = uint64(1) << 31
+			}
+			ref := importRef{dll: dll}
+			if tv&ordFlag != 0 {
+				ref.ordinal = uint32(tv & 0xFFFF)
+			} else {
+				ref.name = readPEString(f, uint32(tv)+2)
+			}
+			if ref.name != "" || ref.ordinal != 0 {
+				out[imageBase+uint64(iatRVA)] = ref
+			}
+			thunkData = thunkData[ptrSize:]
+			iatRVA += ptrSize
 		}
+	}
+	return out
+}
+
+func peSymbolMap(f *pe.File, imageBase uint64) map[uint64]string {
+	syms := make(map[uint64]string)
+	// Imports: map IAT slot VA -> function name
+	for va, ref := range peImports(f, imageBase) {
+		syms[va] = ref.display()
 	}
 
 	// Exports: map function VA -> name. Skip forwarders (their RVA is a string in

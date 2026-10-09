@@ -1023,6 +1023,8 @@ type cgBinary struct {
 	// layoutStarts are table entries found only from the padding layout; the
 	// decompile host leaves them out for the same reason.
 	layoutStarts map[uint32]bool
+	path         string               // the file, for DLLs beside it
+	imports      map[uint64]importRef // PE: IAT slot VA -> imported function
 	// purge caches the stack bytes a 32-bit callee pops (instruction_search).
 	purge   map[uint32]int
 	purgeMu sync.Mutex
@@ -1194,6 +1196,8 @@ func cgOpenPE(path string, withPDB bool) (*cgBinary, error) {
 		funcTable:      funcTable,
 		innerStarts:    innerStarts,
 		layoutStarts:   layoutStarts,
+		path:           path,
+		imports:        peImports(f, imageBase),
 		closer:         func() { f.Close() },
 	}, nil
 }

@@ -1006,6 +1006,16 @@ func describeCallTarget(inst x86asm.Inst, state abstractState, bin *cgBinary, rv
 				}
 				return fmt.Sprintf("[0x%x]", va)
 			}
+			if !bin.is64 && arg.Base == 0 && arg.Index == 0 { // x86 call [IAT slot]
+				va := uint64(uint32(arg.Disp))
+				if ref, ok := bin.imports[va]; ok {
+					return fmt.Sprintf("[0x%x] %s!%s", va, strings.TrimSuffix(strings.ToLower(ref.dll), ".dll"), ref.display())
+				}
+				if name, ok := bin.symbols[va]; ok {
+					return fmt.Sprintf("[0x%x] %s", va, name)
+				}
+				return fmt.Sprintf("[0x%x]", va)
+			}
 		case x86asm.Reg:
 			value := readRegister(state, arg)
 			if value.kind == 1 && len(value.consts) == 1 {
@@ -1199,54 +1209,83 @@ func instructionUsuallyWritesFirst(op string) bool {
 	return true
 }
 
-// calleePurge is the byte count a direct 32-bit callee pops on return (the
-// N of its ret N), found by walking the callee's control flow; 0 when it
-// returns with a plain ret, is not found, or the call is indirect.
+// calleePurge is the byte count a 32-bit callee pops on return (the N of its
+// ret N): for a direct call, found by walking the callee's control flow --
+// a thunk that jumps through the import table takes the import's size --
+// and for call [IAT slot], read from the imported DLL (importPurge). 0 when
+// the callee returns with a plain ret or cannot be resolved.
 func calleePurge(bin *cgBinary, inst x86asm.Inst, va uint64) int {
 	if bin.is64 || len(inst.Args) == 0 {
 		return 0
 	}
-	rel, ok := inst.Args[0].(x86asm.Rel)
+	switch a := inst.Args[0].(type) {
+	case x86asm.Mem:
+		if a.Base == 0 && a.Index == 0 {
+			return bin.slotPurge(uint64(uint32(a.Disp)))
+		}
+		return 0
+	case x86asm.Rel:
+		target := uint32(int64(va-bin.imageBase) + int64(inst.Len) + int64(a))
+		bin.purgeMu.Lock()
+		n, ok := bin.purge[target]
+		bin.purgeMu.Unlock()
+		if ok {
+			return n
+		}
+		n = bin.walkPurge(target)
+		bin.purgeMu.Lock()
+		if bin.purge == nil {
+			bin.purge = map[uint32]int{}
+		}
+		bin.purge[target] = n
+		bin.purgeMu.Unlock()
+		return n
+	}
+	return 0
+}
+
+// walkPurge follows a local function's control flow to its ret N.
+func (bin *cgBinary) walkPurge(target uint32) int {
+	sec := sectionContainingRVA(bin.execSections, target)
+	if sec == nil {
+		return 0
+	}
+	seen := map[int]bool{}
+	stack := []int{int(target - sec.rva)}
+	for len(stack) > 0 && len(seen) < 4000 {
+		pos := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if pos < 0 || pos >= len(sec.data) || seen[pos] {
+			continue
+		}
+		seen[pos] = true
+		in, err := x86asm.Decode(sec.data[pos:], 32)
+		if err != nil || in.Len == 0 || sec.data[pos] == 0xCC {
+			continue
+		}
+		if in.Op == x86asm.RET {
+			if imm, ok := in.Args[0].(x86asm.Imm); ok {
+				return int(imm)
+			}
+			return 0
+		}
+		if in.Op == x86asm.JMP {
+			if m, ok := in.Args[0].(x86asm.Mem); ok && m.Base == 0 && m.Index == 0 {
+				return bin.slotPurge(uint64(uint32(m.Disp)))
+			}
+		}
+		stack = append(stack, flowSuccessors(sec.data, in, pos)...)
+	}
+	return 0
+}
+
+// slotPurge is the argument size of the function imported into an IAT slot.
+func (bin *cgBinary) slotPurge(slot uint64) int {
+	ref, ok := bin.imports[slot]
 	if !ok {
 		return 0
 	}
-	target := uint32(int64(va-bin.imageBase) + int64(inst.Len) + int64(rel))
-	bin.purgeMu.Lock()
-	n, ok := bin.purge[target]
-	bin.purgeMu.Unlock()
-	if ok {
-		return n
-	}
-	if sec := sectionContainingRVA(bin.execSections, target); sec != nil {
-		seen := map[int]bool{}
-		stack := []int{int(target - sec.rva)}
-		for len(stack) > 0 && len(seen) < 4000 {
-			pos := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			if pos < 0 || pos >= len(sec.data) || seen[pos] {
-				continue
-			}
-			seen[pos] = true
-			in, err := x86asm.Decode(sec.data[pos:], 32)
-			if err != nil || in.Len == 0 || sec.data[pos] == 0xCC {
-				continue
-			}
-			if in.Op == x86asm.RET {
-				if imm, ok := in.Args[0].(x86asm.Imm); ok {
-					n = int(imm)
-				}
-				break
-			}
-			stack = append(stack, flowSuccessors(sec.data, in, pos)...)
-		}
-	}
-	bin.purgeMu.Lock()
-	if bin.purge == nil {
-		bin.purge = map[uint32]int{}
-	}
-	bin.purge[target] = n
-	bin.purgeMu.Unlock()
-	return n
+	return importPurge(bin.path, ref)
 }
 
 func clobberCallRegisters(state *abstractState, bin *cgBinary) {
