@@ -9,7 +9,7 @@ require (
 	github.com/google/jsonschema-go v0.4.2
 	github.com/kayrus/putty v1.0.5
 	github.com/knewstimek/gopdb v0.1.1
-	github.com/knewstimek/gosleigh v0.0.0-20261009111139-89d5866ec08a
+	github.com/knewstimek/gosleigh v0.1.0
 	github.com/miekg/dns v1.1.72
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/pkg/sftp v1.13.10

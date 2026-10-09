@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/knewstimek/gopdb"
 	"github.com/knewstimek/gosleigh/pkg/address"
 	"github.com/knewstimek/gosleigh/pkg/decomp"
 	"github.com/knewstimek/gosleigh/pkg/loader"
@@ -372,7 +373,36 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 		return nil, err
 	}
 	t.spec, t.host = spec.ID, host
+	t.findNoReturn()
 	return t, nil
+}
+
+// findNoReturn marks non-returning functions and import slots: known names
+// (Ghidra's lists), the PDB's no-return flags, then discovery from call
+// sites.
+func (t *decompileTarget) findNoReturn() {
+	h := t.host
+	elf := strings.HasPrefix(t.format, "ELF")
+	seed := map[uint64]bool{}
+	for va, name := range h.funcs {
+		if name != "" && knownNoReturn(name, elf) {
+			seed[va] = true
+		}
+	}
+	if h.pdb != nil {
+		for va, f := range h.pdb.funcs {
+			if f.proc != nil && f.proc.Flags&pdb.ProcNoReturn != 0 {
+				seed[va] = true
+			}
+		}
+	}
+	h.noRetImports = map[uint64]bool{}
+	for va, name := range h.imports {
+		if knownNoReturn(name, elf) {
+			h.noRetImports[va] = true
+		}
+	}
+	h.noRet = t.discoverNoReturn(seed)
 }
 
 // decompHost answers the decompiler core's symbol queries from the binary's
@@ -388,6 +418,11 @@ type decompHost struct {
 	named    int
 	pdb      *pdbInfo    // nil without a matching PDB
 	roRanges [][2]uint64 // non-writable sections
+	// noRet are functions that never return (known names, PDB flags,
+	// discovered from call sites); noRetImports the import slots of
+	// non-returning library functions.
+	noRet        map[uint64]bool
+	noRetImports map[uint64]bool
 }
 
 // addNames takes PDB function names and entries. A PDB entry is a real
@@ -426,6 +461,13 @@ func (h *decompHost) nameOf(va uint64) string {
 func (h *decompHost) QueryFunction(a address.Address) (pcode.HostFunction, bool) {
 	raw, ok := h.funcs[a.Offset]
 	if !ok {
+		// The import slot of a non-returning library function stands for that
+		// function, as Ghidra's host answers for an external reference: the
+		// core turns the indirect call into a direct call to the slot and must
+		// still know the callee does not return. Other slots stay unanswered.
+		if h.noRetImports[a.Offset] {
+			return pcode.HostFunction{Name: h.imports[a.Offset], ExtraPop: pcode.ExtrapopUnknown, NoReturn: true}, true
+		}
 		return pcode.HostFunction{}, false
 	}
 	hf := pcode.HostFunction{ExtraPop: pcode.ExtrapopUnknown}
@@ -436,6 +478,9 @@ func (h *decompHost) QueryFunction(a address.Address) (pcode.HostFunction, bool)
 	}
 	hf.Name = h.nameOf(a.Offset)
 	hf.Namespace, _ = displayParts(raw)
+	if h.noRet[a.Offset] {
+		hf.NoReturn = true
+	}
 	return hf, true
 }
 

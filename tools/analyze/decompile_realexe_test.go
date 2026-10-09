@@ -64,6 +64,37 @@ func TestDecompileRealexeAdapter(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Logf("%s: pdb=%q used=%q note=%q", work, pdb, target.pdb, target.pdbNote)
+
+			// Non-returning functions vs the ones Ghidra's analysis marked
+			// (the work's symbols.json, written by the golden pipeline).
+			var syms struct {
+				Functions []struct {
+					Entry    uint64 `json:"entry"`
+					NoReturn bool   `json:"noreturn"`
+					Thunk    bool   `json:"thunk"`
+				} `json:"functions"`
+			}
+			if data, err := os.ReadFile(filepath.Join(dir, work, "symbols.json")); err == nil && json.Unmarshal(data, &syms) == nil {
+				var hit, missed int
+				ghidra := map[uint64]bool{}
+				for _, f := range syms.Functions {
+					if f.NoReturn && !f.Thunk {
+						ghidra[f.Entry] = true
+						if target.host.noRet[f.Entry] {
+							hit++
+						} else {
+							missed++
+						}
+					}
+				}
+				extra := 0
+				for va := range target.host.noRet {
+					if !ghidra[va] {
+						extra++
+					}
+				}
+				t.Logf("%s: non-returning functions: %d match Ghidra, %d missed, %d extra", work, hit, missed, extra)
+			}
 			type result struct {
 				Name   string `json:"name"`
 				Output string `json:"output"`

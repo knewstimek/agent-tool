@@ -80,6 +80,16 @@ func tailCallOverrides(t *decompileTarget, entry uint64) map[uint64]string {
 					work = append(work, target)
 				}
 				nextVA = 0
+			case x86asm.CALL:
+				// A call to a function that never returns ends the path; Ghidra
+				// records it as a CALL_RETURN flow override too.
+				if direct && t.host.noRet[target] {
+					if out == nil {
+						out = map[uint64]string{}
+					}
+					out[va] = "CALL_RETURN"
+					nextVA = 0
+				}
 			default:
 				if direct && isCondJump(inst.Op) {
 					work = append(work, target)

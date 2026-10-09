@@ -239,6 +239,18 @@ func execSectionForRVA(f *pe.File, rva uint32) (sec *pe.Section, data []byte, ok
 // sections (real code entry points), sorted ascending, plus an rva->label map.
 // Forwarders and data exports (tables/globals in .rdata/.data) are excluded so
 // the set is purely function starts.
+// rvaInExecSection is execSectionForRVA's test without reading the section:
+// Data() reads the whole section on every call, which cost over a second per
+// call on a large program with many exports.
+func rvaInExecSection(f *pe.File, rva uint32) bool {
+	for _, s := range f.Sections {
+		if uint64(rva) >= uint64(s.VirtualAddress) && uint64(rva) < uint64(s.VirtualAddress)+uint64(s.VirtualSize) {
+			return s.Characteristics&(imageScnMemExecute|imageScnCntCode) != 0
+		}
+	}
+	return false
+}
+
 func codeExportStarts(f *pe.File) ([]uint32, map[uint32]string) {
 	exports := parseExports(f)
 	if len(exports) == 0 {
@@ -250,7 +262,7 @@ func codeExportStarts(f *pe.File) ([]uint32, map[uint32]string) {
 		if e.forwarder {
 			continue
 		}
-		if _, _, ok := execSectionForRVA(f, e.rva); !ok {
+		if !rvaInExecSection(f, e.rva) {
 			continue // data export, not a code start
 		}
 		if _, seen := labels[e.rva]; !seen {
