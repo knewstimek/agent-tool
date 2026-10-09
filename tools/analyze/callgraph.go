@@ -784,8 +784,9 @@ func cgOpenPE(path string, withPDB bool) (*cgBinary, error) {
 		sweepMode = 64
 	}
 	var sweep []uint32
+	id := fileIdentity(path)
 	for _, sec := range execSections {
-		sweep = append(sweep, linearSweepStarts(sec.data, sec.rva, sweepMode)...)
+		sweep = append(sweep, cachedSweepStarts(id, sec.data, sec.rva, sweepMode)...)
 	}
 	if len(sweep) > 0 {
 		funcTable = mergeStartsIntoFuncTable(funcTable, sweep, execSections)

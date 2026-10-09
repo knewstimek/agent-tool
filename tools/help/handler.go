@@ -1073,6 +1073,9 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   later calls on the same file reuse the loaded worker and return in well under a
   second, so decompile functions one after another rather than re-planning around
   the load. An idle worker exits after 2 minutes; a changed file is reloaded.
+  Whole-binary scans (linear sweep, call sites) are cached under the user cache
+  directory, so a later session loads the same file faster
+  (AGENT_TOOL_NO_ANALYSIS_CACHE=1 disables this).
 
   What the host knows comes from the file: function starts (.pdata, exports, symbol
   tables, call targets, entry point), import names, read-only sections, and tail-call

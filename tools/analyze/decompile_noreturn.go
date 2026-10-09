@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -102,6 +103,28 @@ func (t *decompileTarget) discoverNoReturn(seed map[uint64]bool) map[uint64]bool
 // across goroutines: each walks a contiguous range with its own visited set
 // (functions rarely overlap; a site found twice is kept once).
 func (t *decompileTarget) suspiciousSites() []callSite {
+	// The sites depend only on the file and the starts walked from, so a
+	// later load of the same binary reads them back (analysis cache).
+	cache := analysisCachePath("callsites", t.fileID, hashUint64s(t.host.starts), fmt.Sprint(t.is64))
+	if vals, ok := loadUint64s(cache); ok && len(vals)%3 == 0 {
+		out := make([]callSite, len(vals)/3)
+		for i := range out {
+			out[i] = callSite{at: vals[3*i], target: vals[3*i+1], fallthru: vals[3*i+2]}
+		}
+		return out
+	}
+	out := t.scanSuspiciousSites()
+	vals := make([]uint64, 0, 3*len(out))
+	for _, s := range out {
+		vals = append(vals, s.at, s.target, s.fallthru)
+	}
+	storeUint64s(cache, vals)
+	return out
+}
+
+// scanSuspiciousSites walks every known function for the call sites the
+// discovery weighs, on parallel workers.
+func (t *decompileTarget) scanSuspiciousSites() []callSite {
 	starts := t.host.starts
 	n := runtime.GOMAXPROCS(0)
 	if n > 16 {

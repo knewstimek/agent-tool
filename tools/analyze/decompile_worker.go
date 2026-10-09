@@ -164,6 +164,7 @@ type decompileTarget struct {
 	tracked     map[string]uint64
 	trackedDesc string
 	golang      bool   // built by the Go toolchain
+	fileID      string // path, size and mtime, for the analysis cache
 	pdb         string // PDB whose names are applied
 	pdbNote     string // why no PDB is applied (empty when none was expected)
 	is64        bool
@@ -334,7 +335,7 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 		bits = 64
 	}
 
-	t := &decompileTarget{format: bin.format + " " + bin.arch}
+	t := &decompileTarget{format: bin.format + " " + bin.arch, fileID: fileIdentity(path)}
 	var sections []decomp.Section
 	compiler := specs.CompilerGCC
 	var host *decompHost
