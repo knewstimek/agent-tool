@@ -255,7 +255,7 @@ func (pi *pdbInfo) prototype(va uint64) *pcode.HostFunction {
 }
 
 // dataAt is the global variable whose storage contains va.
-func (pi *pdbInfo) dataAt(va uint64) (pdbData, bool) {
+func (pi *pdbInfo) globalAt(va uint64) (pdbData, bool) {
 	i := sort.Search(len(pi.data), func(i int) bool { return pi.data[i].va > va })
 	if i == 0 {
 		return pdbData{}, false
@@ -315,23 +315,20 @@ func splitQualified(q string) (ns, name string) {
 	return q[:last], q[last+2:]
 }
 
-// QueryData answers the core's global-symbol queries from PDB data symbols.
+// QueryData answers the core's global-symbol queries from the debug
+// information's data symbols.
 // C++ parity of the consumer: ScopeGhidra::findContainer.
 func (h *decompHost) QueryData(a address.Address) (pcode.HostData, bool) {
-	if h.pdb == nil {
+	if h.debug == nil {
 		return pcode.HostData{}, false
 	}
-	d, ok := h.pdb.dataAt(a.Offset)
+	raw, start, t, ok := h.debug.dataAt(a.Offset)
 	if !ok {
 		return pcode.HostData{}, false
 	}
-	t := h.pdb.types.datatype(d.typ)
-	if t == nil {
-		return pcode.HostData{}, false
-	}
-	ns, name := displayParts(d.name)
-	return pcode.HostData{Name: name, Namespace: ns, Addr: address.Address{Space: a.Space, Offset: d.va},
-		Size: t.Size(), Type: t, ReadOnly: h.readOnly(d.va)}, true
+	ns, name := displayParts(raw)
+	return pcode.HostData{Name: name, Namespace: ns, Addr: address.Address{Space: a.Space, Offset: start},
+		Size: t.Size(), Type: t, ReadOnly: h.readOnly(start)}, true
 }
 
 // Property marks addresses in non-writable sections read-only, as Ghidra's

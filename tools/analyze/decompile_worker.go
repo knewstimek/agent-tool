@@ -1,6 +1,8 @@
 package analyze
 
 import (
+	"bytes"
+	"debug/dwarf"
 	"debug/elf"
 	"debug/pe"
 	"encoding/json"
@@ -16,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/knewstimek/gopdb"
 	"github.com/knewstimek/gosleigh/pkg/address"
 	"github.com/knewstimek/gosleigh/pkg/decomp"
 	"github.com/knewstimek/gosleigh/pkg/loader"
@@ -135,6 +136,7 @@ type decompileTarget struct {
 	spec        string
 	tracked     map[string]uint64
 	trackedDesc string
+	golang      bool   // built by the Go toolchain
 	pdb         string // PDB whose names are applied
 	pdbNote     string // why no PDB is applied (empty when none was expected)
 	is64        bool
@@ -211,14 +213,10 @@ func stripTypeDefinitions(c string) string {
 // hostLocals are the PDB names of the function's stack variables, nil when
 // there are none.
 func (t *decompileTarget) hostLocals(entry uint64) map[int64]string {
-	if !pdbLocalNames || t.host.pdb == nil {
+	if !pdbLocalNames || t.host.debug == nil {
 		return nil
 	}
-	f := t.host.pdb.funcs[entry]
-	if f == nil || f.proc == nil {
-		return nil
-	}
-	return localNames(f.proc, t.is64)
+	return t.host.debug.localNames(entry, t.is64)
 }
 
 // resolve turns a target (hex address or symbol name) into a function entry.
@@ -231,7 +229,7 @@ func (t *decompileTarget) resolve(target string) (uint64, string, error) {
 		if e, ok := t.host.lookupName(target); ok {
 			return e, "", nil
 		}
-		return 0, "", fmt.Errorf("%q is neither a hex address nor a function name in this file (names come from PE exports, the matching PDB, and ELF symbol tables; use the qualified PDB form, e.g. Class::Method); pass va as hex, e.g. 0x140001000", target)
+		return 0, "", fmt.Errorf("%q is neither a hex address nor a function name in this file (names come from PE exports, the matching PDB, DWARF and ELF symbol tables; use the qualified form, e.g. Class::Method or main.main); pass va as hex, e.g. 0x140001000", target)
 	}
 	if !t.inExec(va) {
 		return 0, "", fmt.Errorf("0x%x is not inside an executable section; check the address with analyze pe_info/elf_info", va)
@@ -320,12 +318,14 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 			var pi *pdbInfo
 			pi, t.pdbNote = openPDBInfo(path, pdbPath, f, bin.imageBase, bin.is64)
 			if pi != nil {
-				t.pdb, host.pdb = pi.path, pi
-				names := make(map[uint64]string, len(pi.funcs))
-				for va, fn := range pi.funcs {
-					names[va] = fn.name
-				}
-				host.addNames(names, bin)
+				t.pdb, host.debug = pi.path, pi
+				host.addNames(pi.functionNames(), bin)
+			}
+		}
+		// Images built by MinGW or Go carry DWARF instead of a PDB.
+		if host.debug == nil {
+			if dd, err := f.DWARF(); err == nil {
+				t.useDWARF(host, dd, bin)
 			}
 		}
 		// The segment bases Ghidra's PE loader sets for every function (FS for
@@ -356,6 +356,9 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 			sections = append(sections, decomp.Section{Name: s.Name, VMA: s.Addr, Data: data})
 		}
 		host = newELFHost(bin)
+		if dd, err := f.DWARF(); err == nil {
+			t.useDWARF(host, dd, bin)
+		}
 		for _, s := range f.Sections {
 			if s.Flags&elf.SHF_ALLOC != 0 && s.Flags&elf.SHF_WRITE == 0 && s.Size > 0 {
 				host.roRanges = append(host.roRanges, [2]uint64{s.Addr, s.Addr + s.Size})
@@ -379,6 +382,11 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 		t.exec = append(t.exec, e)
 	}
 
+	// Go-built code passes arguments in its own register ABI; Ghidra
+	// decompiles such binaries with its golang compiler spec.
+	if isGoBinary(sections) {
+		compiler, t.golang = specs.CompilerGolang, true
+	}
 	spec, err := specs.X86(bits, compiler)
 	if err != nil {
 		return nil, err
@@ -391,6 +399,39 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 	return t, nil
 }
 
+// useDWARF makes the image's DWARF the host's debug information.
+func (t *decompileTarget) useDWARF(h *decompHost, d *dwarf.Data, bin *cgBinary) {
+	ps := int32(4)
+	if bin.is64 {
+		ps = 8
+	}
+	di := loadDWARFInfo("DWARF (embedded)", d, ps)
+	if len(di.funcs) == 0 && len(di.data) == 0 {
+		return
+	}
+	t.pdb, h.debug = di.src, di
+	h.addNames(di.functionNames(), bin)
+}
+
+// isGoBinary reports Go toolchain output: ELF section names, or the build
+// information record Go places in every executable (0xFF " Go buildinf:").
+func isGoBinary(sections []decomp.Section) bool {
+	for _, s := range sections {
+		switch s.Name {
+		case ".go.buildinfo", ".gopclntab", ".gosymtab":
+			return true
+		}
+	}
+	magic := []byte("\xff Go buildinf:")
+	for _, s := range sections {
+		n := min(len(s.Data), 1<<20)
+		if bytes.Contains(s.Data[:n], magic) {
+			return true
+		}
+	}
+	return false
+}
+
 // findNoReturn marks non-returning functions and import slots: known names
 // (Ghidra's lists), the PDB's no-return flags, then discovery from call
 // sites.
@@ -399,20 +440,18 @@ func (t *decompileTarget) findNoReturn() {
 	elf := strings.HasPrefix(t.format, "ELF")
 	seed := map[uint64]bool{}
 	for va, name := range h.funcs {
-		if name != "" && knownNoReturn(name, elf) {
+		if name != "" && knownNoReturn(name, elf, t.golang) {
 			seed[va] = true
 		}
 	}
-	if h.pdb != nil {
-		for va, f := range h.pdb.funcs {
-			if f.proc != nil && f.proc.Flags&pdb.ProcNoReturn != 0 {
-				seed[va] = true
-			}
+	if h.debug != nil {
+		for _, va := range h.debug.noReturn() {
+			seed[va] = true
 		}
 	}
 	h.noRetImports = map[uint64]bool{}
 	for va, name := range h.imports {
-		if knownNoReturn(name, elf) {
+		if knownNoReturn(name, elf, t.golang) {
 			h.noRetImports[va] = true
 		}
 	}
@@ -430,7 +469,7 @@ type decompHost struct {
 	starts   []uint64          // sorted keys of funcs
 	imports  map[uint64]string // import slot address -> imported name
 	named    int
-	pdb      *pdbInfo    // nil without a matching PDB
+	debug    debugSource // PDB or DWARF; nil without debug information
 	roRanges [][2]uint64 // non-writable sections
 	// noRet are functions that never return (known names, PDB flags,
 	// discovered from call sites); noRetImports the import slots of
@@ -485,8 +524,8 @@ func (h *decompHost) QueryFunction(a address.Address) (pcode.HostFunction, bool)
 		return pcode.HostFunction{}, false
 	}
 	hf := pcode.HostFunction{ExtraPop: pcode.ExtrapopUnknown}
-	if h.pdb != nil {
-		if p := h.pdb.prototype(a.Offset); p != nil {
+	if h.debug != nil {
+		if p := h.debug.prototype(a.Offset); p != nil {
 			hf = *p
 		}
 	}

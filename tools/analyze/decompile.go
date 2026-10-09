@@ -176,7 +176,7 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 	}
 	sb.WriteString(".\n")
 	if load.PDB != "" {
-		fmt.Fprintf(&sb, "PDB: %s (function names, prototypes, struct/enum types and global data applied; local variables are still recovered by the decompiler).\n", load.PDB)
+		fmt.Fprintf(&sb, "Debug info: %s (function names, prototypes, struct/enum types, global data and named locals applied).\n", load.PDB)
 	} else {
 		if load.PDBNote != "" {
 			fmt.Fprintf(&sb, "PDB: %s.\n", load.PDBNote)

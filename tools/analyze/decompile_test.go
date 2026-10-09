@@ -3,21 +3,63 @@ package analyze
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
 
 func TestDecompileFixtureEntry(t *testing.T) {
-	out, err := opDecompile(context.Background(), AnalyzeInput{FilePath: testBinary, VA: "entry, 0x1", MaxOutputChars: 100000})
+	// The fixture is a Go program: Go ABI spec, DWARF names and types.
+	out, err := opDecompile(context.Background(), AnalyzeInput{FilePath: testBinary, VA: "main.main, 0x1", MaxOutputChars: 100000})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		"Decompiled 1/2 function(s)",
-		"PE x64, x86:LE:64:default:windows",
-		"// entry @ 0x",
+		"PE x64, x86:LE:64:default:golang",
+		"Debug info: DWARF (embedded)",
+		"// main.main @ 0x",
 		"0x1: input error: 0x1 is not inside an executable section",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// A Go-built ELF carries DWARF: parameter names and types, Go's result
+// convention (results recorded as ~r0 parameters) and the Go register ABI
+// must all come through.
+func TestDecompileGoELFWithDWARF(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "main.go")
+	code := "package main\n\nimport \"os\"\n\n//go:noinline\nfunc addMul(a, b int) int { return (a + b) * 3 }\n\nfunc main() { os.Exit(addMul(len(os.Args), 2)) }\n"
+	if err := os.WriteFile(src, []byte(code), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module m\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "prog.elf")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0", "GOFLAGS=")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	out, err := opDecompile(context.Background(), AnalyzeInput{FilePath: bin, VA: "main.addMul, main.main", MaxOutputChars: 100000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"ELF x64, x86:LE:64:default:golang",
+		"Debug info: DWARF (embedded)",
+		"long main.addMul(long a, long b)",
+		"return (a + b) * 3;",
+		"main.addMul(os_Args.len, 2)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
@@ -44,7 +86,7 @@ func TestDecompileRequiresVA(t *testing.T) {
 func TestDecompileCancelledContextKillsWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	out, err := opDecompile(ctx, AnalyzeInput{FilePath: testBinary, VA: "entry"})
+	out, err := opDecompile(ctx, AnalyzeInput{FilePath: testBinary, VA: "main.main"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -630,7 +630,7 @@ Parameters: session_id, operation, adapter_command, adapter_args, address, launc
 
 ## analyze
 Static binary analysis tool with 23 operations:
-- decompile: Decompile x86/x64 PE/ELF functions to C (Ghidra-equivalent Gosleigh core; va = hex address or symbol, up to 16 comma-separated; timeout_sec; a matching PE PDB supplies names, prototypes, types and globals; pdb_path to override)
+- decompile: Decompile x86/x64 PE/ELF functions to C (Ghidra-equivalent Gosleigh core; va = hex address or symbol, up to 16 comma-separated; timeout_sec; a matching PDB or embedded DWARF supplies names, prototypes, types, globals and locals; Go binaries use Go's ABI; pdb_path to override)
 - disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped)
 - instruction_search: Semantic x86/x64 mnemonic/register/immediate search with exhaustive executable-offset recovery, CFG confidence, target/result filters, and bounded value tracing to call/tail-call arguments
 - pe_info: PE header parsing with RWX section warnings
@@ -1065,8 +1065,9 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   analyze(operation="decompile", file_path="/path/to/game.exe", va="0x140001000")
   analyze(operation="decompile", file_path="/path/to/libfoo.so", va="parse_header, 0x401230")
 
-  Supports x86 and x64 PE (Visual Studio conventions) and ELF (gcc conventions). The
-  architecture, image layout and calling convention are detected from the file.
+  Supports x86 and x64 PE (Visual Studio conventions) and ELF (gcc conventions);
+  binaries built by the Go toolchain use Go's register ABI (Ghidra's golang spec).
+  The architecture, image layout and calling convention are detected from the file.
 
   What the host knows comes from the file: function starts (.pdata, exports, symbol
   tables, call targets, entry point), import names, read-only sections, and tail-call
@@ -1075,16 +1076,22 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   For PE images a matching PDB adds, as Ghidra's PDB analysis does: function names
   (Class::Method), prototypes (calling convention, this pointer, parameter names and
   types, return type, no-return), struct/class/union/enum types with their fields,
-  and named, typed global data. Code built without full debug info is named and
-  typed from its decorated public names (MSVC demangler). The PDB is found via the
-  image's RSDS record (its path, then beside the image) and used only when its GUID
-  matches; pdb_path points to it elsewhere, pdb_path="none" turns it off.
+  and named, typed global data -- plus local variable names, which Ghidra leaves to
+  the decompiler. Code built without full debug info is named and typed from its
+  decorated public names (MSVC demangler). The PDB is found via the image's RSDS
+  record (its path, then beside the image) and used only when its GUID matches;
+  pdb_path points to it elsewhere, pdb_path="none" turns it off.
 
-  Not applied: local variable names/types (recovered by the decompiler), DWARF types
-  for ELF, and bitfield members. Without a PDB, calls to statically linked
-  non-returning functions (e.g. _CxxThrowException) are not detected and may show
-  code after them. Type definitions are omitted from the output to save tokens; use
-  struct_layout for a layout.
+  Without a PDB, embedded DWARF (ELF, MinGW/Go PE) supplies the same: names,
+  prototypes, types, globals and stack locals.
+
+  Non-returning functions are found as Ghidra's analyzers do: known names (exit,
+  abort, ExitProcess, _CxxThrowException, Go runtime panics, ...), debug-info
+  no-return flags, and call sites followed by padding or another function.
+
+  Not applied: bitfield members, local variable types, locals of x64 RBP-based
+  frames. Go 386 results returned on the stack are not recovered. Type definitions
+  are omitted from the output to save tokens; use struct_layout for a layout.
 
   An address inside a function is moved to its start when x64 .pdata gives exact
   extents; otherwise the output carries a note -- confirm the start with function_at.

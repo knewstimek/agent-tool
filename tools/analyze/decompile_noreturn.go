@@ -33,7 +33,14 @@ var noReturnNamesELF = []string{
 // default).
 const noReturnThreshold = 3
 
-func knownNoReturn(name string, elf bool) bool {
+func knownNoReturn(name string, elf, golang bool) bool {
+	if golang {
+		for _, x := range noReturnNamesGo {
+			if x == name {
+				return true
+			}
+		}
+	}
 	n := strings.TrimLeft(name, "_")
 	list := noReturnNamesPE
 	if elf {
