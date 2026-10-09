@@ -176,11 +176,13 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 	}
 	sb.WriteString(".\n")
 	if load.PDB != "" {
-		fmt.Fprintf(&sb, "PDB: %s (function names applied).\n", load.PDB)
-	} else if load.PDBNote != "" {
-		fmt.Fprintf(&sb, "PDB: %s.\n", load.PDBNote)
+		fmt.Fprintf(&sb, "PDB: %s (function names, prototypes, struct/enum types and global data applied; local variables are still recovered by the decompiler).\n", load.PDB)
+	} else {
+		if load.PDBNote != "" {
+			fmt.Fprintf(&sb, "PDB: %s.\n", load.PDBNote)
+		}
+		sb.WriteString("No debug types or prototypes are applied: parameter/local types and callee signatures are inferred by the decompiler (Ghidra-equivalent core), so treat names like param_1/local_10 and undefined types as recovered, not declared.\n")
 	}
-	sb.WriteString("No PDB/DWARF types or prototypes are applied: parameter/local types and callee signatures are inferred by the decompiler (Ghidra-equivalent core), so treat names like param_1/local_10 and undefined types as recovered, not declared.\n")
 
 	for _, t := range targets {
 		r, have := results[t]

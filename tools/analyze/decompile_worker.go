@@ -154,10 +154,11 @@ func (t *decompileTarget) decompile(target string, maxInstr int, ghidraFormat bo
 	}
 	line.Entry, line.Note = entry, note
 	start := time.Now()
+	_, short := displayParts(t.host.funcs[entry])
 	res, err := t.prog.Decompile(decomp.Function{
 		Entry:           entry,
-		Name:            shortName(t.host.funcs[entry]),
-		DisplayName:     t.host.funcs[entry],
+		Name:            short,
+		DisplayName:     ghidraName(t.host.funcs[entry]),
 		MaxInstructions: maxInstr,
 		Host:            t.host,
 		FlowOverrides:   tailCallOverrides(t, entry),
@@ -177,7 +178,32 @@ func (t *decompileTarget) decompile(target string, maxInstr int, ghidraFormat bo
 	}
 	line.Name = t.host.nameOf(entry)
 	line.C, line.Warnings = res.C, res.Warnings
+	if !ghidraFormat {
+		line.C = stripTypeDefinitions(line.C)
+	}
 	return line
+}
+
+// stripTypeDefinitions drops the one-line struct/union/enum definitions the
+// core prints ahead of a function. With PDB types they cover every class
+// reachable from the parameters -- often dozens of large C++ types --
+// which costs an agent far more tokens than it helps; field names already
+// appear in the code, and struct_layout shows a layout on demand.
+func stripTypeDefinitions(c string) string {
+	lines := strings.Split(c, "\n")
+	i := 0
+	for ; i < len(lines); i++ {
+		l := lines[i]
+		if l == "" {
+			continue
+		}
+		if (strings.HasPrefix(l, "struct ") || strings.HasPrefix(l, "union ") || strings.HasPrefix(l, "enum ") ||
+			strings.HasPrefix(l, "typedef ")) && strings.HasSuffix(l, "}") {
+			continue
+		}
+		break
+	}
+	return strings.Join(lines[i:], "\n")
 }
 
 // resolve turns a target (hex address or symbol name) into a function entry.
@@ -227,7 +253,7 @@ type execBytes struct {
 // loadDecompileTarget maps the binary, picks the embedded spec and builds the
 // host symbol scope from what the file itself records.
 func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
-	bin, err := cgOpenBinary(path)
+	bin, err := cgOpenBinaryPDB(path, false)
 	if err != nil {
 		return nil, fmt.Errorf("%v; decompile supports x86/x64 PE and ELF", err)
 	}
@@ -268,12 +294,23 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 			}
 		}
 		host = newPEHost(f, bin, pd)
+		for _, s := range f.Sections {
+			const memRead, memWrite = 0x40000000, 0x80000000
+			if s.Characteristics&memRead != 0 && s.Characteristics&memWrite == 0 {
+				lo := bin.imageBase + uint64(s.VirtualAddress)
+				host.roRanges = append(host.roRanges, [2]uint64{lo, lo + uint64(max(s.VirtualSize, s.Size))})
+			}
+		}
 		if pdbPath != "none" {
-			var names *pdbNames
-			names, t.pdbNote = loadPDBNames(path, pdbPath, f, bin.imageBase)
-			if names != nil {
-				t.pdb = names.path
-				host.addNames(names.funcs, bin)
+			var pi *pdbInfo
+			pi, t.pdbNote = openPDBInfo(path, pdbPath, f, bin.imageBase, bin.is64)
+			if pi != nil {
+				t.pdb, host.pdb = pi.path, pi
+				names := make(map[uint64]string, len(pi.funcs))
+				for va, fn := range pi.funcs {
+					names[va] = fn.name
+				}
+				host.addNames(names, bin)
 			}
 		}
 		// The segment bases Ghidra's PE loader sets for every function (FS for
@@ -304,6 +341,11 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 			sections = append(sections, decomp.Section{Name: s.Name, VMA: s.Addr, Data: data})
 		}
 		host = newELFHost(bin)
+		for _, s := range f.Sections {
+			if s.Flags&elf.SHF_ALLOC != 0 && s.Flags&elf.SHF_WRITE == 0 && s.Size > 0 {
+				host.roRanges = append(host.roRanges, [2]uint64{s.Addr, s.Addr + s.Size})
+			}
+		}
 	default:
 		return nil, fmt.Errorf("decompile supports PE and ELF, not %s", bin.format)
 	}
@@ -335,14 +377,17 @@ func loadDecompileTarget(path, pdbPath string) (*decompileTarget, error) {
 
 // decompHost answers the decompiler core's symbol queries from the binary's
 // own records: known function starts (.pdata, exports, symbol tables, call
-// targets, the entry point) and import address table slots. It knows names
-// only -- no prototypes or types -- so callee signatures stay unlocked and
-// the core recovers them, as Ghidra does for a program without type info.
+// targets, the entry point), import address table slots, read-only
+// sections and, with a matching PDB, function prototypes and global data.
+// Without a PDB callee signatures stay unlocked and the core recovers them,
+// as Ghidra does for a program without type info.
 type decompHost struct {
-	funcs   map[uint64]string // function entry -> name ("" = unnamed)
-	starts  []uint64          // sorted keys of funcs
-	imports map[uint64]string // import slot address -> imported name
-	named   int
+	funcs    map[uint64]string // function entry -> recorded name ("" = unnamed)
+	starts   []uint64          // sorted keys of funcs
+	imports  map[uint64]string // import slot address -> imported name
+	named    int
+	pdb      *pdbInfo    // nil without a matching PDB
+	roRanges [][2]uint64 // non-writable sections
 }
 
 // addNames takes PDB function names and entries. A PDB entry is a real
@@ -373,23 +418,25 @@ func (h *decompHost) finish() {
 // nameOf is the name Ghidra would show: the symbol, else FUN_<entry>.
 func (h *decompHost) nameOf(va uint64) string {
 	if n := h.funcs[va]; n != "" {
-		return n
+		return ghidraName(n)
 	}
 	return fmt.Sprintf("FUN_%08x", va)
 }
 
 func (h *decompHost) QueryFunction(a address.Address) (pcode.HostFunction, bool) {
-	if _, ok := h.funcs[a.Offset]; !ok {
+	raw, ok := h.funcs[a.Offset]
+	if !ok {
 		return pcode.HostFunction{}, false
 	}
-	name := h.nameOf(a.Offset)
-	ns, _ := splitQualified(name)
-	return pcode.HostFunction{Name: name, Namespace: ns, ExtraPop: pcode.ExtrapopUnknown}, true
-}
-
-func shortName(qualified string) string {
-	_, n := splitQualified(qualified)
-	return n
+	hf := pcode.HostFunction{ExtraPop: pcode.ExtrapopUnknown}
+	if h.pdb != nil {
+		if p := h.pdb.prototype(a.Offset); p != nil {
+			hf = *p
+		}
+	}
+	hf.Name = h.nameOf(a.Offset)
+	hf.Namespace, _ = displayParts(raw)
+	return hf, true
 }
 
 func (h *decompHost) QueryExternalRef(a address.Address) (string, bool) {
@@ -401,7 +448,7 @@ func (h *decompHost) lookupName(name string) (uint64, bool) {
 	var fold uint64
 	found := false
 	for va, n := range h.funcs {
-		if n == name {
+		if n == name || n != "" && ghidraName(n) == name {
 			return va, true
 		}
 		if !found && n != "" && strings.EqualFold(n, name) {

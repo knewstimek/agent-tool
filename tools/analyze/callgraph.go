@@ -685,10 +685,16 @@ type cgBinary struct {
 	closer         func()
 }
 
-// cgOpenBinary tries PE, ELF, Mach-O in order and returns a cgBinary.
-func cgOpenBinary(path string) (*cgBinary, error) {
+// cgOpenBinary tries PE, ELF, Mach-O in order and returns a cgBinary. A PE's
+// matching PDB adds function and data names the file itself lacks.
+func cgOpenBinary(path string) (*cgBinary, error) { return cgOpenBinaryPDB(path, true) }
+
+// cgOpenBinaryPDB is cgOpenBinary with PDB names optional: the decompile
+// worker reads the PDB in full itself and keeps import slots and code names
+// apart, which merged names would blur.
+func cgOpenBinaryPDB(path string, withPDB bool) (*cgBinary, error) {
 	// Try PE first
-	if bin, err := cgOpenPE(path); err == nil {
+	if bin, err := cgOpenPE(path, withPDB); err == nil {
 		return bin, nil
 	}
 	// Try ELF
@@ -703,7 +709,7 @@ func cgOpenBinary(path string) (*cgBinary, error) {
 }
 
 // cgOpenPE opens a PE binary and extracts call graph info.
-func cgOpenPE(path string) (*cgBinary, error) {
+func cgOpenPE(path string, withPDB bool) (*cgBinary, error) {
 	f, err := pe.Open(path)
 	if err != nil {
 		return nil, err
@@ -786,6 +792,9 @@ func cgOpenPE(path string) (*cgBinary, error) {
 	}
 
 	symbols := peSymbolMap(f, imageBase)
+	if withPDB {
+		mergePDBNames(symbols, path, "", f, imageBase)
+	}
 
 	return &cgBinary{
 		imageBase:      imageBase,

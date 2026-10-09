@@ -48,6 +48,7 @@ func opStructLayout(input AnalyzeInput) (string, error) {
 	}
 
 	symbols := peSymbolMap(f, imageBase)
+	mergePDBNames(symbols, input.FilePath, input.PDBPath, f, imageBase)
 
 	// Read the data block
 	data, err := readPEBytesAtVA(f, imageBase, startVA, length)

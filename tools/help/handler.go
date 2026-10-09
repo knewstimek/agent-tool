@@ -630,7 +630,7 @@ Parameters: session_id, operation, adapter_command, adapter_args, address, launc
 
 ## analyze
 Static binary analysis tool with 23 operations:
-- decompile: Decompile x86/x64 PE/ELF functions to C (Ghidra-equivalent Gosleigh core; va = hex address or symbol, up to 16 comma-separated; timeout_sec; PE PDB names applied automatically, pdb_path to override)
+- decompile: Decompile x86/x64 PE/ELF functions to C (Ghidra-equivalent Gosleigh core; va = hex address or symbol, up to 16 comma-separated; timeout_sec; a matching PE PDB supplies names, prototypes, types and globals; pdb_path to override)
 - disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped)
 - instruction_search: Semantic x86/x64 mnemonic/register/immediate search with exhaustive executable-offset recovery, CFG confidence, target/result filters, and bounded value tracing to call/tail-call arguments
 - pe_info: PE header parsing with RWX section warnings
@@ -647,7 +647,7 @@ Static binary analysis tool with 23 operations:
 - overlay_detect: Detect data appended after last section
 - dwarf_info: DWARF debug info (compilation units, functions, types)
 - xref: Find code references to a target address or inclusive range (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
-- function_at: Find function boundaries (.pdata or heuristic)
+- function_at: Find function boundaries (PDB procedure records when a matching PDB is present, else .pdata or heuristic)
 - call_graph: Static call graph from root function (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
 - follow_ptr: Follow pointer chain with symbol annotation (PE). Detects circular pointer references
 - rtti_dump: Parse MSVC RTTI from vtable (class name + base classes). Includes demangled class names, pSelf cross-validation for x64, and section data caching
@@ -950,6 +950,8 @@ Find function boundaries in PE files.
           va="0x140001000")
 
   Detection methods (automatic, best source wins):
+  0. A matching PDB (found via the image's RSDS record, or pdb_path) -- exact
+     procedure start, length and name, also for x86 (start_source: pdb)
   1. .pdata (Exception Table) -- reliable, x64 PE with unwind info
   2. Export table + call-graph discovery -- exports are authoritative starts;
      from them the call graph is walked to discover direct-call targets, and
@@ -1067,15 +1069,22 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   architecture, image layout and calling convention are detected from the file.
 
   What the host knows comes from the file: function starts (.pdata, exports, symbol
-  tables, call targets, entry point), import names, tail-call jumps (the same Shared
-  Return rule Ghidra's analysis applies), and for PE the matching PDB's function
-  names (Class::Method). The PDB is found via the image's RSDS record (its path, then
-  beside the image) and used only when its GUID matches; pdb_path points to it
-  elsewhere, pdb_path="none" turns it off. PDB/DWARF types and prototypes are NOT
-  applied yet, so parameter/local types and struct fields are inferred by the
-  decompiler -- expect param_1/local_10 and undefined* types. Calls to statically
-  linked non-returning functions (e.g. _CxxThrowException) are not detected and may
-  show code after them.
+  tables, call targets, entry point), import names, read-only sections, and tail-call
+  jumps (the same Shared Return rule Ghidra's analysis applies).
+
+  For PE images a matching PDB adds, as Ghidra's PDB analysis does: function names
+  (Class::Method), prototypes (calling convention, this pointer, parameter names and
+  types, return type, no-return), struct/class/union/enum types with their fields,
+  and named, typed global data. Code built without full debug info is named and
+  typed from its decorated public names (MSVC demangler). The PDB is found via the
+  image's RSDS record (its path, then beside the image) and used only when its GUID
+  matches; pdb_path points to it elsewhere, pdb_path="none" turns it off.
+
+  Not applied: local variable names/types (recovered by the decompiler), DWARF types
+  for ELF, and bitfield members. Without a PDB, calls to statically linked
+  non-returning functions (e.g. _CxxThrowException) are not detected and may show
+  code after them. Type definitions are omitted from the output to save tokens; use
+  struct_layout for a layout.
 
   An address inside a function is moved to its start when x64 .pdata gives exact
   extents; otherwise the output carries a note -- confirm the start with function_at.
@@ -1087,7 +1096,7 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   Parameters:
     va: Function entry as hex VA or symbol name (PDB names are qualified:
         FActiveSound::SetWaveParameter); up to 16, comma-separated
-    pdb_path: PDB file when not beside the image; "none" disables PDB names
+    pdb_path: PDB file when not beside the image; "none" disables the PDB
     timeout_sec: Worker time limit (default 60, max 600)
     max_output_chars: Output cap (default 32768)
 

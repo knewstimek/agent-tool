@@ -1,9 +1,9 @@
 package analyze
 
 import (
-	"encoding/binary"
-	"os"
+	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -21,66 +21,51 @@ func TestSplitQualified(t *testing.T) {
 			t.Errorf("splitQualified(%q) = %q, %q; want %q, %q", c.in, ns, name, c.ns, c.name)
 		}
 	}
-}
-
-func cvRecord(kind uint16, payload []byte) []byte {
-	b := make([]byte, 4, 4+len(payload))
-	binary.LittleEndian.PutUint16(b, uint16(2+len(payload)))
-	binary.LittleEndian.PutUint16(b[2:], kind)
-	return append(b, payload...)
-}
-
-func TestWalkCVSymbolsStopsOnTruncation(t *testing.T) {
-	pub := make([]byte, 10)
-	binary.LittleEndian.PutUint32(pub, cvPubFunction)
-	pub = append(pub, "_main\x00"...)
-	stream := append(cvRecord(cvSPub32, pub), cvRecord(cvSGData32, make([]byte, 12))...)
-	stream = append(stream, 0xff, 0x7f, 0x0e, 0x11) // length runs past the end
-	var kinds []uint16
-	walkCVSymbols(stream, func(k uint16, rec []byte) { kinds = append(kinds, k) })
-	if len(kinds) != 2 || kinds[0] != cvSPub32 || kinds[1] != cvSGData32 {
-		t.Fatalf("kinds = %#x", kinds)
+	if ns, name := displayParts("geo::Rect::`vftable'"); ns != "geo::Rect" || name != "vftable" {
+		t.Errorf("displayParts(vftable) = %q, %q", ns, name)
+	}
+	if got := ghidraName("TSharedRef<IMessageToken,0> const &"); got != "TSharedRef<IMessageToken,0>_const_&" {
+		t.Errorf("ghidraName = %q", got)
 	}
 }
 
-func TestOpenPDBRejectsNonPDB(t *testing.T) {
-	dir := t.TempDir()
-	for name, data := range map[string][]byte{
-		"empty.pdb":     nil,
-		"text.pdb":      []byte("not a program database at all, just some text padding here"),
-		"truncated.pdb": msfMagic,
-	} {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if p, err := openPDB(path); err == nil {
-			p.Close()
-			t.Errorf("%s: openPDB accepted it", name)
-		}
-	}
-}
-
-// AGENT_TOOL_PDB=<file.pdb> runs the reader on a real PDB.
-func TestPDBRealFile(t *testing.T) {
-	path := os.Getenv("AGENT_TOOL_PDB")
-	if path == "" {
-		t.Skip("set AGENT_TOOL_PDB to a PDB file")
-	}
-	p, err := openPDB(path)
+// The fixtures (from the gopdb repository, built by MSVC from a known
+// source) let the PDB host be checked against what the source declares.
+func decompileFixture(t *testing.T, arch, va string) string {
+	t.Helper()
+	exe := filepath.Join("testdata", "pdb", "fixture_"+arch+".exe")
+	out, err := opDecompile(context.Background(), AnalyzeInput{FilePath: exe, VA: va, MaxOutputChars: 200000})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer p.Close()
-	if _, err := p.info(); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(out, "fixture_"+arch+".pdb (") {
+		t.Fatalf("%s: PDB not applied:\n%s", arch, out)
 	}
-	syms, err := p.symbols()
-	if err != nil {
-		t.Fatal(err)
+	return out
+}
+
+func TestDecompilePDBPrototypes(t *testing.T) {
+	for _, arch := range []string{"x86", "x64"} {
+		out := decompileFixture(t, arch, "sum_points, scale, use_node, fast_call, geo::Rect::area, fatal")
+		for _, want := range []string{
+			// Parameter names and types from the PDB, storage from the model.
+			"sum_points(Point *pts, int n)",
+			"scale(double v, float f, int k)",
+			"use_node(Node *n, Color c)",
+			// Struct fields reach the body.
+			"n->color",
+			"Rect::area(Rect *this)",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s: output lacks %q:\n%s", arch, want, out)
+			}
+		}
+		// Type definitions are left out of the agent-facing output.
+		if strings.Contains(out, "struct Node {") {
+			t.Errorf("%s: type definitions not stripped:\n%s", arch, out)
+		}
+		if arch == "x86" && !strings.Contains(out, "__fastcall fast_call(int a, int b, int c)") {
+			t.Errorf("x86: fast_call convention lost:\n%s", out)
+		}
 	}
-	if syms.modules == 0 || len(syms.procs)+len(syms.publics) == 0 {
-		t.Fatalf("no symbols: modules=%d procs=%d publics=%d", syms.modules, len(syms.procs), len(syms.publics))
-	}
-	t.Logf("modules=%d procs=%d publics=%d globals=%d", syms.modules, len(syms.procs), len(syms.publics), len(syms.globals))
 }

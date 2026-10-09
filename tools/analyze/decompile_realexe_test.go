@@ -23,6 +23,10 @@ func TestDecompileRealexeAdapter(t *testing.T) {
 	if dir == "" || works == "" || outDir == "" {
 		t.Skip("set AGENT_TOOL_REALEXE_DIR, AGENT_TOOL_REALEXE_WORKS and AGENT_TOOL_REALEXE_OUT")
 	}
+	if os.Getenv("AGENT_TOOL_REALEXE_PARAM_NAMES") == "0" {
+		pdbParamNames = false
+		defer func() { pdbParamNames = true }()
+	}
 	for _, work := range strings.Split(works, ",") {
 		t.Run(work, func(t *testing.T) {
 			var meta struct {

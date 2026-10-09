@@ -1,20 +1,25 @@
 package analyze
 
 import (
-	"bytes"
 	"debug/pe"
 	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	"github.com/knewstimek/gopdb"
+	"github.com/knewstimek/gopdb/demangle"
+	"github.com/knewstimek/gosleigh/pkg/address"
+	"github.com/knewstimek/gosleigh/pkg/pcode"
 )
 
 // peCodeView is the PE debug directory's RSDS record: which PDB was built
 // with this image.
 type peCodeView struct {
 	path string
-	guid [16]byte
+	guid pdb.GUID
 	age  uint32
 }
 
@@ -54,25 +59,44 @@ func readPECodeView(f *pe.File) (peCodeView, bool) {
 		var cv peCodeView
 		copy(cv.guid[:], rec[4:20])
 		cv.age = binary.LittleEndian.Uint32(rec[20:])
-		cv.path = cString(rec[24:])
+		cv.path = strings.TrimRight(string(rec[24:]), "\x00")
+		if i := strings.IndexByte(cv.path, 0); i >= 0 {
+			cv.path = cv.path[:i]
+		}
 		return cv, true
 	}
 	return peCodeView{}, false
 }
 
-// pdbNames is what the decompile host takes from a PDB: function entries
-// with their qualified names (VA -> name).
-type pdbNames struct {
+// pdbInfo is what the decompile host takes from a matching PDB.
+type pdbInfo struct {
 	path  string
-	funcs map[uint64]string
+	funcs map[uint64]*pdbFunc // entry VA -> function
+	data  []pdbData           // sorted by VA
+	types *pdbTypes
 }
 
-// loadPDBNames finds the PDB that belongs to the image -- override when given,
-// else the RSDS path, then the RSDS file name and the image's own name beside
-// the image -- checks its GUID, and reads function names. A missing PDB is
-// not an error; a PDB with a different GUID is reported, not used: its
+type pdbFunc struct {
+	name  string           // qualified, as recorded (see ghidraName)
+	proc  *pdb.Procedure   // full debug info, or
+	dem   *demangle.Symbol // a decorated public's decoding
+	proto *pcode.HostFunction
+	built bool // proto computed (may be nil)
+}
+
+type pdbData struct {
+	va   uint64
+	name string // qualified, as recorded
+	typ  pdb.TypeIndex
+	size uint64
+}
+
+// openPDBInfo finds the PDB that belongs to the image -- override when
+// given, else the RSDS path, then the RSDS file name and the image's own
+// name beside the image -- and checks its GUID. A missing PDB is not an
+// error; a PDB with a different GUID is reported and not used: its
 // addresses describe another build.
-func loadPDBNames(exePath, override string, f *pe.File, imageBase uint64) (*pdbNames, string) {
+func openPDBInfo(exePath, override string, f *pe.File, imageBase uint64, is64 bool) (*pdbInfo, string) {
 	cv, ok := readPECodeView(f)
 	if !ok {
 		if override != "" {
@@ -89,7 +113,7 @@ func loadPDBNames(exePath, override string, f *pe.File, imageBase uint64) (*pdbN
 		candidates = []string{cv.path, filepath.Join(dir, base),
 			strings.TrimSuffix(exePath, filepath.Ext(exePath)) + ".pdb"}
 	}
-	var mismatch string
+	var note string
 	for _, c := range candidates {
 		if c == "" {
 			continue
@@ -97,26 +121,29 @@ func loadPDBNames(exePath, override string, f *pe.File, imageBase uint64) (*pdbN
 		if st, err := os.Stat(c); err != nil || st.IsDir() {
 			continue
 		}
-		p, err := openPDB(c)
+		p, err := pdb.Open(c)
 		if err != nil {
-			mismatch = fmt.Sprintf("PDB %s unreadable: %v", c, err)
+			note = fmt.Sprintf("PDB %s unreadable: %v", c, err)
 			continue
 		}
-		info, err := p.info()
-		if err != nil || !bytes.Equal(info.guid[:], cv.guid[:]) {
+		info, err := p.Info()
+		if err != nil || info.GUID != cv.guid {
 			p.Close()
-			mismatch = fmt.Sprintf("PDB %s does not match this image (GUID differs); not used", c)
+			note = fmt.Sprintf("PDB %s does not match this image (GUID differs); not used", c)
 			continue
 		}
-		syms, err := p.symbols()
-		p.Close()
+		pi, err := loadPDBInfo(c, p, imageBase, is64)
 		if err != nil {
+			p.Close()
 			return nil, fmt.Sprintf("PDB %s: %v", c, err)
 		}
-		return buildPDBNames(c, syms, f, imageBase), ""
+		// The type table stays in use for lazy conversion; the file itself is
+		// fully read into memory by then.
+		p.Close()
+		return pi, ""
 	}
-	if mismatch != "" {
-		return nil, mismatch
+	if note != "" {
+		return nil, note
 	}
 	if override != "" {
 		return nil, fmt.Sprintf("pdb_path %s not found", override)
@@ -124,40 +151,139 @@ func loadPDBNames(exePath, override string, f *pe.File, imageBase uint64) (*pdbN
 	return nil, fmt.Sprintf("PDB %s not found beside the image; pass pdb_path to use it", base)
 }
 
-func buildPDBNames(path string, syms *pdbSymbols, f *pe.File, imageBase uint64) *pdbNames {
-	va := func(s pdbSymbol) (uint64, bool) {
-		if s.segment == 0 || int(s.segment) > len(f.Sections) {
-			return 0, false
-		}
-		return imageBase + uint64(f.Sections[s.segment-1].VirtualAddress) + uint64(s.offset), true
+func loadPDBInfo(path string, p *pdb.File, imageBase uint64, is64 bool) (*pdbInfo, error) {
+	dbi, err := p.DBI()
+	if err != nil {
+		return nil, err
 	}
-	n := &pdbNames{path: path, funcs: map[uint64]string{}}
-	// Procedure records carry undecorated, qualified names ("Class::Method"),
-	// what Ghidra shows; publics are only a fallback for entries no module
-	// describes, and only when undecorated (a decorated "?..." name would need
-	// a demangler).
-	for _, s := range syms.procs {
-		if a, ok := va(s); ok && s.name != "" {
-			n.funcs[a] = s.name
-		}
+	tt, err := p.Types()
+	if err != nil {
+		return nil, err
 	}
-	for _, s := range syms.publics {
-		if !s.function || s.name == "" || s.name[0] == '?' {
+	ids, _ := p.IDs()
+	pi := &pdbInfo{path: path, funcs: map[uint64]*pdbFunc{}, types: newPDBTypes(tt, ids, is64)}
+	va := func(seg uint16, off uint32) (uint64, bool) {
+		rva, ok := dbi.RVA(seg, off)
+		return imageBase + uint64(rva), ok
+	}
+	// Names and prototypes in order of precedence: procedure records (full
+	// debug info: undecorated qualified name, procedure type, parameter
+	// records), then decorated publics decoded by the demangler (code built
+	// without full debug info, as Ghidra does), then thunk records.
+	var thunks []*pdb.Thunk
+	for _, m := range dbi.Modules {
+		syms, err := p.ModuleSymbols(m)
+		if err != nil {
 			continue
 		}
-		if a, ok := va(s); ok {
-			if _, have := n.funcs[a]; !have {
-				n.funcs[a] = s.name
+		for _, s := range syms {
+			switch v := s.(type) {
+			case *pdb.Procedure:
+				if v.Name == "" {
+					continue
+				}
+				if a, ok := va(v.Segment, v.Offset); ok {
+					pi.funcs[a] = &pdbFunc{name: v.Name, proc: v}
+				}
+			case *pdb.Thunk:
+				thunks = append(thunks, v)
 			}
 		}
 	}
-	return n
+	globals, err := p.GlobalSymbols()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[uint64]bool{}
+	for _, s := range globals {
+		switch g := s.(type) {
+		case *pdb.Public:
+			if g.Flags&pdb.PublicFunction == 0 || g.Name == "" {
+				continue
+			}
+			a, ok := va(g.Segment, g.Offset)
+			if !ok || pi.funcs[a] != nil {
+				continue
+			}
+			if g.Name[0] != '?' {
+				pi.funcs[a] = &pdbFunc{name: g.Name}
+			} else if sym, err := demangle.Demangle(g.Name); err == nil && sym.Kind == demangle.KindFunction {
+				pi.funcs[a] = &pdbFunc{name: demangledName(sym), dem: sym}
+			}
+		case *pdb.Data:
+			if g.Kind() != pdb.SGData32 && g.Kind() != pdb.SLData32 {
+				continue // thread-local storage is not at a fixed address
+			}
+			a, ok := va(g.Segment, g.Offset)
+			if !ok || seen[a] {
+				continue
+			}
+			size := pi.types.size(g.Type)
+			if size == 0 {
+				continue
+			}
+			seen[a] = true
+			pi.data = append(pi.data, pdbData{va: a, name: g.Name, typ: g.Type, size: size})
+		}
+	}
+	for _, th := range thunks {
+		if a, ok := va(th.Segment, th.Offset); ok && pi.funcs[a] == nil && th.Name != "" {
+			pi.funcs[a] = &pdbFunc{name: th.Name}
+		}
+	}
+	sort.Slice(pi.data, func(i, j int) bool { return pi.data[i].va < pi.data[j].va })
+	return pi, nil
+}
+
+// prototype is the locked prototype of the function at va, nil when the
+// PDB has no usable type for it.
+func (pi *pdbInfo) prototype(va uint64) *pcode.HostFunction {
+	f := pi.funcs[va]
+	if f == nil {
+		return nil
+	}
+	if !f.built {
+		f.built = true
+		switch {
+		case f.proc != nil:
+			f.proto = pi.types.prototype(f.proc)
+		case f.dem != nil:
+			f.proto = pi.types.demangledPrototype(f.dem)
+		}
+	}
+	return f.proto
+}
+
+// dataAt is the global variable whose storage contains va.
+func (pi *pdbInfo) dataAt(va uint64) (pdbData, bool) {
+	i := sort.Search(len(pi.data), func(i int) bool { return pi.data[i].va > va })
+	if i == 0 {
+		return pdbData{}, false
+	}
+	d := pi.data[i-1]
+	return d, va < d.va+d.size
+}
+
+// ghidraName is the form Ghidra shows a PDB name in: spaces inside template
+// arguments and operator names become underscores, and MSVC's quoted
+// compiler names (`vftable') lose their quotes.
+func ghidraName(n string) string {
+	n = strings.ReplaceAll(n, "`vftable'", "vftable")
+	n = strings.ReplaceAll(n, "`vbtable'", "vbtable")
+	return strings.ReplaceAll(n, " ", "_")
+}
+
+// displayParts splits a recorded qualified name into its namespace and name
+// in display form.
+func displayParts(raw string) (ns, name string) {
+	ns, name = splitQualified(raw)
+	return ghidraName(ns), ghidraName(name)
 }
 
 // splitQualified splits "A::B<C::D>::f" into namespace "A::B<C::D>" and
 // name "f": only top-level "::" separate scopes (not inside template
 // arguments, parentheses or `quoted' compiler names). MSVC nests quotes --
-// "`dynamic initializer for 'A::B''" -- so inside a quote a ' after a space
+// "`dynamic initializer for 'A::B”" -- so inside a quote a ' after a space
 // or a backtick opens an inner quote and any other ' closes one.
 func splitQualified(q string) (ns, name string) {
 	depth := 0
@@ -187,4 +313,42 @@ func splitQualified(q string) (ns, name string) {
 		return "", q
 	}
 	return q[:last], q[last+2:]
+}
+
+// QueryData answers the core's global-symbol queries from PDB data symbols.
+// C++ parity of the consumer: ScopeGhidra::findContainer.
+func (h *decompHost) QueryData(a address.Address) (pcode.HostData, bool) {
+	if h.pdb == nil {
+		return pcode.HostData{}, false
+	}
+	d, ok := h.pdb.dataAt(a.Offset)
+	if !ok {
+		return pcode.HostData{}, false
+	}
+	t := h.pdb.types.datatype(d.typ)
+	if t == nil {
+		return pcode.HostData{}, false
+	}
+	ns, name := displayParts(d.name)
+	return pcode.HostData{Name: name, Namespace: ns, Addr: address.Address{Space: a.Space, Offset: d.va},
+		Size: t.Size(), Type: t, ReadOnly: h.readOnly(d.va)}, true
+}
+
+// Property marks addresses in non-writable sections read-only, as Ghidra's
+// PE loader does for their memory blocks, so the core may fold loads from
+// constant tables. C++ parity of the consumer: Database::getProperty.
+func (h *decompHost) Property(a address.Address) uint32 {
+	if h.readOnly(a.Offset) {
+		return pcode.VarnodeReadOnly
+	}
+	return 0
+}
+
+func (h *decompHost) readOnly(va uint64) bool {
+	for _, r := range h.roRanges {
+		if va >= r[0] && va < r[1] {
+			return true
+		}
+	}
+	return false
 }

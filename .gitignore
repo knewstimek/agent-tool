@@ -16,3 +16,4 @@ UNRELEASED.md
 .gocache/
 go.work
 go.work.sum
+!tools/analyze/testdata/pdb/*.exe

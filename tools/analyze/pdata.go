@@ -127,6 +127,14 @@ func opFunctionAt(input AnalyzeInput) (string, error) {
 	}
 	queryRVA := uint32(va - imageBase)
 
+	// A matching PDB records every procedure's start and length: exact on
+	// x86 too, where .pdata does not exist and only heuristics remain.
+	if idx, _ := loadPDBNameIndex(input.FilePath, input.PDBPath, f, imageBase); idx != nil {
+		if r, ok := idx.procAt(va); ok {
+			return formatPDBFunction(f, imageBase, va, r, idx.path, input), nil
+		}
+	}
+
 	// Try .pdata first (x64 only), fall back to heuristic for x86 or stripped binaries
 	usePdata := peHasPdata(f)
 	if !usePdata {
@@ -307,6 +315,44 @@ func opFunctionAt(input AnalyzeInput) (string, error) {
 	}
 
 	return sb.String(), nil
+}
+
+// formatPDBFunction formats function_at output for a procedure the PDB
+// describes.
+func formatPDBFunction(f *pe.File, imageBase, va uint64, r pdbRange, pdbPath string, input AnalyzeInput) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Function containing 0x%x:\n", va))
+	sb.WriteString(fmt.Sprintf("  Name:   %s\n", r.name))
+	sb.WriteString(fmt.Sprintf("  Start:  0x%x (RVA: 0x%x)\n", r.start, r.start-imageBase))
+	sb.WriteString(fmt.Sprintf("  End:    0x%x (RVA: 0x%x)\n", r.end, r.end-imageBase))
+	sb.WriteString(fmt.Sprintf("  Size:   %d bytes\n", r.end-r.start))
+	sb.WriteString(fmt.Sprintf("  start_source: pdb (%s)\n", pdbPath))
+	sb.WriteString("  confidence:   exact\n")
+
+	count := input.Count
+	if count <= 0 {
+		count = defaultDisasmCount
+	}
+	if count > maxDisasmCount {
+		count = maxDisasmCount
+	}
+	mode := 64
+	if f.FileHeader.Machine == 0x14c {
+		mode = 32
+	}
+	if off, _, err := rvaToFileOffset(f, uint32(r.start-imageBase)); err == nil {
+		disasm, err := opDisassemble(AnalyzeInput{FilePath: input.FilePath, Offset: int(off), Count: count,
+			Mode: mode, Arch: "x86", VA: fmt.Sprintf("0x%x", r.start), StopAtRet: true})
+		if err == nil {
+			sb.WriteString(fmt.Sprintf("\nDisassembly (up to %d instructions):\n", count))
+			for _, line := range strings.Split(disasm, "\n") {
+				if line != "" {
+					sb.WriteString("  " + line + "\n")
+				}
+			}
+		}
+	}
+	return sb.String()
 }
 
 // formatHeuristicResult formats function_at output when using heuristic detection.
