@@ -63,6 +63,36 @@ func TestDecompileGoELFWithDWARF(t *testing.T) {
 	}
 }
 
+// DWARF bitfields (here gcc's DWARF in a MinGW PE) become field accesses.
+func TestDecompileDWARFBitfields(t *testing.T) {
+	gcc, err := exec.LookPath("gcc")
+	if err != nil {
+		t.Skip("gcc not found")
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "bf.c")
+	code := "struct Flags { unsigned int ready : 1; unsigned int mode : 3; int level : 4; unsigned int rest : 24; };\n" +
+		"__attribute__((noinline)) int get_mode(struct Flags *f) { return f->mode; }\n" +
+		"__attribute__((noinline)) int get_level(struct Flags *f) { return f->level; }\n" +
+		"int main(void) { struct Flags f = {0}; return get_mode(&f) + get_level(&f); }\n"
+	if err := os.WriteFile(src, []byte(code), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "bf.exe")
+	if out, err := exec.Command(gcc, "-g", "-O2", "-o", bin, src).CombinedOutput(); err != nil {
+		t.Skipf("gcc cannot build here: %v\n%s", err, out)
+	}
+	out, err := opDecompile(context.Background(), AnalyzeInput{FilePath: bin, VA: "get_mode, get_level", MaxOutputChars: 100000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"return f->mode;", "return f->level;"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
 func decompileGoProgram(t *testing.T, goarch string) string {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "main.go")

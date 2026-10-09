@@ -449,23 +449,33 @@ func (di *dwarfInfo) build(t dwarf.Type) *pcode.HostTypeDesc {
 			d.ID = fmt.Sprintf("dwarf:%p", v)
 		}
 		di.descs[t] = d
-		end := int64(0)
+		var fields []pcode.HostFieldDesc
 		for _, f := range v.Field {
-			if f.BitSize > 0 || f.Type == nil {
-				continue // bitfields are not expressible
+			if f.Type == nil {
+				continue
 			}
 			fd := di.desc(f.Type)
 			if fd == nil || fd.Size <= 0 {
 				continue
 			}
-			if meta == "struct" && (f.ByteOffset < end || f.ByteOffset+int64(fd.Size) > int64(size)) {
-				continue
+			hf := pcode.HostFieldDesc{Name: f.Name, Offset: int32(f.ByteOffset), Type: fd}
+			if f.BitSize > 0 {
+				if meta != "struct" || !dwarfBitfield(f, fd.Size, &hf) {
+					continue
+				}
 			}
-			d.Fields = append(d.Fields, pcode.HostFieldDesc{Name: f.Name, Offset: int32(f.ByteOffset), Type: fd})
-			if meta == "struct" {
-				end = f.ByteOffset + int64(fd.Size)
-			}
+			fields = append(fields, hf)
 		}
+		if meta == "struct" {
+			sort.SliceStable(fields, func(i, j int) bool {
+				if fields[i].Offset != fields[j].Offset {
+					return fields[i].Offset < fields[j].Offset
+				}
+				return fields[i].BitOffset < fields[j].BitOffset
+			})
+			fields = keepDisjoint(fields, int64(size), func(d *pcode.HostTypeDesc) int32 { return d.Size })
+		}
+		d.Fields = fields
 		return d
 	case *dwarf.FuncType:
 		cp := &pcode.HostCodeProto{InputLocked: true, OutLocked: true}
@@ -520,4 +530,33 @@ func goResultSlot(params []pcode.HostParam, ret pcode.Datatype, ptrSize int32) i
 		off = align(off, alignOf(p.Type)) + p.Type.Size()
 	}
 	return ptrSize + align(align(off, ptrSize), alignOf(ret))
+}
+
+// dwarfBitfield places a bitfield member in a storage unit of its type's
+// size: Offset is the unit and BitOffset the field's least significant bit
+// in it (little-endian bit numbering). DWARF 2/3 give the unit
+// (DW_AT_byte_size) and the bit offset from its most significant bit;
+// DWARF 4+ give the bit offset from the start of the structure.
+func dwarfBitfield(f *dwarf.StructField, unit int32, hf *pcode.HostFieldDesc) bool {
+	if f.ByteSize > 0 && (f.BitOffset != 0 || f.DataBitOffset == 0) {
+		// DWARF 2/3: BitOffset counts from the unit's most significant bit.
+		lsb := f.ByteSize*8 - f.BitOffset - f.BitSize
+		if lsb < 0 {
+			return false
+		}
+		hf.Offset, hf.BitOffset, hf.BitSize = int32(f.ByteOffset), int32(lsb), int32(f.BitSize)
+		return int64(unit) == f.ByteSize
+	}
+	abs := f.DataBitOffset
+	unitOff := abs / 8 / int64(unit) * int64(unit)
+	lsb := abs - unitOff*8
+	if lsb+f.BitSize > int64(unit)*8 { // straddles the type's natural unit
+		unitOff = abs / 8
+		lsb = abs % 8
+		if lsb+f.BitSize > int64(unit)*8 {
+			return false
+		}
+	}
+	hf.Offset, hf.BitOffset, hf.BitSize = int32(unitOff), int32(lsb), int32(f.BitSize)
+	return true
 }

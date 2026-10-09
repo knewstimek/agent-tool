@@ -2,7 +2,9 @@ package analyze
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -80,5 +82,27 @@ func TestDecompilePDBLocals(t *testing.T) {
 				t.Errorf("%s: output lacks %q:\n%s", arch, want, out)
 			}
 		}
+	}
+}
+
+// Bitfield members reach the decompiler as their storage unit plus the
+// field's bits in it (struct Flags { ready:1; mode:3; rest:28; }).
+func TestPDBBitfieldMembers(t *testing.T) {
+	target, err := loadDecompileTarget(filepath.Join("testdata", "pdb", "fixture_x64.exe"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pi := target.host.debug.(*pdbInfo)
+	ti, ok := pi.types.tt.ByName("Flags")
+	if !ok {
+		t.Fatal("Flags not in the PDB")
+	}
+	d := pi.types.desc(ti)
+	var got []string
+	for _, f := range d.Fields {
+		got = append(got, fmt.Sprintf("%s@%d:%d+%d", f.Name, f.Offset, f.BitOffset, f.BitSize))
+	}
+	if want := []string{"ready@0:0+1", "mode@0:1+3", "rest@0:4+28"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Flags fields = %v; want %v", got, want)
 	}
 }

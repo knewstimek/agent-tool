@@ -193,9 +193,9 @@ func (c *pdbTypes) build(ti pdb.TypeIndex) *pcode.HostTypeDesc {
 }
 
 // structFields lays out a structure's members. The core's structures cannot
-// overlap fields, so a member that overlaps the previous one (a bitfield
-// group, an anonymous union's alternatives) is left out; bitfields are not
-// expressible at all.
+// overlap fields, so a member that overlaps the previous one (an anonymous
+// union's alternatives) is left out. Bitfields share their storage unit's
+// offset and are kept while their bit ranges stay disjoint.
 func (c *pdbTypes) structFields(fl pdb.TypeIndex, size int64) []pcode.HostFieldDesc {
 	fields, _ := c.tt.Fields(fl)
 	var out []pcode.HostFieldDesc
@@ -203,7 +203,12 @@ func (c *pdbTypes) structFields(fl pdb.TypeIndex, size int64) []pcode.HostFieldD
 		switch m := f.(type) {
 		case *pdb.Member:
 			if bt, err := c.tt.Lookup(m.Type); err == nil {
-				if _, bit := bt.(*pdb.Bitfield); bit {
+				if b, bit := bt.(*pdb.Bitfield); bit {
+					// Offset is the storage unit, Position the field's low bit in it.
+					if ud := c.desc(b.Type); ud != nil {
+						out = append(out, pcode.HostFieldDesc{Name: m.Name, Offset: int32(m.Offset), Type: ud,
+							BitOffset: int32(b.Position), BitSize: int32(b.Length)})
+					}
 					continue
 				}
 			}
@@ -224,18 +229,13 @@ func (c *pdbTypes) structFields(fl pdb.TypeIndex, size int64) []pcode.HostFieldD
 				Type: &pcode.HostTypeDesc{Meta: "ptr", Size: c.ptrSize, Elem: slot}})
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Offset < out[j].Offset })
-	kept := out[:0]
-	end := int64(0)
-	for _, f := range out {
-		fs := int64(c.descSize(f.Type))
-		if int64(f.Offset) < end || fs <= 0 || int64(f.Offset)+fs > size {
-			continue
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Offset != out[j].Offset {
+			return out[i].Offset < out[j].Offset
 		}
-		kept = append(kept, f)
-		end = int64(f.Offset) + fs
-	}
-	return kept
+		return out[i].BitOffset < out[j].BitOffset
+	})
+	return keepDisjoint(out, size, c.descSize)
 }
 
 func (c *pdbTypes) descSize(d *pcode.HostTypeDesc) int32 {
@@ -533,4 +533,32 @@ func (c *pdbTypes) paramCount(ti pdb.TypeIndex) int {
 		return n
 	}
 	return 0
+}
+
+// keepDisjoint drops members (sorted by offset, then bit) that overlap an
+// earlier one or run past the structure, comparing bit ranges so that the
+// bitfields of one storage unit sit side by side.
+func keepDisjoint(fields []pcode.HostFieldDesc, size int64, sizeOf func(*pcode.HostTypeDesc) int32) []pcode.HostFieldDesc {
+	kept := fields[:0]
+	end := int64(0) // in bits
+	for _, f := range fields {
+		unit := int64(sizeOf(f.Type))
+		if unit <= 0 || int64(f.Offset)+unit > size {
+			continue
+		}
+		lo, hi := int64(f.Offset)*8, (int64(f.Offset)+unit)*8
+		if f.BitSize > 0 {
+			lo += int64(f.BitOffset)
+			hi = lo + int64(f.BitSize)
+			if hi > (int64(f.Offset)+unit)*8 {
+				continue
+			}
+		}
+		if lo < end {
+			continue
+		}
+		kept = append(kept, f)
+		end = hi
+	}
+	return kept
 }

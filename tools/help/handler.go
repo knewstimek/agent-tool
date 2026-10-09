@@ -1091,9 +1091,9 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   abort, ExitProcess, _CxxThrowException, Go runtime panics, ...), debug-info
   no-return flags, and call sites followed by padding or another function.
 
-  Not applied: bitfield members (the storage unit is shown with masks). Type
-  definitions are omitted from the output to save tokens; use struct_layout for a
-  layout.
+  Bitfield members print as fields (p->mode = v; if (p->bReady == 0)) instead of
+  masks and shifts. Type definitions are omitted from the output to save tokens;
+  use struct_layout for a layout.
 
   An address inside a function is moved to its start when x64 .pdata gives exact
   extents; otherwise the output carries a note -- confirm the start with function_at.
