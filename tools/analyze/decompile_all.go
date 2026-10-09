@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"time"
 )
@@ -108,10 +109,14 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 
 	// Workers take batches; a batch that times out keeps the functions that
 	// finished, records the one that was running and requeues the rest.
-	const batch = 32
-	queue := make(chan []uint64, len(todo)/batch+1)
-	for i := 0; i < len(todo); i += batch {
-		queue <- todo[i:min(i+batch, len(todo))]
+	// Batches go out largest functions first, a large function alone: a few
+	// big functions take most of the time, and left to the end of an
+	// address-ordered queue they ran one after another on one worker while
+	// the others sat idle (longest-processing-time-first scheduling).
+	batches := corpusBatches(todo, starts)
+	queue := make(chan []uint64, len(batches)+len(todo))
+	for _, b := range batches {
+		queue <- b
 	}
 	var pending sync.WaitGroup
 	pending.Add(len(todo))
@@ -210,4 +215,38 @@ func readCorpusEntries(path string) (map[uint64]bool, error) {
 		}
 	}
 	return done, nil
+}
+
+// corpusBatches groups vas, largest first, into batches of at most 32
+// functions and about 8 KB of code; a function's size is the distance to
+// the next known start.
+func corpusBatches(vas, starts []uint64) [][]uint64 {
+	size := func(va uint64) uint64 {
+		i := sort.Search(len(starts), func(i int) bool { return starts[i] > va })
+		if i == len(starts) {
+			return 4096
+		}
+		return min(starts[i]-va, 1<<20)
+	}
+	sorted := append([]uint64(nil), vas...)
+	sizes := make(map[uint64]uint64, len(sorted))
+	for _, va := range sorted {
+		sizes[va] = size(va)
+	}
+	sort.SliceStable(sorted, func(i, j int) bool { return sizes[sorted[i]] > sizes[sorted[j]] })
+	var out [][]uint64
+	var cur []uint64
+	var bytes uint64
+	for _, va := range sorted {
+		if len(cur) > 0 && (len(cur) == 32 || bytes+sizes[va] > 8192) {
+			out = append(out, cur)
+			cur, bytes = nil, 0
+		}
+		cur = append(cur, va)
+		bytes += sizes[va]
+	}
+	if len(cur) > 0 {
+		out = append(out, cur)
+	}
+	return out
 }
