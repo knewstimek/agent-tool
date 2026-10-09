@@ -858,6 +858,9 @@ containing a text, or a structure field (PE, ELF, Mach-O).
       and immediates (mov reg, imm; push imm; mov rax, imm64; x86 [abs32]),
       ARM64 BL/B/B.cond/ADRP pairs, ARM32 BL/B. A lea/mov of the target followed
       by call/jmp through that register is reported as a CALL ("then call rax").
+    Computed: x64 MSVC tables and arrays read through the image base
+      (lea r, [__ImageBase]; [r+index*scale+RVA]) as DATA, and a switch case
+      block reports the dispatch jump whose table leads to it (JMP, "switch case N").
     Data (PTR): stored pointers in data sections -- vtable slots (with the slot
       index), function-pointer and callback tables. PE images check each slot
       against the relocation table; ELF PIE pointers come from RELATIVE relocs.

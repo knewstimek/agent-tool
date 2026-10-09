@@ -277,3 +277,36 @@ func TestXrefBackwardRIPRelative(t *testing.T) {
 		t.Errorf("memDisp = %d", d)
 	}
 }
+
+// xref finds a table read through the image base (MSVC lea r11,
+// [__ImageBase]; mov ecx, [r11+rax*4+RVA]) and the switch jump for a case
+// block, neither of which names its target in one instruction.
+func TestXrefImageBaseAndSwitchCase(t *testing.T) {
+	const imageBase, rva = 0x140000000, 0x1000
+	code := []byte{
+		0x83, 0xF8, 0x01, // cmp eax, 1
+		0x77, 0x00, // ja +0
+		0x4C, 0x8D, 0x1D, 0, 0, 0, 0, // lea r11, [__ImageBase]
+		0x41, 0x8B, 0x8C, 0x83, 0, 0, 0, 0, // mov ecx, [r11+rax*4+tableRVA]
+		0x49, 0x03, 0xCB, // add rcx, r11
+		0xFF, 0xE1, // jmp rcx
+		0xC3,       // case 0 (offset 25)
+		0x90, 0xC3, // case 1 (offset 26)
+	}
+	toImageBase := int32(-(rva + 12))
+	binary.LittleEndian.PutUint32(code[8:], uint32(toImageBase))
+	table := len(code)
+	binary.LittleEndian.PutUint32(code[16:], uint32(rva+table))
+	code = binary.LittleEndian.AppendUint32(code, rva+25)
+	code = binary.LittleEndian.AppendUint32(code, rva+26)
+	bin := &xrefBinary{imageBase: imageBase, arch: "x64", format: "PE", sections: []xrefSection{{rva: rva, data: code}}}
+
+	refs, n := scanXrefs(bin, bin.target(imageBase+rva+uint64(table), imageBase+rva+uint64(table)), 10)
+	if n != 1 || refs[0].refType != "DATA" || !strings.Contains(refs[0].line, "image base + 0x") {
+		t.Errorf("table ref: %v", refs)
+	}
+	refs, n = scanXrefs(bin, bin.target(imageBase+rva+26, imageBase+rva+26), 10)
+	if n != 1 || !strings.Contains(refs[0].line, "switch case 1") {
+		t.Errorf("case ref: %v", refs)
+	}
+}

@@ -213,6 +213,12 @@ func scanXrefs(bin *xrefBinary, target xrefTargetRange, maxRes int) ([]xrefResul
 			}
 			refs, found = collectXrefImm(sec.data, sec.rva, target, mode, reported, maxRes, found, refs)
 		}
+		if found < maxRes {
+			refs, found = collectXrefImageBase(bin, target, reported, maxRes, found, refs)
+		}
+		if found < maxRes {
+			refs, found = collectXrefSwitchCases(bin, target, reported, maxRes, found, refs)
+		}
 	}
 	if found < maxRes {
 		refs, found = collectXrefData(bin, target, maxRes, found, refs)
