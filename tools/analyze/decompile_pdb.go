@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/knewstimek/gopdb"
 	"github.com/knewstimek/gopdb/demangle"
@@ -171,11 +173,27 @@ func loadPDBInfo(path string, p *pdb.File, imageBase uint64, is64 bool) (*pdbInf
 	// records), then decorated publics decoded by the demangler (code built
 	// without full debug info, as Ghidra does), then thunk records.
 	var thunks []*pdb.Thunk
-	for _, m := range dbi.Modules {
-		syms, err := p.ModuleSymbols(m)
-		if err != nil {
-			continue
-		}
+	// Modules are read and decoded in parallel (independent streams; most
+	// of the PDB load on a large program), then merged in module order so
+	// the result is the same as a sequential read.
+	modSyms := make([][]pdb.Symbol, len(dbi.Modules))
+	var wg sync.WaitGroup
+	next := make(chan int)
+	for w := 0; w < min(runtime.GOMAXPROCS(0), 8); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				modSyms[i], _ = p.ModuleSymbols(dbi.Modules[i])
+			}
+		}()
+	}
+	for i := range dbi.Modules {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+	for _, syms := range modSyms {
 		for _, s := range syms {
 			switch v := s.(type) {
 			case *pdb.Procedure:

@@ -38,6 +38,8 @@ github.com/knewstimek/gopdb v0.0.0-20261009110936-65d57dfb663e h1:BV0x3W2IZoDyn5
 github.com/knewstimek/gopdb v0.0.0-20261009110936-65d57dfb663e/go.mod h1:0BT7EHyTBaqQue4nDJWed/EyjRE75z/UwGt94EPdY6A=
 github.com/knewstimek/gopdb v0.1.1 h1:re0bs5owI1pMtALNqQd9yq1mDljwXaTVH/7A4GLKHYQ=
 github.com/knewstimek/gopdb v0.1.1/go.mod h1:0BT7EHyTBaqQue4nDJWed/EyjRE75z/UwGt94EPdY6A=
+github.com/knewstimek/gopdb v0.1.2 h1:y/ssfgVX53wMQavlkN0xOUSoAvmnCDnsjcRBeElkFAU=
+github.com/knewstimek/gopdb v0.1.2/go.mod h1:0BT7EHyTBaqQue4nDJWed/EyjRE75z/UwGt94EPdY6A=
 github.com/knewstimek/gosleigh v0.0.0-20261009103847-7ff61a331bd0 h1:FeAl7OjFlSDP4GZN5e7jv9tkBIra+akqssztKR6EKrI=
 github.com/knewstimek/gosleigh v0.0.0-20261009103847-7ff61a331bd0/go.mod h1:fCQ7cQx7SFpFImEWITl5zA5M/HBWxqHEPzcd6kK46RU=
 github.com/knewstimek/gosleigh v0.0.0-20261009111139-89d5866ec08a h1:KJPCTSr5Z3wMEUjoxV0NqBA7qS5uUS0LwG7HpVNL4N8=

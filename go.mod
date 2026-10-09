@@ -8,7 +8,7 @@ require (
 	github.com/google/go-dap v0.12.0
 	github.com/google/jsonschema-go v0.4.2
 	github.com/kayrus/putty v1.0.5
-	github.com/knewstimek/gopdb v0.1.1
+	github.com/knewstimek/gopdb v0.1.2
 	github.com/knewstimek/gosleigh v0.1.4
 	github.com/miekg/dns v1.1.72
 	github.com/modelcontextprotocol/go-sdk v1.5.0
