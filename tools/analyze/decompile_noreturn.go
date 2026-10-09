@@ -2,7 +2,6 @@ package analyze
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -126,10 +125,7 @@ func (t *decompileTarget) suspiciousSites() []callSite {
 // discovery weighs, on parallel workers.
 func (t *decompileTarget) scanSuspiciousSites() []callSite {
 	starts := t.host.starts
-	n := runtime.GOMAXPROCS(0)
-	if n > 16 {
-		n = 16
-	}
+	n := analysisThreads()
 	if len(starts) < 1000 {
 		n = 1
 	}

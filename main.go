@@ -80,6 +80,12 @@ func main() {
 		os.Exit(analyze.RunDecompileWorker(os.Stdin, os.Stdout))
 	}
 
+	// decompile-all: a binary's functions to a JSONL corpus (CLI only; a
+	// whole binary takes minutes, too long for one MCP call).
+	if len(args) > 0 && args[0] == analyze.DecompileAllArg {
+		os.Exit(analyze.RunDecompileAll(args[1:], os.Stderr))
+	}
+
 	// version flag — print version and exit immediately
 	if len(args) > 0 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v") {
 		fmt.Println("agent-tool " + Version)

@@ -1075,7 +1075,14 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   the load. An idle worker exits after 2 minutes; a changed file is reloaded.
   Whole-binary scans (linear sweep, call sites) are cached under the user cache
   directory, so a later session loads the same file faster
-  (AGENT_TOOL_NO_ANALYSIS_CACHE=1 disables this).
+  (AGENT_TOOL_NO_ANALYSIS_CACHE=1 disables this). Those scans use
+  AGENT_TOOL_ANALYZE_THREADS goroutines (default NumCPU/4, between 2 and 4).
+
+  Every function of a binary (a corpus) is a CLI job, not a tool call -- it takes
+  minutes on a large program. Run it in the background and read the file:
+    agent-tool decompile-all [-j workers] [-timeout sec] [-pdb path] [-limit n] [-o out.jsonl] <binary>
+  One JSON object per line: {"entry","name","c","secs"} or {"entry","error"};
+  rerunning resumes an existing output file.
 
   What the host knows comes from the file: function starts (.pdata, exports, symbol
   tables, call targets, entry point), import names, read-only sections, and tail-call

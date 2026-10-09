@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"sort"
 	"sync"
 	"time"
@@ -172,3 +174,13 @@ func cachedSweepStarts(id string, data []byte, rva uint32, mode int) []uint32 {
 	storeUint64s(path, vals)
 	return starts
 }
+
+// analysisThreads is how many goroutines a whole-binary scan uses. The
+// default leaves most cores to the user (NumCPU/4, between 2 and 4);
+// AGENT_TOOL_ANALYZE_THREADS sets it (decompile workers inherit it).
+var analysisThreads = sync.OnceValue(func() int {
+	if n, err := strconv.Atoi(os.Getenv("AGENT_TOOL_ANALYZE_THREADS")); err == nil && n > 0 {
+		return min(n, 64)
+	}
+	return min(max(runtime.NumCPU()/4, 2), 4)
+})

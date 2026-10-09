@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -174,12 +173,13 @@ func loadPDBInfo(path string, p *pdb.File, imageBase uint64, is64 bool) (*pdbInf
 	// without full debug info, as Ghidra does), then thunk records.
 	var thunks []*pdb.Thunk
 	// Modules are read and decoded in parallel (independent streams; most
-	// of the PDB load on a large program), then merged in module order so
+	// of the PDB load on a large program; analysisThreads workers), then
+	// merged in module order so
 	// the result is the same as a sequential read.
 	modSyms := make([][]pdb.Symbol, len(dbi.Modules))
 	var wg sync.WaitGroup
 	next := make(chan int)
-	for w := 0; w < min(runtime.GOMAXPROCS(0), 8); w++ {
+	for w := 0; w < analysisThreads(); w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
