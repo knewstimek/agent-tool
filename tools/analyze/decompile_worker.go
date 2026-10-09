@@ -46,7 +46,7 @@ type decompileRequest struct {
 // step finishes, so the server keeps the results of the functions that
 // completed before a timeout or a kill.
 type decompileLine struct {
-	Kind string `json:"kind"` // "load", "result" or "fatal"
+	Kind string `json:"kind"` // "load", "result", "fatal" or "done" (end of a request)
 
 	// load
 	Format      string  `json:"format,omitempty"`
@@ -58,6 +58,7 @@ type decompileLine struct {
 	HostTracked string  `json:"tracked,omitempty"`
 	PDB         string  `json:"pdb,omitempty"`      // PDB used
 	PDBNote     string  `json:"pdb_note,omitempty"` // why no PDB was used
+	Reused      bool    `json:"reused,omitempty"`   // the binary was already loaded
 
 	// result (and fatal: the target that was running)
 	Target    string   `json:"target,omitempty"`
@@ -71,8 +72,11 @@ type decompileLine struct {
 	Secs      float64  `json:"secs,omitempty"`
 }
 
-// RunDecompileWorker serves one decompileRequest from in and writes
-// decompileLines to out. It returns the process exit code.
+// RunDecompileWorker serves decompileRequests, one JSON value each, from in
+// until it closes, writing decompileLines to out; each request's lines end
+// with a "done" line. A binary stays loaded while the following requests
+// name it, so a client decompiling function after function pays the load
+// once. It returns the process exit code.
 func RunDecompileWorker(in io.Reader, out io.Writer) int {
 	var mu sync.Mutex
 	enc := json.NewEncoder(out)
@@ -82,50 +86,73 @@ func RunDecompileWorker(in io.Reader, out io.Writer) int {
 		_ = enc.Encode(l)
 	}
 
-	var req decompileRequest
-	if err := json.NewDecoder(io.LimitReader(in, 1<<20)).Decode(&req); err != nil {
-		emit(decompileLine{Kind: "fatal", ErrorKind: "input", Error: "bad worker request: " + err.Error()})
-		return 2
-	}
-	if req.MemLimitMB <= 0 {
-		req.MemLimitMB = decompileMemLimitMB
-	}
-	limit := uint64(req.MemLimitMB) << 20
-
+	dec := json.NewDecoder(in)
 	var current atomic.Value // target being decompiled, for the memory report
 	current.Store("")
-	// The soft limit makes the GC work harder near the cap; the watchdog is the
-	// hard stop, because a runaway rule loop keeps allocating live memory the
-	// GC cannot free.
-	debug.SetMemoryLimit(int64(limit))
-	go func() {
-		var ms runtime.MemStats
-		for range time.Tick(200 * time.Millisecond) {
-			runtime.ReadMemStats(&ms)
-			if ms.HeapAlloc > limit {
-				emit(decompileLine{Kind: "fatal", ErrorKind: "memory", Target: current.Load().(string),
-					Error: fmt.Sprintf("decompiler heap reached %d MB (limit %d MB)", ms.HeapAlloc>>20, req.MemLimitMB)})
-				os.Exit(3)
+	var t *decompileTarget
+	var loaded, loadNote string // what t was loaded from
+	var loadLine decompileLine
+	watching := false
+	for {
+		var req decompileRequest
+		if err := dec.Decode(&req); err != nil {
+			if err == io.EOF {
+				return 0
 			}
+			emit(decompileLine{Kind: "fatal", ErrorKind: "input", Error: "bad worker request: " + err.Error()})
+			return 2
 		}
-	}()
-
-	start := time.Now()
-	t, err := loadDecompileTarget(req.Path, req.PDBPath)
-	if err != nil {
-		emit(decompileLine{Kind: "fatal", ErrorKind: "load", Error: err.Error()})
-		return 1
+		if !watching {
+			watching = true
+			if req.MemLimitMB <= 0 {
+				req.MemLimitMB = decompileMemLimitMB
+			}
+			limit := uint64(req.MemLimitMB) << 20
+			// The soft limit makes the GC work harder near the cap; the
+			// watchdog is the hard stop, because a runaway rule loop keeps
+			// allocating live memory the GC cannot free.
+			debug.SetMemoryLimit(int64(limit))
+			go func(mb int) {
+				var ms runtime.MemStats
+				for range time.Tick(200 * time.Millisecond) {
+					runtime.ReadMemStats(&ms)
+					if ms.HeapAlloc > limit {
+						emit(decompileLine{Kind: "fatal", ErrorKind: "memory", Target: current.Load().(string),
+							Error: fmt.Sprintf("decompiler heap reached %d MB (limit %d MB)", ms.HeapAlloc>>20, mb)})
+						os.Exit(3)
+					}
+				}
+			}(req.MemLimitMB)
+		}
+		if key := req.Path + "|" + req.PDBPath; t == nil || key != loaded {
+			t = nil
+			runtime.GC() // let the previous binary go before loading the next
+			start := time.Now()
+			nt, err := loadDecompileTarget(req.Path, req.PDBPath)
+			if err != nil {
+				emit(decompileLine{Kind: "fatal", ErrorKind: "load", Error: err.Error()})
+				emit(decompileLine{Kind: "done"})
+				continue
+			}
+			t, loaded, loadNote = nt, key, ""
+			loadLine = decompileLine{Kind: "load", Format: t.format, Spec: t.spec, KnownStarts: len(t.host.funcs),
+				NamedStarts: t.host.named, Imports: len(t.host.imports), HostTracked: t.trackedDesc,
+				PDB: t.pdb, PDBNote: t.pdbNote, LoadSecs: time.Since(start).Seconds()}
+		} else {
+			loadNote = "reused"
+		}
+		l := loadLine
+		if loadNote != "" {
+			l.LoadSecs, l.Reused = 0, true
+		}
+		emit(l)
+		for _, target := range req.Targets {
+			current.Store(target)
+			emit(t.decompile(target, req.MaxInstructions, false))
+		}
+		current.Store("")
+		emit(decompileLine{Kind: "done"})
 	}
-	emit(decompileLine{Kind: "load", Format: t.format, Spec: t.spec, KnownStarts: len(t.host.funcs),
-		NamedStarts: t.host.named, Imports: len(t.host.imports), HostTracked: t.trackedDesc,
-		PDB: t.pdb, PDBNote: t.pdbNote,
-		LoadSecs: time.Since(start).Seconds()})
-
-	for _, target := range req.Targets {
-		current.Store(target)
-		emit(t.decompile(target, req.MaxInstructions, false))
-	}
-	return 0
 }
 
 // decompileTarget is a loaded binary ready to decompile.

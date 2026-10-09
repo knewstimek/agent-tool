@@ -1,13 +1,9 @@
 package analyze
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -61,72 +57,6 @@ func splitTargets(s string) []string {
 	return out
 }
 
-// runDecompileWorker runs one worker to completion, timeout or kill. failure
-// describes an abnormal end ("" when the worker finished). The worker is
-// always reaped and its job closed before returning.
-func runDecompileWorker(ctx context.Context, req decompileRequest, timeout time.Duration) ([]decompileLine, string) {
-	exe, err := os.Executable()
-	if err != nil {
-		return nil, "cannot locate the agent-tool executable to start the decompile worker: " + err.Error()
-	}
-	body, _ := json.Marshal(req)
-	cmd := exec.Command(exe, DecompileWorkerArg)
-	prepareWorker(cmd)
-	cmd.Stdin = bytes.NewReader(body)
-	var stderr limitedBuffer
-	cmd.Stderr = &stderr
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, "decompile worker pipe: " + err.Error()
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, "cannot start decompile worker: " + err.Error()
-	}
-	guard, guardErr := guardWorker(cmd.Process, uint64(decompileMemLimitMB+decompileJobHeadroomMB)<<20)
-	defer guard.close()
-
-	var lines []decompileLine
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		sc := bufio.NewScanner(stdout)
-		sc.Buffer(make([]byte, 64<<10), 256<<20) // one line carries a whole function's C
-		for sc.Scan() {
-			var l decompileLine
-			if json.Unmarshal(sc.Bytes(), &l) == nil {
-				lines = append(lines, l)
-			}
-		}
-	}()
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	failure := ""
-	select {
-	case <-done:
-	case <-timer.C:
-		failure = fmt.Sprintf("timed out after %s", timeout)
-		guard.kill()
-		<-done
-	case <-ctx.Done():
-		failure = "cancelled by the client"
-		guard.kill()
-		<-done
-	}
-	// Wait reaps the worker (no zombie on Unix) and closes its pipes.
-	waitErr := cmd.Wait()
-	if failure == "" && waitErr != nil && !hasFatal(lines) {
-		failure = fmt.Sprintf("worker exited abnormally (%v)", waitErr)
-		if s := strings.TrimSpace(stderr.String()); s != "" {
-			failure += ": " + firstLine(s)
-		}
-		if guardErr == nil {
-			failure += "; it may have hit the memory limit"
-		}
-	}
-	return lines, failure
-}
-
 func hasFatal(lines []decompileLine) bool {
 	for _, l := range lines {
 		if l.Kind == "fatal" {
@@ -169,7 +99,11 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 			ok++
 		}
 	}
-	fmt.Fprintf(&sb, "Decompiled %d/%d function(s) from %s (%s, %s) in %.1fs\n", ok, len(targets), base, load.Format, load.Spec, elapsed.Seconds())
+	cached := ""
+	if load.Reused {
+		cached = ", binary already loaded"
+	}
+	fmt.Fprintf(&sb, "Decompiled %d/%d function(s) from %s (%s, %s) in %.1fs%s\n", ok, len(targets), base, load.Format, load.Spec, elapsed.Seconds(), cached)
 	fmt.Fprintf(&sb, "Host info from the file: %d known function starts (%d named), %d imports", load.KnownStarts, load.NamedStarts, load.Imports)
 	if load.HostTracked != "" {
 		fmt.Fprintf(&sb, ", %s", load.HostTracked)

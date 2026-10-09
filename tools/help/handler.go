@@ -1069,6 +1069,11 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   binaries built by the Go toolchain use Go's register ABI (Ghidra's golang spec).
   The architecture, image layout and calling convention are detected from the file.
 
+  The first call on a binary loads it (seconds for a large image with its PDB);
+  later calls on the same file reuse the loaded worker and return in well under a
+  second, so decompile functions one after another rather than re-planning around
+  the load. An idle worker exits after 2 minutes; a changed file is reloaded.
+
   What the host knows comes from the file: function starts (.pdata, exports, symbol
   tables, call targets, entry point), import names, read-only sections, and tail-call
   jumps (the same Shared Return rule Ghidra's analysis applies).

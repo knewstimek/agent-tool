@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDecompileFixtureEntry(t *testing.T) {
@@ -145,6 +146,76 @@ func TestDecompileCancelledContextKillsWorker(t *testing.T) {
 	if !strings.Contains(out, "cancelled by the client") && !strings.Contains(out, "Decompiled 1/1") {
 		t.Errorf("unexpected output:\n%s", out)
 	}
+}
+
+// A worker stays loaded for the next request on the same binary; a killed
+// one leaves the pool and the next request starts a fresh worker.
+func TestDecompileWorkerReuse(t *testing.T) {
+	exe := filepath.Join("testdata", "pdb", "fixture_x64.exe")
+	run := func(ctx context.Context) string {
+		out, err := opDecompile(ctx, AnalyzeInput{FilePath: exe, VA: "use_node", MaxOutputChars: 100000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	first := run(context.Background())
+	if !strings.Contains(first, "Decompiled 1/1") {
+		t.Fatalf("first call failed:\n%s", first)
+	}
+	second := run(context.Background())
+	if !strings.Contains(second, "Decompiled 1/1") || !strings.Contains(second, "binary already loaded") {
+		t.Fatalf("second call did not reuse the worker:\n%s", second)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	run(ctx) // kills the worker (or finishes first)
+	third := run(context.Background())
+	if !strings.Contains(third, "Decompiled 1/1") {
+		t.Fatalf("call after a cancel failed:\n%s", third)
+	}
+	decompPool.mu.Lock()
+	n := len(decompPool.workers)
+	decompPool.mu.Unlock()
+	if n > decompilePoolSize {
+		t.Errorf("%d workers pooled, at most %d", n, decompilePoolSize)
+	}
+}
+
+// An idle worker exits and leaves the pool after decompileIdle.
+func TestDecompileIdleWorkerRetires(t *testing.T) {
+	saved := decompileIdle
+	decompileIdle = 300 * time.Millisecond
+	defer func() { decompileIdle = saved }()
+	exe := filepath.Join("testdata", "pdb", "fixture_x86.exe")
+	if out, err := opDecompile(context.Background(), AnalyzeInput{FilePath: exe, VA: "entry"}); err != nil || !strings.Contains(out, "Decompiled 1/1") {
+		t.Fatalf("decompile failed: %v\n%s", err, out)
+	}
+	decompPool.mu.Lock()
+	var w *decompWorker
+	for _, o := range decompPool.workers {
+		if strings.HasPrefix(o.key, exe+"|") {
+			w = o
+		}
+	}
+	decompPool.mu.Unlock()
+	if w == nil {
+		t.Fatal("worker not pooled")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		decompPool.mu.Lock()
+		pooled := false
+		for _, o := range decompPool.workers {
+			pooled = pooled || o == w
+		}
+		decompPool.mu.Unlock()
+		if !pooled && w.cmd.ProcessState != nil {
+			return // retired and reaped
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("idle worker was not retired and reaped")
 }
 
 func TestSplitTargets(t *testing.T) {
