@@ -51,7 +51,10 @@ func opDecompile(ctx context.Context, input AnalyzeInput) (string, error) {
 	var err error
 	input.annotations, input.annotationNotice, err = loadAnnotationAddresses(ctx, input, addresses)
 	if err != nil {
-		return "", err
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		input.annotations, input.annotationNotice = nil, annotationLoadWarning(err)
 	}
 	return formatDecompile(input, targets, lines, failure, time.Since(start)), nil
 }
@@ -79,6 +82,9 @@ func hasFatal(lines []decompileLine) bool {
 
 func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine, failure string, elapsed time.Duration) string {
 	var sb strings.Builder
+	if input.annotationNotice != "" {
+		fmt.Fprintf(&sb, "// %s\n", input.annotationNotice)
+	}
 	var load *decompileLine
 	results := map[string]decompileLine{}
 	var fatal *decompileLine
@@ -132,9 +138,6 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 		sb.WriteString("No debug types or prototypes are applied: parameter/local types and callee signatures are inferred by the decompiler (Ghidra-equivalent core), so treat names like param_1/local_10 and undefined types as recovered, not declared.\n")
 	}
 
-	if input.annotationNotice != "" {
-		fmt.Fprintf(&sb, "// %s\n", input.annotationNotice)
-	}
 	for _, t := range targets {
 		r, have := results[t]
 		sb.WriteString("\n")

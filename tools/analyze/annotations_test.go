@@ -53,11 +53,13 @@ func TestAnnotationsPersistenceIdentityAndCRUD(t *testing.T) {
 	}
 	id := saved.Items[0].ID
 	// Each call reopens the SQLite file: persistence is not an in-memory cache.
+	in.AnnotationID, in.ExpectedRevision = id, saved.Items[0].Revision
 	in.Comment = "현재 사용자 포인터"
 	in.AnnotationStatus = "confirmed"
 	updated := annotationCall(t, in)
+	in.ExpectedRevision = updated.Items[0].Revision
 	if updated.Items[0].ID != id || updated.Items[0].Comment != in.Comment {
-		t.Fatalf("upsert did not preserve ID: %+v", updated)
+		t.Fatalf("update did not preserve ID: %+v", updated)
 	}
 	// A copy at a different path has the same content identity.
 	copyPath := filepath.Join(filepath.Dir(in.FilePath), "moved.bin")
@@ -91,9 +93,11 @@ func TestAnnotationsPersistenceIdentityAndCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	in.Operation, in.Comment = "annotation_set", "edited by ID"
-	if got := annotationCall(t, in); got.Items[0].ID != id || got.Items[0].Comment != in.Comment {
+	got := annotationCall(t, in)
+	if got.Items[0].ID != id || got.Items[0].Comment != in.Comment {
 		t.Fatalf("edit by ID: %+v", got)
 	}
+	in.ExpectedRevision = got.Items[0].Revision
 	in.Operation = "annotation_delete"
 	if !annotationCall(t, in).Deleted {
 		t.Fatal("not deleted")

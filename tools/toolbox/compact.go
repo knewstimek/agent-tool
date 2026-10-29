@@ -58,7 +58,7 @@ var compactOperationShapes = map[string]map[string]operationShape{
 		"function_at":    {fields: []string{"operation", "file_path", "va", "count", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path", "va"}},
 		"decompile":      {fields: []string{"operation", "file_path", "va", "timeout_sec", "pdb_path", "pdb_force", "max_output_chars", "result_offset", "annotations_path", "line_numbers"}, required: []string{"operation", "file_path", "va"}},
 		"annotation_set": {
-			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "annotation_kind", "va", "rva", "label", "comment", "subject", "annotation_status", "line", "code_hash", "pdb_path", "pdb_force", "max_output_chars"},
+			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "expected_revision", "annotation_patch", "annotation_kind", "va", "rva", "label", "comment", "subject", "annotation_status", "line", "code_hash", "pdb_path", "pdb_force", "max_output_chars"},
 			required: []string{"operation", "file_path"},
 		},
 		"annotation_list": {
@@ -66,8 +66,8 @@ var compactOperationShapes = map[string]map[string]operationShape{
 			required: []string{"operation", "file_path"},
 		},
 		"annotation_delete": {
-			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "max_output_chars"},
-			required: []string{"operation", "file_path", "annotation_id"},
+			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "expected_revision", "max_output_chars"},
+			required: []string{"operation", "file_path", "annotation_id", "expected_revision"},
 		},
 		"type_info":     {fields: []string{"operation", "file_path", "type_name", "pdb_path", "pdb_force", "max_output_chars", "result_offset"}, required: []string{"operation", "file_path", "type_name"}},
 		"call_graph":    {fields: []string{"operation", "file_path", "va", "count", "max_results"}, required: []string{"operation", "file_path", "va"}},

@@ -127,14 +127,35 @@ Call through `toolbox` (`operation="call", tool="analyze", arguments={...}`); us
 - Function notes appear above the C body. Instruction notes appear inline in
   disassembly; entry-address notes also appear at the C header. Other instruction
   notes are not mapped to C lines without a verified source mapping.
-- Set upserts an anchor; `annotation_id` replaces an existing record using the full
-  desired fields. Delete requires its exact string ID. List supports address,
-  kind, subject, status, ID and literal `query` filters (ASCII case folding).
-  `max_results` defaults to 50 (max 200); `result_offset` is a row index and
-  `next_result_offset` continues the JSON list. Output limits can shorten a page;
-  raise `max_output_chars` when a single note cannot fit (a set may already have
-  saved before reporting an output-size error). Disassembly/decompile page by
-  character instead. Rendered views cap notes at 500; list retrieves the rest.
+- Set without an ID creates a new anchor; it rejects an occupied anchor instead
+  of overwriting another editor's work. Update by `annotation_id` requires the
+  exact `expected_revision` string from set/list. Omitted fields are preserved;
+  nonempty top-level fields update only those values. Use `annotation_patch` for
+  explicit empty strings or `line=0`; its supplied fields override top-level
+  values. The merged record must still have a label or comment and a valid anchor.
+  Delete requires both ID and expected revision. Stale edits/deletes fail without
+  changing the record; read it again before retrying. Revisions remain strings,
+  including in rendered notes and abbreviated receipts.
+- List supports address, kind, subject, status, ID and literal `query` filters
+  (ASCII case folding). `max_results` defaults to 50 (max 200); `result_offset`
+  is a row index and `next_result_offset` continues the JSON list. Output limits
+  can shorten a page; raise `max_output_chars` when a single listed note cannot
+  fit. Writes require at least 256 output characters, checked before any change.
+  If full write details cannot fit, success still returns a short JSON receipt
+  with `saved`, `annotation_id`, `revision` (or `deleted`) and
+  `details_omitted=true`. Disassembly/decompile page by character instead.
+  Rendered views cap notes at 500; list retrieves the rest.
+- Annotation DB load failures produce a visible warning alongside the original
+  disassembly/decompilation; annotation CRUD still reports DB errors normally.
+  Legacy v1 DBs remain readable without modification. Their first write atomically
+  adds revision tracking (v2), preserving existing notes at revision `"1"`.
+  Older tool builds that only understand v1 cannot open a v2 DB.
+
+Partial edit example (use the ID and revision returned by your last read):
+
+```json
+{"operation":"annotation_set","file_path":"sample.exe","annotation_id":"<id>","expected_revision":"1","annotation_patch":{"comment":"Confirmed user pointer","annotation_status":"confirmed","label":""},"annotations_path":"project.annotations.sqlite"}
+```
 
 Keep private annotation databases out of public Git history. This repository ignores
 `*.annotations.sqlite*` and the default DB filename. Custom filenames need their

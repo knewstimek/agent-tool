@@ -126,15 +126,35 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
 - 함수 주석은 C 본문 앞에 표시됩니다. 명령어 주석은 디스어셈블리에 표시되며,
   함수 시작 주소의 주석은 C 헤더에서도 볼 수 있습니다. 그 밖의 명령어 주석을
   검증된 주소 대응 없이 C 라인에 임의로 배치하지 않습니다.
-- 같은 위치의 저장은 갱신으로 처리합니다. `annotation_id`로 수정할 때는
-  원하는 필드를 모두 전달하며, 삭제에는 정확한 문자열 ID가 필요합니다.
-  조회는 주소·종류·subject·상태·ID·`query`(문자열 포함, ASCII 대소문자 무시)를
+- ID 없이 저장하면 새 주석을 생성합니다. 같은 위치에 주석이 있으면
+  다른 편집자의 내용을 덮어쓰지 않고 거부합니다. `annotation_id`로 수정할 때는
+  저장·조회 결과의 정확한 `expected_revision` 문자열이 필요합니다.
+  생략한 필드는 유지하고, 최상위의 비어 있지 않은 필드만 변경합니다.
+  빈 문자열로 지우거나 `line=0`을 지정하려면 `annotation_patch`를 사용합니다.
+  patch에 지정한 값이 최상위 값보다 우선합니다. 수정 후에도 라벨이나 코멘트,
+  올바른 위치 정보는 남아 있어야 합니다. 삭제도 ID와 revision이 모두 필요합니다.
+  오래된 revision의 수정·삭제는 거부하므로 다시 조회한 뒤 재시도합니다.
+  revision은 화면 주석과 축약 응답에서도 정확한 문자열로 반환합니다.
+- 조회는 주소·종류·subject·상태·ID·`query`(문자열 포함, ASCII 대소문자 무시)를
   지원합니다. `max_results` 기본 50·최대 200, `result_offset`은 행 번호이며
   JSON의 `next_result_offset`으로 이어 읽습니다. 출력 상한으로 페이지가
-  짧아질 수 있습니다. 한 주석도 담지 못하면 `max_output_chars`를 늘립니다
-  (저장 요청은 출력 크기 오류 전에 이미 반영됐을 수 있습니다).
-  디스어셈블리·디컴파일의 페이지 오프셋은 문자 기준입니다.
+  짧아질 수 있습니다. 한 주석도 조회하지 못하면 `max_output_chars`를 늘립니다.
+  쓰기의 출력 상한은 최소 256자이며 변경 전에 검사합니다. 상세 결과가 상한을
+  넘으면 실패로 바꾸지 않고 `saved`, `annotation_id`, `revision`
+  (또는 `deleted`)과 `details_omitted=true`를 담은 짧은 JSON 성공 응답을
+  반환합니다. 디스어셈블리·디컴파일의 페이지 오프셋은 문자 기준입니다.
   결과 화면에는 최대 500개를 표시하며 나머지는 조회로 확인합니다.
+- 주석 DB를 읽지 못해도 디스어셈블리·디컴파일 결과는 경고와 함께 반환합니다.
+  주석 저장·조회·삭제 작업 자체의 DB 오류는 계속 오류로 처리합니다.
+  기존 v1 DB는 변경 없이 조회할 수 있고, 첫 쓰기 때 트랜잭션 안에서
+  revision 열을 추가해 v2로 전환합니다. 기존 주석의 시작 revision은 `"1"`입니다.
+  v1만 지원하는 과거 실행 파일은 v2 DB를 읽을 수 없습니다.
+
+부분 수정 예시입니다. 직전 조회 결과의 ID와 revision을 사용합니다.
+
+```json
+{"operation":"annotation_set","file_path":"sample.exe","annotation_id":"<id>","expected_revision":"1","annotation_patch":{"comment":"사용자 포인터로 확인","annotation_status":"confirmed","label":""},"annotations_path":"project.annotations.sqlite"}
+```
 
 주석 DB에는 비공개 분석 내용이 들어갈 수 있으므로 공개 Git에 포함하지 마세요.
 이 저장소는 `*.annotations.sqlite*`와 기본 DB 파일명을 무시합니다.

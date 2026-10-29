@@ -593,7 +593,8 @@ Durable user labels and comments stored in a separate SQLite database.
   analyze(operation="annotation_list", file_path="/path/to/sample.exe",
           query="User", annotations_path="/path/to/notes.annotations.sqlite")
   analyze(operation="annotation_delete", file_path="/path/to/sample.exe",
-          annotation_id="<id from set/list>", annotations_path="/path/to/notes.annotations.sqlite")
+          annotation_id="<id from set/list>", expected_revision="<revision string>",
+          annotations_path="/path/to/notes.annotations.sqlite")
 
   annotations_path selects the SAME database for all annotation operations and for
   disassemble/decompile reads. Relative paths follow the workspace/MCP root.
@@ -608,8 +609,8 @@ Durable user labels and comments stored in a separate SQLite database.
   subject optionally names a register/operand/variable; meaning applies only at
   that address/line. label/comment are user metadata, not engine rename/type
   overrides. label or comment is required (256/8192 UTF-8 bytes); subject max 256.
-  annotation_status: hypothesis (default), confirmed, rejected; user assessment.
-  Automatic symbols/types remain separate; displayed user notes carry status/ID.
+  annotation_status: hypothesis (default on creation), confirmed, rejected; user assessment.
+  Automatic symbols/types remain separate; displayed user notes carry status/ID/revision.
 
   C-line example:
     analyze(operation="decompile", file_path="/path/to/sample.exe",
@@ -626,8 +627,19 @@ Durable user labels and comments stored in a separate SQLite database.
   disassembly; at a function entry they also appear in decompile as entry notes.
   Other instruction notes are not guessed onto C lines (no source mapping).
 
-  Set upserts the same binary/address/kind/subject/line/code_hash. Supplying
-  annotation_id replaces that record (send the full desired fields).
+  Set without ID creates an anchor; an occupied anchor is rejected.
+  Update/delete require annotation_id and expected_revision from set/list.
+  Revisions are exact positive decimal strings; stale revisions are rejected.
+  ID updates preserve omitted fields. Nonempty top-level fields are partial
+  updates. annotation_patch supports explicit empty text or line=0; supplied
+  patch values override top-level values. Allowed patch fields: label, comment,
+  subject, annotation_status, annotation_kind, va, rva, line, code_hash.
+  The merged note must retain label or comment and a valid anchor.
+    analyze(operation="annotation_set", file_path="/path/to/sample.exe",
+            annotation_id="<id>", expected_revision="1",
+            annotation_patch={"comment":"Confirmed user pointer","label":""},
+            annotations_path="/path/to/notes.annotations.sqlite")
+  A conflict requires a new read before retrying; it never overwrites the record.
   IDs, addresses and SHA-256 values are exact strings. The full binary SHA-256,
   not its path or timestamp, scopes records: moving/copying identical bytes
   keeps notes; modified binaries do not inherit notes. There is no automatic
@@ -636,8 +648,15 @@ Durable user labels and comments stored in a separate SQLite database.
   query (literal label/comment/subject substring; ASCII case folding).
   max_results defaults to 50, max 200; result_offset is a row index, and JSON
   next_result_offset continues the list. max_output_chars may shorten a page;
-  raise it if a single note cannot fit. Set errors about output size may occur
-  after saving. Rendering shows at most 500 records; list reads the remainder.
+  raise it if a single listed note cannot fit. Writes require max_output_chars
+  >=256, checked before changes. A successful write returns a short receipt if
+  full details exceed the cap: saved=true, annotation_id, revision (or deleted),
+  details_omitted=true. Output limits never turn a committed write into failure.
+  Rendering shows at most 500 records; list reads the remainder.
+  Annotation DB load errors appear as warnings alongside disassembly/decompile;
+  CRUD DB errors remain errors. Legacy v1 is readable without changes; the first
+  write atomically migrates to v2 with revision=1 for existing notes. v1-only
+  tool builds cannot read a v2 DB.
   Disassembly/decompile result_offset pages by character instead.
 
 ### disassemble

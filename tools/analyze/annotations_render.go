@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"agent-tool/common"
@@ -48,6 +49,14 @@ func loadAnnotationAddresses(ctx context.Context, input AnalyzeInput, addresses 
 	return notes, notice, nil
 }
 
+func annotationLoadWarning(err error) string {
+	message := []rune(err.Error())
+	if len(message) > 1024 {
+		message = append(message[:1024], []rune("...")...)
+	}
+	return "WARNING: user annotations unavailable: " + strconv.Quote(string(message)) + "; analysis continues without user notes."
+}
+
 func disassemblyLineVA(line string) string {
 	addr, _, ok := strings.Cut(line, ":")
 	if !ok || !strings.HasPrefix(addr, "0x") {
@@ -72,12 +81,18 @@ func renderDisassemblyAnnotations(ctx context.Context, input AnalyzeInput, text 
 	}
 	notes, notice, err := loadAnnotationAddresses(ctx, input, addresses)
 	if err != nil {
-		return "", err
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		notes, notice = nil, annotationLoadWarning(err)
 	}
 	if len(notes) == 0 && notice == "" {
 		return pageOutput(text, input.ResultOffset, input.MaxOutputChars, "disassemble"), nil
 	}
 	var sb strings.Builder
+	if notice != "" {
+		sb.WriteString("; " + notice + "\n")
+	}
 	for i, line := range lines {
 		if i != 0 {
 			sb.WriteByte('\n')
@@ -88,9 +103,6 @@ func renderDisassemblyAnnotations(ctx context.Context, input AnalyzeInput, text 
 				sb.WriteString("  ; " + annotationText(a))
 			}
 		}
-	}
-	if notice != "" {
-		sb.WriteString("\n; " + notice)
 	}
 	return pageOutput(sb.String(), input.ResultOffset, input.MaxOutputChars, "disassemble"), nil
 }

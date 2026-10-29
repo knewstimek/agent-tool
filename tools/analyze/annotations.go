@@ -34,12 +34,14 @@ type analysisAnnotation struct {
 	Status   string `json:"status"`
 	Line     int    `json:"line,omitempty"`
 	CodeHash string `json:"code_hash,omitempty"`
+	Revision string `json:"revision"`
 }
 
 type annotationStore struct {
-	db   *sql.DB
-	hash string
-	path string
+	db      *sql.DB
+	hash    string
+	path    string
+	version int
 }
 
 func annotationsPath(input AnalyzeInput) (string, error) {
@@ -171,10 +173,11 @@ func openAnnotations(ctx context.Context, input AnalyzeInput, write bool) (*anno
 				status TEXT NOT NULL,
 				line INTEGER NOT NULL,
 				code_hash TEXT NOT NULL,
+				revision INTEGER NOT NULL DEFAULT 1,
 				UNIQUE(binary_sha256, va, kind, subject, line, code_hash)
 			);
 			PRAGMA application_id=1096040782;
-			PRAGMA user_version=1;
+			PRAGMA user_version=2;
 			COMMIT;`); err != nil {
 			return fail(err)
 		}
@@ -187,14 +190,20 @@ func openAnnotations(ctx context.Context, input AnalyzeInput, write bool) (*anno
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fail(err)
 	}
-	if version != 1 {
+	if version != 1 && version != 2 {
 		return fail(fmt.Errorf("unsupported annotation database version %d", version))
+	}
+	if version == 1 && write {
+		if err := migrateAnnotationRevision(ctx, db); err != nil {
+			return fail(err)
+		}
+		version = 2
 	}
 	hash, err := binarySHA256(ctx, input.FilePath)
 	if err != nil {
 		return fail(err)
 	}
-	return &annotationStore{db: db, hash: hash, path: path}, nil
+	return &annotationStore{db: db, hash: hash, path: path, version: version}, nil
 }
 
 func annotationVA(input AnalyzeInput) (string, error) {
@@ -269,26 +278,11 @@ const annotationColumns = "id, va, kind, subject, label, comment, status, line, 
 
 func scanAnnotation(row interface{ Scan(...any) error }) (analysisAnnotation, error) {
 	var a analysisAnnotation
-	err := row.Scan(&a.ID, &a.VA, &a.Kind, &a.Subject, &a.Label, &a.Comment, &a.Status, &a.Line, &a.CodeHash)
+	err := row.Scan(&a.ID, &a.VA, &a.Kind, &a.Subject, &a.Label, &a.Comment, &a.Status, &a.Line, &a.CodeHash, &a.Revision)
 	return a, err
 }
 
-func (s *annotationStore) set(ctx context.Context, a analysisAnnotation) (analysisAnnotation, error) {
-	if a.ID != "" {
-		// Editing by ID replaces the record, but cannot reach another binary.
-		result, err := s.db.ExecContext(ctx, `UPDATE analysis_annotations
-			SET va=?,kind=?,subject=?,label=?,comment=?,status=?,line=?,code_hash=?
-			WHERE id=? AND binary_sha256=?`,
-			a.VA, a.Kind, a.Subject, a.Label, a.Comment, a.Status, a.Line, a.CodeHash, a.ID, s.hash)
-		if err != nil {
-			return a, err
-		}
-		n, err := result.RowsAffected()
-		if err == nil && n == 0 {
-			err = fmt.Errorf("annotation_id not found for this binary")
-		}
-		return a, err
-	}
+func (s *annotationStore) create(ctx context.Context, a analysisAnnotation) (analysisAnnotation, error) {
 	id := make([]byte, 16)
 	if _, err := rand.Read(id); err != nil {
 		return a, err
@@ -297,9 +291,8 @@ func (s *annotationStore) set(ctx context.Context, a analysisAnnotation) (analys
 	return scanAnnotation(s.db.QueryRowContext(ctx, `INSERT INTO analysis_annotations
 		(id,binary_sha256,va,kind,subject,label,comment,status,line,code_hash)
 		VALUES(?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(binary_sha256,va,kind,subject,line,code_hash)
-		DO UPDATE SET label=excluded.label,comment=excluded.comment,status=excluded.status
-		RETURNING `+annotationColumns,
+		ON CONFLICT(binary_sha256,va,kind,subject,line,code_hash) DO NOTHING
+		RETURNING `+s.columns(),
 		a.ID, s.hash, a.VA, a.Kind, a.Subject, a.Label, a.Comment, a.Status, a.Line, a.CodeHash))
 }
 
@@ -307,7 +300,10 @@ func opAnnotations(ctx context.Context, input AnalyzeInput) (string, error) {
 	op := strings.ToLower(strings.TrimSpace(input.Operation))
 	var a analysisAnnotation
 	var err error
-	if op == "annotation_set" {
+	if op == "annotation_set" && input.AnnotationID == "" {
+		if input.ExpectedRevision != "" || input.AnnotationPatch != nil {
+			return "", fmt.Errorf("expected_revision and annotation_patch require annotation_id")
+		}
 		a, err = makeAnnotation(input)
 		if err != nil {
 			return "", err
@@ -315,6 +311,14 @@ func opAnnotations(ctx context.Context, input AnalyzeInput) (string, error) {
 	}
 	if op == "annotation_delete" && input.AnnotationID == "" {
 		return "", fmt.Errorf("annotation_id is required; use annotation_list to find it")
+	}
+	if (op == "annotation_set" && input.AnnotationID != "") || op == "annotation_delete" {
+		if err := validateAnnotationRevision(input.ExpectedRevision); err != nil {
+			return "", err
+		}
+	}
+	if op != "annotation_list" && input.MaxOutputChars > 0 && input.MaxOutputChars < 256 {
+		return "", fmt.Errorf("max_output_chars must be at least 256 for annotation writes; nothing was changed")
 	}
 	if len(input.Query) > 512 {
 		return "", fmt.Errorf("query must be at most 512 bytes")
@@ -340,17 +344,24 @@ func opAnnotations(ctx context.Context, input AnalyzeInput) (string, error) {
 		path, hash = s.path, s.hash
 		switch op {
 		case "annotation_set":
-			a, err = s.set(ctx, a)
+			if input.AnnotationID != "" {
+				a, err = s.update(ctx, input)
+			} else {
+				a, err = s.create(ctx, a)
+				if err == sql.ErrNoRows {
+					err = fmt.Errorf("annotation anchor already exists; use annotation_list, then annotation_id and expected_revision to update")
+				}
+			}
 			items = append(items, a)
 		case "annotation_delete":
 			var result sql.Result
-			result, err = s.db.ExecContext(ctx, "DELETE FROM analysis_annotations WHERE binary_sha256=? AND id=?", s.hash, input.AnnotationID)
+			result, err = s.db.ExecContext(ctx, "DELETE FROM analysis_annotations WHERE binary_sha256=? AND id=? AND revision=?", s.hash, input.AnnotationID, input.ExpectedRevision)
 			if err == nil {
 				var n int64
 				n, err = result.RowsAffected()
 				deleted = n != 0
 				if !deleted && err == nil {
-					err = fmt.Errorf("annotation_id not found for this binary")
+					err = fmt.Errorf("annotation not found for this binary or revision conflict; reread annotation_list before retrying")
 				}
 			}
 		case "annotation_list":
@@ -382,7 +393,7 @@ func opAnnotations(ctx context.Context, input AnalyzeInput) (string, error) {
 			}
 			args = append(args, limit+1, input.ResultOffset)
 			var rows *sql.Rows
-			rows, err = s.db.QueryContext(ctx, "SELECT "+annotationColumns+" FROM analysis_annotations WHERE "+where+
+			rows, err = s.db.QueryContext(ctx, "SELECT "+s.columns()+" FROM analysis_annotations WHERE "+where+
 				" ORDER BY va,kind,line,subject,code_hash,id LIMIT ? OFFSET ?", args...)
 			if err == nil {
 				defer rows.Close()
@@ -416,6 +427,9 @@ func opAnnotations(ctx context.Context, input AnalyzeInput) (string, error) {
 	payload := map[string]any{"annotations_path": path, "binary_sha256": hash, "annotations": items}
 	if op == "annotation_delete" {
 		payload["deleted"] = deleted
+		payload["annotation_id"] = input.AnnotationID
+	} else if op == "annotation_set" {
+		payload["saved"] = true
 	}
 	if more {
 		payload["next_result_offset"] = input.ResultOffset + len(items)
@@ -441,7 +455,17 @@ func opAnnotations(ctx context.Context, input AnalyzeInput) (string, error) {
 		}
 	}
 	if len([]rune(string(data))) > capChars {
-		return "", fmt.Errorf("annotation output exceeds max_output_chars; raise it (annotation_set, if requested, has already saved the record)")
+		if op == "annotation_list" {
+			return "", fmt.Errorf("annotation output exceeds max_output_chars; raise it")
+		}
+		// Every committed mutation gets an unambiguous bounded success receipt.
+		receipt := map[string]any{"details_omitted": true}
+		if op == "annotation_set" {
+			receipt["saved"], receipt["annotation_id"], receipt["revision"] = true, a.ID, a.Revision
+		} else {
+			receipt["deleted"], receipt["annotation_id"] = true, input.AnnotationID
+		}
+		data, _ = json.Marshal(receipt)
 	}
 	return string(data), nil
 }
@@ -456,7 +480,7 @@ func (s *annotationStore) atAddresses(ctx context.Context, addresses []string) (
 	for _, va := range addresses {
 		args = append(args, va)
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT "+annotationColumns+" FROM analysis_annotations WHERE binary_sha256=? AND va IN ("+
+	rows, err := s.db.QueryContext(ctx, "SELECT "+s.columns()+" FROM analysis_annotations WHERE binary_sha256=? AND va IN ("+
 		strings.TrimSuffix(strings.Repeat("?,", len(addresses)), ",")+") ORDER BY va,kind,line,subject,id LIMIT 501", args...)
 	if err != nil {
 		return nil, false, err
@@ -478,7 +502,7 @@ func (s *annotationStore) atAddresses(ctx context.Context, addresses []string) (
 }
 
 func annotationText(a analysisAnnotation) string {
-	parts := []string{"user:" + a.Status, "id=" + a.ID}
+	parts := []string{"user:" + a.Status, "id=" + a.ID, "revision=" + a.Revision}
 	if a.Subject != "" {
 		parts = append(parts, "subject="+strconv.Quote(a.Subject))
 	}

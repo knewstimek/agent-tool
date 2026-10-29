@@ -45,7 +45,7 @@ type AnalyzeInput struct {
 	Section        string `json:"section,omitempty" jsonschema:"Filter by section name (e.g. '.text', '.rdata'). Empty = show all"`
 	RVA            string `json:"rva,omitempty" jsonschema:"RVA to convert to file offset (hex string, e.g. '0x36A20'). For pe_info and annotation_set/list; annotations resolve RVA from the PE image base"`
 	ResultOffset   int    `json:"result_offset,omitempty" jsonschema:"Paging offset: row index for annotation_list; import index for pe_info; character offset for disassemble, decompile and type_info (a truncated output names the value that continues it). Default: 0"`
-	MaxOutputChars int    `json:"max_output_chars,omitempty" jsonschema:"Maximum returned text characters for paged analysis output. Default: 32768, Max: 131072"`
+	MaxOutputChars int    `json:"max_output_chars,omitempty" jsonschema:"Maximum returned text characters for paged analysis output. Default: 32768, Max: 131072. Annotation writes require at least 256; large write results return a short success receipt."`
 
 	// pattern_search parameters
 	Pattern string `json:"pattern,omitempty" jsonschema:"Hex byte pattern with ?? wildcards (e.g. '4D 5A ?? ?? 50 45'). For pattern_search"`
@@ -70,17 +70,19 @@ type AnalyzeInput struct {
 	TypeName string `json:"type_name,omitempty" jsonschema:"type_info: struct/class/union/enum name as decompile prints it (Node) or qualified (geo::Rect), up to 16 comma-separated; prints members with offsets and enum values from the PDB or DWARF. struct_layout: one type to lay over va (default: the global at va)"`
 
 	// Durable user annotations. Unexported rendering data is not part of MCP.
-	AnnotationsPath  string `json:"annotations_path,omitempty" jsonschema:"SQLite annotation database to save/load. Relative paths use workspace/MCP root. Default: user config dir/agent-tool/analysis-annotations.sqlite. Reads do not create a DB; annotation_set creates it."`
-	AnnotationID     string `json:"annotation_id,omitempty" jsonschema:"Exact string ID from annotation_list/set. set replaces that record; delete requires it. Records are scoped to the binary SHA-256."`
-	AnnotationKind   string `json:"annotation_kind,omitempty" jsonschema:"instruction (default), function, or decompile. decompile anchors a C-body line to its exact code_hash; function uses the entry VA."`
-	Label            string `json:"label,omitempty" jsonschema:"User label, at most 256 UTF-8 bytes. Annotation metadata only; does not rename engine symbols."`
-	Comment          string `json:"comment,omitempty" jsonschema:"User comment, at most 8192 UTF-8 bytes. annotation_set requires label or comment."`
-	Subject          string `json:"subject,omitempty" jsonschema:"Optional register/operand/variable meaning target, e.g. rax or local_10. Scoped to this address/line; metadata only."`
-	AnnotationStatus string `json:"annotation_status,omitempty" jsonschema:"hypothesis (default on set), confirmed, or rejected. User assessment, not engine validation. Also a list filter."`
-	Line             int    `json:"line,omitempty" jsonschema:"1-based C-body L number from decompile line_numbers=true. Required with code_hash for annotation_kind=decompile."`
-	CodeHash         string `json:"code_hash,omitempty" jsonschema:"SHA-256 C snapshot from decompile line_numbers=true. Changed snapshots show needs_review instead of attaching to another line."`
-	Query            string `json:"query,omitempty" jsonschema:"annotation_list: literal case-insensitive substring in label/comment/subject (SQLite case folding is ASCII); max 512 bytes."`
-	LineNumbers      bool   `json:"line_numbers,omitempty" jsonschema:"decompile: show C-body L numbers and code_hash for setting line annotations. Numbers exclude headers, notes and type definitions."`
+	AnnotationsPath  string           `json:"annotations_path,omitempty" jsonschema:"SQLite annotation database to save/load. Relative paths use workspace/MCP root. Default: user config dir/agent-tool/analysis-annotations.sqlite. Reads do not create a DB; annotation_set creates it."`
+	AnnotationID     string           `json:"annotation_id,omitempty" jsonschema:"Exact string ID from annotation_list/set. set partially updates that record; delete requires it. Both require expected_revision. Records are scoped to the binary SHA-256."`
+	ExpectedRevision string           `json:"expected_revision,omitempty" jsonschema:"Exact revision string from annotation_list/set. Required for updates by annotation_id and deletes; stale revisions are rejected."`
+	AnnotationPatch  *AnnotationPatch `json:"annotation_patch,omitempty" jsonschema:"annotation_set by ID: optional sparse fields; omitted fields are preserved. Explicit empty strings clear text. Patch fields override nonempty top-level fields."`
+	AnnotationKind   string           `json:"annotation_kind,omitempty" jsonschema:"instruction (default), function, or decompile. decompile anchors a C-body line to its exact code_hash; function uses the entry VA."`
+	Label            string           `json:"label,omitempty" jsonschema:"User label, at most 256 UTF-8 bytes. Annotation metadata only; does not rename engine symbols."`
+	Comment          string           `json:"comment,omitempty" jsonschema:"User comment, at most 8192 UTF-8 bytes. New records require label or comment."`
+	Subject          string           `json:"subject,omitempty" jsonschema:"Optional register/operand/variable meaning target, e.g. rax or local_10. Scoped to this address/line; metadata only."`
+	AnnotationStatus string           `json:"annotation_status,omitempty" jsonschema:"hypothesis (default on set), confirmed, or rejected. User assessment, not engine validation. Also a list filter."`
+	Line             int              `json:"line,omitempty" jsonschema:"1-based C-body L number from decompile line_numbers=true. Required with code_hash for annotation_kind=decompile."`
+	CodeHash         string           `json:"code_hash,omitempty" jsonschema:"SHA-256 C snapshot from decompile line_numbers=true. Changed snapshots show needs_review instead of attaching to another line."`
+	Query            string           `json:"query,omitempty" jsonschema:"annotation_list: literal case-insensitive substring in label/comment/subject (SQLite case folding is ASCII); max 512 bytes."`
+	LineNumbers      bool             `json:"line_numbers,omitempty" jsonschema:"decompile: show C-body L numbers and code_hash for setting line annotations. Numbers exclude headers, notes and type definitions."`
 	annotations      map[string][]analysisAnnotation
 	annotationNotice string
 
@@ -284,7 +286,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name:        "analyze",
-		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several; a matching PDB or embedded DWARF is applied automatically, and the structs/enums the C names are printed after it), type_info for any other debug type (members with offsets, enum values). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Durable SQLite user labels/comments: annotation_set, annotation_list (query searches), annotation_delete; optional annotations_path selects the database for writes and rendered reads. disassemble/decompile show user notes separately from engine facts; decompile line_numbers=true supplies C-line/code_hash anchors (changed snapshots need review). PE annotations also accept rva. Prefer va for PE addresses. Use debug for runtime inspection.`,
+		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several; a matching PDB or embedded DWARF is applied automatically, and the structs/enums the C names are printed after it), type_info for any other debug type (members with offsets, enum values). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Durable SQLite user labels/comments with revision-checked partial edits and bounded success receipts: annotation_set, annotation_list (query searches), annotation_delete; optional annotations_path selects the database for writes and rendered reads. disassemble/decompile show user notes separately from engine facts; decompile line_numbers=true supplies C-line/code_hash anchors (changed snapshots need review). PE annotations also accept rva. Annotation load errors are reported as warnings alongside analysis results. Prefer va for PE addresses. Use debug for runtime inspection.`,
 	}, Handle)
 }
 
