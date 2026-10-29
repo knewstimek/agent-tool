@@ -42,6 +42,17 @@ func opDecompile(ctx context.Context, input AnalyzeInput) (string, error) {
 	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath, PDBForce: input.PDBForce}
 	start := time.Now()
 	lines, failure := runDecompileWorker(ctx, req, time.Duration(timeout)*time.Second)
+	addresses := make([]string, 0, len(targets))
+	for _, line := range lines {
+		if line.Kind == "result" && line.Error == "" {
+			addresses = append(addresses, fmt.Sprintf("%016x", line.Entry))
+		}
+	}
+	var err error
+	input.annotations, input.annotationNotice, err = loadAnnotationAddresses(ctx, input, addresses)
+	if err != nil {
+		return "", err
+	}
 	return formatDecompile(input, targets, lines, failure, time.Since(start)), nil
 }
 
@@ -121,6 +132,9 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 		sb.WriteString("No debug types or prototypes are applied: parameter/local types and callee signatures are inferred by the decompiler (Ghidra-equivalent core), so treat names like param_1/local_10 and undefined types as recovered, not declared.\n")
 	}
 
+	if input.annotationNotice != "" {
+		fmt.Fprintf(&sb, "// %s\n", input.annotationNotice)
+	}
 	for _, t := range targets {
 		r, have := results[t]
 		sb.WriteString("\n")
@@ -133,10 +147,7 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 			for _, w := range r.Warnings {
 				fmt.Fprintf(&sb, "// warning: %s\n", w)
 			}
-			sb.WriteString(strings.TrimLeft(r.C, "\n"))
-			if !strings.HasSuffix(r.C, "\n") {
-				sb.WriteString("\n")
-			}
+			sb.WriteString(renderAnnotatedC(r.C, input.annotations[fmt.Sprintf("%016x", r.Entry)], input.LineNumbers))
 			if r.Types != "" {
 				fmt.Fprintf(&sb, "// types named above (from %s):\n%s", load.PDB, r.Types)
 			}

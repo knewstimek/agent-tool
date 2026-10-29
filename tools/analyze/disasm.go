@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"context"
 	"debug/elf"
 	"debug/macho"
 	"debug/pe"
@@ -25,9 +26,13 @@ const (
 // Supports x86 (16/32/64-bit) and ARM (32/64-bit).
 // Reads only the needed portion instead of the entire file to save memory.
 func opDisassemble(input AnalyzeInput) (string, error) {
+	return opDisassembleContext(context.Background(), input)
+}
+
+func opDisassembleContext(ctx context.Context, input AnalyzeInput) (string, error) {
 	// VA-to-offset: try PE, then ELF, then Mach-O for VA resolution.
 	// Also auto-detects arch/mode and provides symbol map for annotations.
-	var funcEndFileOff int64 = -1 // function boundary from .pdata or heuristic
+	var funcEndFileOff int64 = -1   // function boundary from .pdata or heuristic
 	var symbolMap map[uint64]string // VA -> symbol name for inline annotations
 	if input.VA != "" {
 		resolved, err := disasmResolveVA(input.FilePath, input.VA)
@@ -137,18 +142,21 @@ func opDisassemble(input AnalyzeInput) (string, error) {
 		}
 	}
 
+	var text string
 	switch arch {
 	case "arm":
 		if mode == 64 {
-			return disasmARM64(data, baseAddr, offset, count)
+			text, err = disasmARM64(data, baseAddr, offset, count)
+		} else {
+			text, err = disasmARM32(data, baseAddr, offset, count)
 		}
-		return disasmARM32(data, baseAddr, offset, count)
 	default:
-		if common.FlexBool(input.StopAtRet) {
-			return disasmX86Opts(data, baseAddr, offset, count, mode, symbolMap, true)
-		}
-		return disasmX86(data, baseAddr, offset, count, mode, symbolMap)
+		text, err = disasmX86Opts(data, baseAddr, offset, count, mode, symbolMap, common.FlexBool(input.StopAtRet))
 	}
+	if err != nil {
+		return "", err
+	}
+	return renderDisassemblyAnnotations(ctx, input, text)
 }
 
 // DisasmBytes disassembles raw machine code bytes.

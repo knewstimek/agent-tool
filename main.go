@@ -218,7 +218,7 @@ Groups: core, file, coding, system, remote, data, analysis, windows. Use agent_t
 		{Name: "redis", Group: "data", Register: func() { redistool.Register(server) }},
 
 		{Name: "debug", Group: "analysis", Register: func() { debug.Register(server) }},
-		{Name: "analyze", Group: "analysis", Hint: "binary disassembly, decompilation to C, and assembly/value search", Register: func() { analyze.Register(server) }},
+		{Name: "analyze", Group: "analysis", Hint: "binary disassembly, decompilation to C, assembly/value search, and persistent user annotations", Register: func() { analyze.Register(server) }},
 		{Name: "codegraph", Group: "analysis", Register: func() { codegraph.Register(server) }},
 		{Name: "memtool", Group: "analysis", Register: func() { memtool.Register(server) }},
 		{Name: "wintool", Group: "windows", Register: func() { wintool.Register(server) }},

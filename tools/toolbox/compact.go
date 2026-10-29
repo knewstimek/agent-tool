@@ -30,7 +30,7 @@ func fileOnlyAnalyzeShape() operationShape {
 var compactOperationShapes = map[string]map[string]operationShape{
 	"analyze": {
 		"disassemble": {
-			fields:   []string{"operation", "file_path", "offset", "va", "count", "stop_at_ret", "mode", "base_addr", "arch"},
+			fields:   []string{"operation", "file_path", "offset", "va", "count", "stop_at_ret", "mode", "base_addr", "arch", "annotations_path", "max_output_chars", "result_offset"},
 			required: []string{"operation", "file_path"},
 		},
 		"instruction_search": {
@@ -56,12 +56,24 @@ var compactOperationShapes = map[string]map[string]operationShape{
 		"bin_diff":       {fields: []string{"operation", "file_path", "file_path_b", "max_results"}, required: []string{"operation", "file_path", "file_path_b"}},
 		"xref":           {fields: []string{"operation", "file_path", "target_va", "target_end_va", "target_text", "field", "max_results", "timeout_sec", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path"}},
 		"function_at":    {fields: []string{"operation", "file_path", "va", "count", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path", "va"}},
-		"decompile":      {fields: []string{"operation", "file_path", "va", "timeout_sec", "pdb_path", "pdb_force", "max_output_chars", "result_offset"}, required: []string{"operation", "file_path", "va"}},
-		"type_info":      {fields: []string{"operation", "file_path", "type_name", "pdb_path", "pdb_force", "max_output_chars", "result_offset"}, required: []string{"operation", "file_path", "type_name"}},
-		"call_graph":     {fields: []string{"operation", "file_path", "va", "count", "max_results"}, required: []string{"operation", "file_path", "va"}},
-		"follow_ptr":     {fields: []string{"operation", "file_path", "va", "count", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path", "va"}},
-		"rtti_dump":      {fields: []string{"operation", "file_path", "va"}, required: []string{"operation", "file_path", "va"}},
-		"struct_layout":  {fields: []string{"operation", "file_path", "va", "type_name", "length", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path", "va"}},
+		"decompile":      {fields: []string{"operation", "file_path", "va", "timeout_sec", "pdb_path", "pdb_force", "max_output_chars", "result_offset", "annotations_path", "line_numbers"}, required: []string{"operation", "file_path", "va"}},
+		"annotation_set": {
+			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "annotation_kind", "va", "rva", "label", "comment", "subject", "annotation_status", "line", "code_hash", "pdb_path", "pdb_force", "max_output_chars"},
+			required: []string{"operation", "file_path"},
+		},
+		"annotation_list": {
+			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "annotation_kind", "va", "rva", "subject", "annotation_status", "query", "max_results", "result_offset", "max_output_chars", "pdb_path", "pdb_force"},
+			required: []string{"operation", "file_path"},
+		},
+		"annotation_delete": {
+			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "max_output_chars"},
+			required: []string{"operation", "file_path", "annotation_id"},
+		},
+		"type_info":     {fields: []string{"operation", "file_path", "type_name", "pdb_path", "pdb_force", "max_output_chars", "result_offset"}, required: []string{"operation", "file_path", "type_name"}},
+		"call_graph":    {fields: []string{"operation", "file_path", "va", "count", "max_results"}, required: []string{"operation", "file_path", "va"}},
+		"follow_ptr":    {fields: []string{"operation", "file_path", "va", "count", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path", "va"}},
+		"rtti_dump":     {fields: []string{"operation", "file_path", "va"}, required: []string{"operation", "file_path", "va"}},
+		"struct_layout": {fields: []string{"operation", "file_path", "va", "type_name", "length", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path", "va"}},
 	},
 	"copy": {
 		"copy": {

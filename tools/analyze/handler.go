@@ -20,7 +20,7 @@ const (
 
 // AnalyzeInput defines parameters for the static binary analysis tool.
 type AnalyzeInput struct {
-	Operation string `json:"operation" jsonschema:"Operation: disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan, decompile, type_info,required"`
+	Operation string `json:"operation" jsonschema:"Operation: disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan, decompile, type_info, annotation_set, annotation_list, annotation_delete,required"`
 	FilePath  string `json:"file_path,omitempty" jsonschema:"Binary file path. Relative paths use workspace/MCP root,required"`
 	Path      string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 
@@ -35,7 +35,7 @@ type AnalyzeInput struct {
 
 	// strings parameters
 	MinLength  int    `json:"min_length,omitempty" jsonschema:"Minimum string length for strings operation. Default: 4"`
-	MaxResults int    `json:"max_results,omitempty" jsonschema:"Maximum results. strings: Default 500, Max 2000. pe_info imports: Default 500, Max 100000"`
+	MaxResults int    `json:"max_results,omitempty" jsonschema:"Maximum results. annotation_list: Default 50, Max 200. strings: Default 500, Max 2000. pe_info imports: Default 500, Max 100000"`
 	Encoding   string `json:"encoding,omitempty" jsonschema:"String encoding to search for: ascii (default) or utf8"`
 
 	// hexdump parameters
@@ -43,8 +43,8 @@ type AnalyzeInput struct {
 
 	// pe_info / elf_info / macho_info parameters
 	Section        string `json:"section,omitempty" jsonschema:"Filter by section name (e.g. '.text', '.rdata'). Empty = show all"`
-	RVA            string `json:"rva,omitempty" jsonschema:"RVA to convert to file offset (hex string, e.g. '0x36A20'). For pe_info only"`
-	ResultOffset   int    `json:"result_offset,omitempty" jsonschema:"Paging offset: import index for pe_info; character offset for decompile and type_info (a truncated output names the value that continues it). Default: 0"`
+	RVA            string `json:"rva,omitempty" jsonschema:"RVA to convert to file offset (hex string, e.g. '0x36A20'). For pe_info and annotation_set/list; annotations resolve RVA from the PE image base"`
+	ResultOffset   int    `json:"result_offset,omitempty" jsonschema:"Paging offset: row index for annotation_list; import index for pe_info; character offset for disassemble, decompile and type_info (a truncated output names the value that continues it). Default: 0"`
 	MaxOutputChars int    `json:"max_output_chars,omitempty" jsonschema:"Maximum returned text characters for paged analysis output. Default: 32768, Max: 131072"`
 
 	// pattern_search parameters
@@ -68,6 +68,21 @@ type AnalyzeInput struct {
 
 	// type_info parameters
 	TypeName string `json:"type_name,omitempty" jsonschema:"type_info: struct/class/union/enum name as decompile prints it (Node) or qualified (geo::Rect), up to 16 comma-separated; prints members with offsets and enum values from the PDB or DWARF. struct_layout: one type to lay over va (default: the global at va)"`
+
+	// Durable user annotations. Unexported rendering data is not part of MCP.
+	AnnotationsPath  string `json:"annotations_path,omitempty" jsonschema:"SQLite annotation database to save/load. Relative paths use workspace/MCP root. Default: user config dir/agent-tool/analysis-annotations.sqlite. Reads do not create a DB; annotation_set creates it."`
+	AnnotationID     string `json:"annotation_id,omitempty" jsonschema:"Exact string ID from annotation_list/set. set replaces that record; delete requires it. Records are scoped to the binary SHA-256."`
+	AnnotationKind   string `json:"annotation_kind,omitempty" jsonschema:"instruction (default), function, or decompile. decompile anchors a C-body line to its exact code_hash; function uses the entry VA."`
+	Label            string `json:"label,omitempty" jsonschema:"User label, at most 256 UTF-8 bytes. Annotation metadata only; does not rename engine symbols."`
+	Comment          string `json:"comment,omitempty" jsonschema:"User comment, at most 8192 UTF-8 bytes. annotation_set requires label or comment."`
+	Subject          string `json:"subject,omitempty" jsonschema:"Optional register/operand/variable meaning target, e.g. rax or local_10. Scoped to this address/line; metadata only."`
+	AnnotationStatus string `json:"annotation_status,omitempty" jsonschema:"hypothesis (default on set), confirmed, or rejected. User assessment, not engine validation. Also a list filter."`
+	Line             int    `json:"line,omitempty" jsonschema:"1-based C-body L number from decompile line_numbers=true. Required with code_hash for annotation_kind=decompile."`
+	CodeHash         string `json:"code_hash,omitempty" jsonschema:"SHA-256 C snapshot from decompile line_numbers=true. Changed snapshots show needs_review instead of attaching to another line."`
+	Query            string `json:"query,omitempty" jsonschema:"annotation_list: literal case-insensitive substring in label/comment/subject (SQLite case folding is ASCII); max 512 bytes."`
+	LineNumbers      bool   `json:"line_numbers,omitempty" jsonschema:"decompile: show C-body L numbers and code_hash for setting line annotations. Numbers exclude headers, notes and type definitions."`
+	annotations      map[string][]analysisAnnotation
+	annotationNotice string
 
 	// bin_diff parameters
 	FilePathB string `json:"file_path_b,omitempty" jsonschema:"Second file for bin_diff. Relative paths use workspace/MCP root"`
@@ -112,12 +127,15 @@ var validOperations = map[string]bool{
 	"vtable_scan":        true,
 	"decompile":          true,
 	"type_info":          true,
+	"annotation_set":     true,
+	"annotation_list":    true,
+	"annotation_delete":  true,
 }
 
 // Handle dispatches to the appropriate operation.
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (*mcp.CallToolResult, AnalyzeOutput, error) {
 	op := strings.ToLower(strings.TrimSpace(input.Operation))
-	allOps := "disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan, decompile, type_info"
+	allOps := "disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan, decompile, type_info, annotation_set, annotation_list, annotation_delete"
 	if op == "" {
 		return errorResult("operation is required (" + allOps + ")")
 	}
@@ -156,6 +174,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 		return errorResult(fmt.Sprintf("cannot resolve file_path: %v", err))
 	}
 	input.FilePath = resolvedPath
+	if input.AnnotationsPath != "" {
+		input.AnnotationsPath, err = common.ResolveRequestPath(ctx, req, input.AnnotationsPath)
+		if err != nil {
+			return errorResult(fmt.Sprintf("cannot resolve annotations_path: %v", err))
+		}
+	}
 	if input.FilePathB != "" {
 		input.FilePathB, err = common.ResolveRequestPath(ctx, req, input.FilePathB)
 		if err != nil {
@@ -196,7 +220,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 	var result string
 	switch op {
 	case "disassemble":
-		result, err = opDisassemble(input)
+		result, err = opDisassembleContext(ctx, input)
 	case "instruction_search":
 		result, err = opInstructionSearch(input)
 	case "pe_info":
@@ -243,6 +267,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 		result, err = opDecompile(ctx, input)
 	case "type_info":
 		result, err = opTypeInfo(input)
+	case "annotation_set", "annotation_list", "annotation_delete":
+		result, err = opAnnotations(ctx, input)
 	}
 
 	if err != nil {
@@ -258,7 +284,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name:        "analyze",
-		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several; a matching PDB or embedded DWARF is applied automatically, and the structs/enums the C names are printed after it), type_info for any other debug type (members with offsets, enum values). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Prefer va for PE addresses. Use debug for runtime inspection.`,
+		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several; a matching PDB or embedded DWARF is applied automatically, and the structs/enums the C names are printed after it), type_info for any other debug type (members with offsets, enum values). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Durable SQLite user labels/comments: annotation_set, annotation_list (query searches), annotation_delete; optional annotations_path selects the database for writes and rendered reads. disassemble/decompile show user notes separately from engine facts; decompile line_numbers=true supplies C-line/code_hash anchors (changed snapshots need review). PE annotations also accept rva. Prefer va for PE addresses. Use debug for runtime inspection.`,
 	}, Handle)
 }
 

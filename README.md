@@ -88,6 +88,59 @@ Local relative paths resolve against an explicit workspace, then the MCP client 
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 
+## Persistent analysis annotations
+
+The existing `analyze` tool can save user comments and labels in SQLite with
+`annotation_set`, search/read them with `annotation_list`, and remove them with
+`annotation_delete`. Disassembly and decompilation load saved notes automatically.
+These are user assessments, visibly separate from automatic symbols and debug types;
+labels and subjects do not rename engine symbols or override inferred types.
+
+```json
+{"operation":"annotation_set","file_path":"sample.exe","rva":"0x1234","subject":"rax","comment":"User pointer returned here","annotation_status":"hypothesis","annotations_path":"project.annotations.sqlite"}
+{"operation":"disassemble","file_path":"sample.exe","va":"0x140001234","annotations_path":"project.annotations.sqlite"}
+{"operation":"annotation_list","file_path":"sample.exe","query":"User","annotations_path":"project.annotations.sqlite"}
+```
+
+Call through `toolbox` (`operation="call", tool="analyze", arguments={...}`); use
+`toolbox describe` or help topic `analyze` for the full schema and examples.
+
+- `annotations_path` manually selects the SQLite file for saving **and loading**;
+  relative paths use the workspace/MCP root. The default is
+  `<user config dir>/agent-tool/analysis-annotations.sqlite` (Windows: under
+  `%APPDATA%`). Reads do not create databases; the first `annotation_set` does.
+  This is separate from the rebuildable codegraph DB and disposable analysis cache.
+- Notes are scoped by the **full binary SHA-256** and static address. Identical
+  copies keep their notes; changed binaries do not inherit them. There is no
+  automatic migration between builds. Use a static `va` (hex or file/debug symbol)
+  or PE `rva` (module-relative offset), not a live ASLR address or file offset.
+- `annotation_kind` is `instruction` (default), `function` (entry address), or
+  `decompile`. Optional `subject` identifies a register, operand, or variable at
+  that location. `annotation_status` is `hypothesis` (default), `confirmed`, or
+  `rejected`; this records the user's assessment.
+- For a C-line comment, first run `decompile` with `line_numbers=true`. Pass the
+  returned `code_hash`, the C-body `line` (L number), the function entry `va`,
+  and `annotation_kind="decompile"` to `annotation_set`. Notes render before the
+  corresponding line. A changed C snapshot keeps the note at the function header
+  as `needs_review` instead of attaching it to another line. Headers, annotations,
+  and trailing type definitions do not count toward L numbers.
+- Function notes appear above the C body. Instruction notes appear inline in
+  disassembly; entry-address notes also appear at the C header. Other instruction
+  notes are not mapped to C lines without a verified source mapping.
+- Set upserts an anchor; `annotation_id` replaces an existing record using the full
+  desired fields. Delete requires its exact string ID. List supports address,
+  kind, subject, status, ID and literal `query` filters (ASCII case folding).
+  `max_results` defaults to 50 (max 200); `result_offset` is a row index and
+  `next_result_offset` continues the JSON list. Output limits can shorten a page;
+  raise `max_output_chars` when a single note cannot fit (a set may already have
+  saved before reporting an output-size error). Disassembly/decompile page by
+  character instead. Rendered views cap notes at 500; list retrieves the rest.
+
+Keep private annotation databases out of public Git history. This repository ignores
+`*.annotations.sqlite*` and the default DB filename. Custom filenames need their
+own ignore rule. Keep a backup of durable notes; clearing analysis caches does not
+remove them.
+
 ## Key Improvements
 
 ### Smart Indentation

@@ -86,6 +86,61 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
 | **SetConfig** | 런타임 설정 변경 (인코딩, 파일 크기 제한, symlink, workspace 등) | ✅ |
 | **Help** | 에이전트용 사용법 안내 (인코딩, 들여쓰기, 트러블슈팅) | ✅ |
 
+## 분석 주석 저장
+
+기존 `analyze` 도구에서 `annotation_set`으로 사용자 주석·라벨을 저장하고,
+`annotation_list`로 검색·조회하며, `annotation_delete`로 삭제할 수 있습니다.
+디스어셈블리·디컴파일 결과에 저장된 주석이 자동으로 표시됩니다.
+사용자 판단은 자동 심볼·디버그 타입과 구분되며, 라벨·subject는 분석 엔진의
+심볼 이름이나 추론 타입을 변경하지 않는 메타데이터입니다.
+
+```json
+{"operation":"annotation_set","file_path":"sample.exe","rva":"0x1234","subject":"rax","comment":"현재 사용자 포인터로 추정","annotation_status":"hypothesis","annotations_path":"project.annotations.sqlite"}
+{"operation":"disassemble","file_path":"sample.exe","va":"0x140001234","annotations_path":"project.annotations.sqlite"}
+{"operation":"annotation_list","file_path":"sample.exe","query":"사용자","annotations_path":"project.annotations.sqlite"}
+```
+
+`toolbox`의 `operation="call", tool="analyze", arguments={...}`로 호출합니다.
+전체 인자·예시는 `toolbox describe` 또는 help의 `analyze` 항목에서 확인할 수 있습니다.
+
+- `annotations_path`로 **저장·로드할 SQLite 파일을 직접 지정**합니다. 상대 경로는
+  workspace/MCP root 기준입니다. 생략하면
+  `<사용자 설정 폴더>/agent-tool/analysis-annotations.sqlite`를 사용합니다
+  (Windows는 `%APPDATA%` 아래). 조회는 DB를 생성하지 않고, 첫
+  `annotation_set`이 생성합니다. 코드그래프 DB·분석 캐시와 별도로 보존합니다.
+- **바이너리 전체 SHA-256**과 정적 주소로 주석을 구분합니다. 동일한 파일을
+  옮기거나 복사해도 주석을 찾고, 내용이 달라진 바이너리에는 자동 적용하지 않습니다.
+  빌드 간 자동 이관은 지원하지 않습니다. 주소는 정적 `va`(hex 또는 파일·디버그
+  심볼)나 PE의 `rva`(모듈 기준 오프셋)를 사용합니다. 실행 중 ASLR 주소나
+  파일 오프셋과는 다릅니다.
+- `annotation_kind`는 `instruction`(기본), `function`(함수 시작 주소),
+  `decompile`입니다. `subject`로 해당 위치의 레지스터·피연산자·변수를
+  지정할 수 있습니다. `annotation_status`는 `hypothesis`(추정, 기본),
+  `confirmed`(확인), `rejected`(기각)이며 사용자의 판단을 기록합니다.
+- C 라인 주석은 먼저 `decompile`에 `line_numbers=true`를 지정합니다.
+  출력의 `code_hash`, C 본문의 `line`(L 번호), 함수 시작 `va`와
+  `annotation_kind="decompile"`을 `annotation_set`에 전달합니다.
+  주석은 해당 줄 앞에 표시됩니다. C 결과가 달라지면 다른 줄에 붙이지 않고,
+  함수 머리에 `needs_review`로 남깁니다. 헤더·주석·뒤에 출력되는 타입 정의는
+  L 번호에 포함되지 않습니다.
+- 함수 주석은 C 본문 앞에 표시됩니다. 명령어 주석은 디스어셈블리에 표시되며,
+  함수 시작 주소의 주석은 C 헤더에서도 볼 수 있습니다. 그 밖의 명령어 주석을
+  검증된 주소 대응 없이 C 라인에 임의로 배치하지 않습니다.
+- 같은 위치의 저장은 갱신으로 처리합니다. `annotation_id`로 수정할 때는
+  원하는 필드를 모두 전달하며, 삭제에는 정확한 문자열 ID가 필요합니다.
+  조회는 주소·종류·subject·상태·ID·`query`(문자열 포함, ASCII 대소문자 무시)를
+  지원합니다. `max_results` 기본 50·최대 200, `result_offset`은 행 번호이며
+  JSON의 `next_result_offset`으로 이어 읽습니다. 출력 상한으로 페이지가
+  짧아질 수 있습니다. 한 주석도 담지 못하면 `max_output_chars`를 늘립니다
+  (저장 요청은 출력 크기 오류 전에 이미 반영됐을 수 있습니다).
+  디스어셈블리·디컴파일의 페이지 오프셋은 문자 기준입니다.
+  결과 화면에는 최대 500개를 표시하며 나머지는 조회로 확인합니다.
+
+주석 DB에는 비공개 분석 내용이 들어갈 수 있으므로 공개 Git에 포함하지 마세요.
+이 저장소는 `*.annotations.sqlite*`와 기본 DB 파일명을 무시합니다.
+다른 파일명을 지정하면 별도 ignore 규칙이 필요합니다.
+사용자 주석은 복구 가능한 사본을 보관하며, 분석 캐시 정리로 삭제되지 않습니다.
+
 ## 핵심 개선사항
 
 ### 스마트 들여쓰기

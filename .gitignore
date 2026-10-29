@@ -13,6 +13,8 @@ dist/
 test_*.go
 UNRELEASED.md
 .codegraph.db*
+analysis-annotations.sqlite*
+*.annotations.sqlite*
 .gocache/
 go.work
 go.work.sum

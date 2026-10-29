@@ -114,7 +114,7 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - redis: Execute Redis commands (any command, result formatting)
 - sloc: Count source lines of code (SLOC) with per-language summary
 - debug: Interactive debugger via DAP (breakpoints, stepping, variables, stack traces)
-- analyze: Static binary analysis (24 operations: decompile to C (x86/x64 PE/ELF), type_info (PDB/DWARF types), disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
+- analyze: Static binary analysis (27 operations: SQLite user annotations (annotation_set/list/delete), decompile to C (x86/x64 PE/ELF), type_info (PDB/DWARF types), disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
 - set_config: Change runtime settings (encoding, file size, SSRF policy, DoH/ECH toggle)
 - agent_tool_help: This help tool
 - toolbox: Describe/call any tool through one stable gateway; optionally manage direct bindings
@@ -533,10 +533,11 @@ Parameters: session_id, operation, adapter_command, adapter_args, address, launc
   max_output_chars, variable_filter, start_module, module_count
 
 ## analyze
-Static binary analysis tool with 24 operations:
+Static binary analysis tool with 27 operations:
 - decompile: Decompile x86/x64 PE/ELF functions to C (Ghidra-equivalent Gosleigh core; va = hex address or symbol, up to 16 comma-separated; timeout_sec; a matching PDB or embedded DWARF supplies names, prototypes, types, globals and locals, and the structs/enums the C names follow each function; Go binaries use Go's ABI; pdb_path to override)
 - type_info: Print PDB/DWARF struct/class/union/enum definitions by name (type_name): members with offsets, bitfields, base classes, union alternatives, enum values
-- disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped)
+- annotation_set/list/delete: SQLite user labels/comments; annotations_path selects a separate DB
+- disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped), with saved user notes
 - instruction_search: Semantic x86/x64 mnemonic/register/immediate/displacement search with exhaustive executable-offset recovery, CFG confidence, function names, target/result filters, and bounded value tracing to call/tail-call arguments
 - pe_info: PE header parsing with RWX section warnings
 - elf_info: ELF header/sections/segments/symbols with RWX warnings
@@ -584,6 +585,61 @@ Pure Go implementation — no CGO, no external dependencies for disassembly.
 
 ## Operations
 
+### annotation_set / annotation_list / annotation_delete
+Durable user labels and comments stored in a separate SQLite database.
+  analyze(operation="annotation_set", file_path="/path/to/sample.exe",
+          rva="0x1234", subject="rax", comment="User pointer returned here",
+          annotation_status="hypothesis", annotations_path="/path/to/notes.annotations.sqlite")
+  analyze(operation="annotation_list", file_path="/path/to/sample.exe",
+          query="User", annotations_path="/path/to/notes.annotations.sqlite")
+  analyze(operation="annotation_delete", file_path="/path/to/sample.exe",
+          annotation_id="<id from set/list>", annotations_path="/path/to/notes.annotations.sqlite")
+
+  annotations_path selects the SAME database for all annotation operations and for
+  disassemble/decompile reads. Relative paths follow the workspace/MCP root.
+  Omit it for <user config dir>/agent-tool/analysis-annotations.sqlite (Windows:
+  %APPDATA%/agent-tool/analysis-annotations.sqlite). It is not the codegraph DB or
+  an evictable cache. Reads never create a DB; annotation_set creates it.
+  Keep private notes outside tracked/public files.
+
+  annotation_kind: instruction (default), function (use entry VA), or decompile.
+  Address: va=hex or file/debug symbol; PE rva=module-relative offset also works.
+  VA and RVA are alternatives, not file offsets or live ASLR addresses.
+  subject optionally names a register/operand/variable; meaning applies only at
+  that address/line. label/comment are user metadata, not engine rename/type
+  overrides. label or comment is required (256/8192 UTF-8 bytes); subject max 256.
+  annotation_status: hypothesis (default), confirmed, rejected; user assessment.
+  Automatic symbols/types remain separate; displayed user notes carry status/ID.
+
+  C-line example:
+    analyze(operation="decompile", file_path="/path/to/sample.exe",
+            va="handler", line_numbers=true, annotations_path="/path/to/notes.annotations.sqlite")
+    analyze(operation="annotation_set", file_path="/path/to/sample.exe",
+            va="handler", annotation_kind="decompile", line=3,
+            code_hash="<64 hex chars from decompile>", comment="Checks user flags",
+            annotations_path="/path/to/notes.annotations.sqlite")
+  L numbers count only the raw C body (not headers, notes, or trailing type
+  definitions). C-line comments render before their line. The exact C snapshot
+  hash prevents a changed PDB/decompiler result from moving a note to another
+  line: it is retained as needs_review at the function header until re-anchored.
+  Function comments render at the header. Instruction notes render inline in
+  disassembly; at a function entry they also appear in decompile as entry notes.
+  Other instruction notes are not guessed onto C lines (no source mapping).
+
+  Set upserts the same binary/address/kind/subject/line/code_hash. Supplying
+  annotation_id replaces that record (send the full desired fields).
+  IDs, addresses and SHA-256 values are exact strings. The full binary SHA-256,
+  not its path or timestamp, scopes records: moving/copying identical bytes
+  keeps notes; modified binaries do not inherit notes. There is no automatic
+  cross-build migration. Nonempty selected databases must be annotation DBs.
+  List filters: annotation_id, va/rva, annotation_kind, subject, annotation_status,
+  query (literal label/comment/subject substring; ASCII case folding).
+  max_results defaults to 50, max 200; result_offset is a row index, and JSON
+  next_result_offset continues the list. max_output_chars may shorten a page;
+  raise it if a single note cannot fit. Set errors about output size may occur
+  after saving. Rendering shows at most 500 records; list reads the remainder.
+  Disassembly/decompile result_offset pages by character instead.
+
 ### disassemble
 Disassemble machine code. Supports x86 (16/32/64-bit) and ARM (32/64-bit).
   analyze(operation="disassemble", file_path="/path/to/binary",
@@ -599,7 +655,7 @@ Disassemble machine code. Supports x86 (16/32/64-bit) and ARM (32/64-bit).
     va: Virtual address (hex) -- auto-converts to file offset using PE headers.
         Also auto-sets base_addr to ImageBase and mode from PE Machine field.
         Example: va="0x140001000" (PE only)
-    count: Number of instructions to decode (default: 50, max: 600)
+    count: Number of instructions to decode (default: 50, max: 1000)
     stop_at_ret: Stop at function return (RET/RETF + padding/prologue boundary)
     mode: CPU mode -- x86: 16/32/64, arm: 32/64 (default: 64)
     base_addr: Base address mapped to file offset 0 (hex string, default: "0").
@@ -610,7 +666,8 @@ Disassemble machine code. Supports x86 (16/32/64-bit) and ARM (32/64-bit).
   if available, preventing disassembly into the next function.
   Import/export symbols are annotated inline (e.g. "call [rip+0x1234]  ; CreateFileW").
 
-  Output: address: hex_bytes    assembly  [; symbol]
+  Output: address: hex_bytes    assembly  [; symbol] [; user:status ...]
+  annotations_path selects saved notes. max_output_chars/result_offset page long output.
   x86 uses Intel syntax. Failed decodes show "db 0xNN" / ".word" and skip.
 
 ### instruction_search
