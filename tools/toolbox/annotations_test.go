@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"agent-tool/tools/analyze"
@@ -57,5 +58,19 @@ func TestAnnotationPatchThroughToolbox(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &updated); err != nil || len(updated.Items) != 1 ||
 		updated.Items[0].Label != "" || updated.Items[0].Comment != "edited through MCP" || updated.Items[0].Revision != "2" {
 		t.Fatalf("JSON patch was not preserved: %s / %v", text, err)
+	}
+	text = invoke(map[string]any{"operation": "annotation_batch", "batch": []any{
+		map[string]any{"operation": "set", "va": "0x1", "comment": "batch observation", "evidence": []any{
+			map[string]any{"kind": "static", "va": "0x20000000000001", "source": "cross reference", "detail": "exact address retained"},
+		}},
+		map[string]any{"operation": "delete", "annotation_id": updated.Items[0].ID, "expected_revision": "1"},
+	}})
+	var batch struct{ Succeeded, Failed int }
+	if err := json.Unmarshal([]byte(text), &batch); err != nil || batch.Succeeded != 1 || batch.Failed != 1 {
+		t.Fatalf("toolbox batch receipt: %s / %v", text, err)
+	}
+	text = invoke(map[string]any{"operation": "annotation_list", "query": "cross reference"})
+	if !strings.Contains(text, "0x20000000000001") {
+		t.Fatalf("nested evidence address lost: %s", text)
 	}
 }

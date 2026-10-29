@@ -124,8 +124,10 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
   함수 머리에 `needs_review`로 남깁니다. 헤더·주석·뒤에 출력되는 타입 정의는
   L 번호에 포함되지 않습니다.
 - 함수 주석은 C 본문 앞에 표시됩니다. 명령어 주석은 디스어셈블리에 표시되며,
-  함수 시작 주소의 주석은 C 헤더에서도 볼 수 있습니다. 그 밖의 명령어 주석을
-  검증된 주소 대응 없이 C 라인에 임의로 배치하지 않습니다.
+  디컴파일에서는 정확한 PDB/.pdata 또는 크기가 알려진 ELF 심볼 경계 안의
+  명령어 주석도 원래 VA와 함께 모아 표시합니다. 확인할 수 없는 경계는
+  안내와 함께 시작 주소의 주석만 표시합니다. 함수당 최대 16개 범위를 사용하며,
+  개별 C 라인에 명령어 주석을 임의로 배치하지 않습니다.
 - ID 없이 저장하면 새 주석을 생성합니다. 같은 위치에 주석이 있으면
   다른 편집자의 내용을 덮어쓰지 않고 거부합니다. `annotation_id`로 수정할 때는
   저장·조회 결과의 정확한 `expected_revision` 문자열이 필요합니다.
@@ -146,14 +148,50 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
   결과 화면에는 최대 500개를 표시하며 나머지는 조회로 확인합니다.
 - 주석 DB를 읽지 못해도 디스어셈블리·디컴파일 결과는 경고와 함께 반환합니다.
   주석 저장·조회·삭제 작업 자체의 DB 오류는 계속 오류로 처리합니다.
-  기존 v1 DB는 변경 없이 조회할 수 있고, 첫 쓰기 때 트랜잭션 안에서
-  revision 열을 추가해 v2로 전환합니다. 기존 주석의 시작 revision은 `"1"`입니다.
-  v1만 지원하는 과거 실행 파일은 v2 DB를 읽을 수 없습니다.
+  기존 v1·v2 DB는 변경 없이 조회하고, 첫 쓰기 때 트랜잭션 안에서
+  필요한 revision·근거·출처·원문 필드를 추가해 v3로 전환합니다.
+  기존 revision은 유지하며 v1 주석은 `"1"`에서 시작합니다.
+  v1·v2만 지원하는 과거 실행 파일은 v3 DB를 읽을 수 없습니다.
 
 부분 수정 예시입니다. 직전 조회 결과의 ID와 revision을 사용합니다.
 
 ```json
 {"operation":"annotation_set","file_path":"sample.exe","annotation_id":"<id>","expected_revision":"1","annotation_patch":{"comment":"사용자 포인터로 확인","annotation_status":"confirmed","label":""},"annotations_path":"project.annotations.sqlite"}
+```
+
+배치와 근거 기록 예시입니다.
+
+```json
+{"operation":"annotation_batch","file_path":"sample.exe","annotations_path":"project.annotations.sqlite","batch":[{"operation":"set","rva":"0x1234","subject":"rax","comment":"사용자 포인터","provenance":"수동 분석","evidence":[{"kind":"static","va":"0x140001230","source":"lookup_user 호출","detail":"반환값을 컨텍스트 포인터로 사용함"}]},{"operation":"set","annotation_id":"<id>","expected_revision":"1","annotation_patch":{"annotation_status":"confirmed"}}]}
+```
+
+- 배치는 한 바이너리·DB에 대해 1~32개의 `set`·`delete` 항목을 처리합니다.
+  DB 열기와 파일 해시는 한 번만 수행하고, 항목별로 독립 반영해 순서 번호와
+  성공·충돌 결과를 반환합니다. 다른 항목이 실패해도 성공한 항목은 유지됩니다.
+  `max_output_chars`는 최소 `768 * 항목 수 + 256`이며 변경 전에 검사합니다.
+  기본 출력 예산으로 32개까지 처리합니다. DB를 열지 못하면 배치 전체가
+  시작되지 않고, 취소 시 완료한 항목은 유지하며 나머지는 실패로 표시합니다.
+- `evidence`에는 최대 16개의 사용자 관찰을 기록합니다. `kind`는
+  `static`·`runtime`·`user`, `va`는 선택적인 정확한 주소 문자열,
+  `source`는 출처, `detail`은 필수 관찰 내용입니다. `provenance`에는
+  판단의 유래를 기록합니다. 출처를 자동 조회하거나 관찰을 검증하지 않습니다.
+  저장·표시·검색할 수 있고 부분 수정에서도 유지됩니다. 명시적으로 지우려면
+  `annotation_patch`에 `evidence:[]` 또는 `provenance:""`를 전달합니다.
+- C 라인 주석을 저장할 때 정확한 원문 한 줄을 `anchor_text`에도 담습니다.
+  `annotation_suggest`에 주석 ID를 주면 해당 함수를 다시 디컴파일하고,
+  현재 `code_hash`·revision과 최대 3개의 위치 후보를 반환합니다.
+  스냅샷이 같으면 기존 줄, 달라졌으면 원문 또는 토큰 유사도로 찾습니다.
+  최고 점수가 같은 후보는 `ambiguous`로 표시합니다. 원문이 없거나 너무
+  일반적인 경우 후보가 없을 수 있으며, 원문이 없는 과거 주석은 결과가 바뀌면
+  수동으로 위치를 골라야 합니다. **후보 조회는 DB를 변경하지 않습니다.**
+  검토 후 `annotation_set`에 ID·`expected_revision`과
+  `annotation_patch:{"line":N,"code_hash":"<현재 해시>","anchor_text":"<원문>"}`를
+  전달해야 이동하며 revision 검사도 그대로 적용됩니다.
+  source·detail·provenance 상한은 각각 UTF-8 512·1024·512바이트,
+  `anchor_text`는 C 원문 한 줄·최대 2048바이트입니다.
+
+```json
+{"operation":"annotation_suggest","file_path":"sample.exe","annotation_id":"<id>","annotations_path":"project.annotations.sqlite"}
 ```
 
 주석 DB에는 비공개 분석 내용이 들어갈 수 있으므로 공개 Git에 포함하지 마세요.

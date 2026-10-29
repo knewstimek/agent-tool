@@ -114,7 +114,7 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - redis: Execute Redis commands (any command, result formatting)
 - sloc: Count source lines of code (SLOC) with per-language summary
 - debug: Interactive debugger via DAP (breakpoints, stepping, variables, stack traces)
-- analyze: Static binary analysis (27 operations: SQLite user annotations (annotation_set/list/delete), decompile to C (x86/x64 PE/ELF), type_info (PDB/DWARF types), disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
+- analyze: Static binary analysis (29 operations: SQLite user annotations (annotation_set/list/delete/batch/suggest), decompile to C (x86/x64 PE/ELF), type_info (PDB/DWARF types), disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
 - set_config: Change runtime settings (encoding, file size, SSRF policy, DoH/ECH toggle)
 - agent_tool_help: This help tool
 - toolbox: Describe/call any tool through one stable gateway; optionally manage direct bindings
@@ -533,7 +533,7 @@ Parameters: session_id, operation, adapter_command, adapter_args, address, launc
   max_output_chars, variable_filter, start_module, module_count
 
 ## analyze
-Static binary analysis tool with 27 operations:
+Static binary analysis tool with 29 operations:
 - decompile: Decompile x86/x64 PE/ELF functions to C (Ghidra-equivalent Gosleigh core; va = hex address or symbol, up to 16 comma-separated; timeout_sec; a matching PDB or embedded DWARF supplies names, prototypes, types, globals and locals, and the structs/enums the C names follow each function; Go binaries use Go's ABI; pdb_path to override)
 - type_info: Print PDB/DWARF struct/class/union/enum definitions by name (type_name): members with offsets, bitfields, base classes, union alternatives, enum values
 - annotation_set/list/delete: SQLite user labels/comments; annotations_path selects a separate DB
@@ -585,6 +585,41 @@ Pure Go implementation — no CGO, no external dependencies for disassembly.
 
 ## Operations
 
+### annotation_batch / annotation_suggest
+  analyze(operation="annotation_batch", file_path="/path/to/sample.exe",
+          annotations_path="/path/to/notes.annotations.sqlite",
+          batch=[{"operation":"set","rva":"0x1234","comment":"User pointer",
+                  "provenance":"manual analysis",
+                  "evidence":[{"kind":"static","va":"0x140001230",
+                               "source":"lookup_user call","detail":"Return used as context"}]},
+                 {"operation":"delete","annotation_id":"<id>","expected_revision":"1"}])
+  1..32 set/delete items share one binary and DB; paths cannot vary by item.
+  DB open/hash happens once. Each item independently commits with indexed
+  success/revision/conflict receipts. No all-or-nothing transaction.
+  Output budget >=768*item_count+256 is checked before changes. Default supports
+  32 items. DB-open errors fail the envelope; cancellation retains completed
+  items and marks unprocessed items failed.
+
+  evidence: up to 16 user observations; kind=static/runtime/user, optional
+  exact-string va, source (max 512 bytes), required detail (max 1024 bytes).
+  provenance: judgment origin, max 512 bytes. These are user assertions, not
+  automatically fetched or verified. They render with notes and are searchable.
+  ID updates preserve them; annotation_patch evidence=[]/provenance="" clears.
+  anchor_text: optional exact raw C line (max 2048 bytes) stored with a C note.
+  Include it when saving line annotations for later reattachment suggestions.
+
+  analyze(operation="annotation_suggest", file_path="/path/to/sample.exe",
+          annotation_id="<C-note ID>", annotations_path="/path/to/notes.annotations.sqlite")
+  Read-only: returns current code_hash, expected_revision, requires_confirmation,
+  and up to 3 line/anchor_text/score/reason candidates in the same function.
+  Unchanged snapshot uses original line; otherwise raw-text/token matches propose
+  unverified candidates. Equal top scores are ambiguous. Missing/generic anchors
+  may require manual selection. Old notes without anchor_text cannot be matched
+  automatically after changed C. The query never moves the note.
+  After reviewing, call annotation_set with ID/expected_revision and
+  annotation_patch={"line":N,"code_hash":"<current hash>","anchor_text":"<raw C line>"}.
+  Conflicts still require rereading before applying.
+
 ### annotation_set / annotation_list / annotation_delete
 Durable user labels and comments stored in a separate SQLite database.
   analyze(operation="annotation_set", file_path="/path/to/sample.exe",
@@ -625,7 +660,9 @@ Durable user labels and comments stored in a separate SQLite database.
   line: it is retained as needs_review at the function header until re-anchored.
   Function comments render at the header. Instruction notes render inline in
   disassembly; at a function entry they also appear in decompile as entry notes.
-  Other instruction notes are not guessed onto C lines (no source mapping).
+  Interior instruction notes are gathered using exact PDB/.pdata or sized ELF
+  symbol ranges (max 16 ranges/function), with original VAs. Unavailable/limited
+  ranges are reported. Notes are not guessed onto individual C lines.
 
   Set without ID creates an anchor; an occupied anchor is rejected.
   Update/delete require annotation_id and expected_revision from set/list.
@@ -633,7 +670,8 @@ Durable user labels and comments stored in a separate SQLite database.
   ID updates preserve omitted fields. Nonempty top-level fields are partial
   updates. annotation_patch supports explicit empty text or line=0; supplied
   patch values override top-level values. Allowed patch fields: label, comment,
-  subject, annotation_status, annotation_kind, va, rva, line, code_hash.
+  subject, annotation_status, annotation_kind, va, rva, line, code_hash,
+  evidence, provenance, anchor_text.
   The merged note must retain label or comment and a valid anchor.
     analyze(operation="annotation_set", file_path="/path/to/sample.exe",
             annotation_id="<id>", expected_revision="1",
@@ -654,9 +692,10 @@ Durable user labels and comments stored in a separate SQLite database.
   details_omitted=true. Output limits never turn a committed write into failure.
   Rendering shows at most 500 records; list reads the remainder.
   Annotation DB load errors appear as warnings alongside disassembly/decompile;
-  CRUD DB errors remain errors. Legacy v1 is readable without changes; the first
-  write atomically migrates to v2 with revision=1 for existing notes. v1-only
-  tool builds cannot read a v2 DB.
+  CRUD DB errors remain errors. Legacy v1/v2 remains readable without changes;
+  the first write atomically migrates to v3 with missing revision/metadata
+  columns. Existing revisions survive (v1 starts at 1). v1/v2-only tool builds
+  cannot read a v3 DB.
   Disassembly/decompile result_offset pages by character instead.
 
 ### disassemble

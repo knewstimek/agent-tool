@@ -58,9 +58,11 @@ var compactOperationShapes = map[string]map[string]operationShape{
 		"function_at":    {fields: []string{"operation", "file_path", "va", "count", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path", "va"}},
 		"decompile":      {fields: []string{"operation", "file_path", "va", "timeout_sec", "pdb_path", "pdb_force", "max_output_chars", "result_offset", "annotations_path", "line_numbers"}, required: []string{"operation", "file_path", "va"}},
 		"annotation_set": {
-			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "expected_revision", "annotation_patch", "annotation_kind", "va", "rva", "label", "comment", "subject", "annotation_status", "line", "code_hash", "pdb_path", "pdb_force", "max_output_chars"},
+			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "expected_revision", "annotation_patch", "evidence", "provenance", "anchor_text", "annotation_kind", "va", "rva", "label", "comment", "subject", "annotation_status", "line", "code_hash", "pdb_path", "pdb_force", "max_output_chars"},
 			required: []string{"operation", "file_path"},
 		},
+		"annotation_batch":   {fields: []string{"operation", "file_path", "annotations_path", "batch", "max_output_chars", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path", "batch"}},
+		"annotation_suggest": {fields: []string{"operation", "file_path", "annotations_path", "annotation_id", "pdb_path", "pdb_force", "timeout_sec", "max_output_chars"}, required: []string{"operation", "file_path", "annotation_id"}},
 		"annotation_list": {
 			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "annotation_kind", "va", "rva", "subject", "annotation_status", "query", "max_results", "result_offset", "max_output_chars", "pdb_path", "pdb_force"},
 			required: []string{"operation", "file_path"},

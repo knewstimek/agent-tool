@@ -20,7 +20,7 @@ const (
 
 // AnalyzeInput defines parameters for the static binary analysis tool.
 type AnalyzeInput struct {
-	Operation string `json:"operation" jsonschema:"Operation: disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan, decompile, type_info, annotation_set, annotation_list, annotation_delete,required"`
+	Operation string `json:"operation" jsonschema:"Operation: disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan, decompile, type_info, annotation_set, annotation_list, annotation_delete, annotation_batch, annotation_suggest,required"`
 	FilePath  string `json:"file_path,omitempty" jsonschema:"Binary file path. Relative paths use workspace/MCP root,required"`
 	Path      string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 
@@ -70,19 +70,23 @@ type AnalyzeInput struct {
 	TypeName string `json:"type_name,omitempty" jsonschema:"type_info: struct/class/union/enum name as decompile prints it (Node) or qualified (geo::Rect), up to 16 comma-separated; prints members with offsets and enum values from the PDB or DWARF. struct_layout: one type to lay over va (default: the global at va)"`
 
 	// Durable user annotations. Unexported rendering data is not part of MCP.
-	AnnotationsPath  string           `json:"annotations_path,omitempty" jsonschema:"SQLite annotation database to save/load. Relative paths use workspace/MCP root. Default: user config dir/agent-tool/analysis-annotations.sqlite. Reads do not create a DB; annotation_set creates it."`
-	AnnotationID     string           `json:"annotation_id,omitempty" jsonschema:"Exact string ID from annotation_list/set. set partially updates that record; delete requires it. Both require expected_revision. Records are scoped to the binary SHA-256."`
-	ExpectedRevision string           `json:"expected_revision,omitempty" jsonschema:"Exact revision string from annotation_list/set. Required for updates by annotation_id and deletes; stale revisions are rejected."`
-	AnnotationPatch  *AnnotationPatch `json:"annotation_patch,omitempty" jsonschema:"annotation_set by ID: optional sparse fields; omitted fields are preserved. Explicit empty strings clear text. Patch fields override nonempty top-level fields."`
-	AnnotationKind   string           `json:"annotation_kind,omitempty" jsonschema:"instruction (default), function, or decompile. decompile anchors a C-body line to its exact code_hash; function uses the entry VA."`
-	Label            string           `json:"label,omitempty" jsonschema:"User label, at most 256 UTF-8 bytes. Annotation metadata only; does not rename engine symbols."`
-	Comment          string           `json:"comment,omitempty" jsonschema:"User comment, at most 8192 UTF-8 bytes. New records require label or comment."`
-	Subject          string           `json:"subject,omitempty" jsonschema:"Optional register/operand/variable meaning target, e.g. rax or local_10. Scoped to this address/line; metadata only."`
-	AnnotationStatus string           `json:"annotation_status,omitempty" jsonschema:"hypothesis (default on set), confirmed, or rejected. User assessment, not engine validation. Also a list filter."`
-	Line             int              `json:"line,omitempty" jsonschema:"1-based C-body L number from decompile line_numbers=true. Required with code_hash for annotation_kind=decompile."`
-	CodeHash         string           `json:"code_hash,omitempty" jsonschema:"SHA-256 C snapshot from decompile line_numbers=true. Changed snapshots show needs_review instead of attaching to another line."`
-	Query            string           `json:"query,omitempty" jsonschema:"annotation_list: literal case-insensitive substring in label/comment/subject (SQLite case folding is ASCII); max 512 bytes."`
-	LineNumbers      bool             `json:"line_numbers,omitempty" jsonschema:"decompile: show C-body L numbers and code_hash for setting line annotations. Numbers exclude headers, notes and type definitions."`
+	AnnotationsPath  string                `json:"annotations_path,omitempty" jsonschema:"SQLite annotation database to save/load. Relative paths use workspace/MCP root. Default: user config dir/agent-tool/analysis-annotations.sqlite. Reads do not create a DB; annotation_set creates it."`
+	AnnotationID     string                `json:"annotation_id,omitempty" jsonschema:"Exact string ID from annotation_list/set. set partially updates that record; delete requires it. Both require expected_revision. Records are scoped to the binary SHA-256."`
+	Batch            []AnnotationBatchItem `json:"batch,omitempty" jsonschema:"annotation_batch: 1..32 set/delete items for this binary/database. Per-item receipts and conflicts; not an all-or-nothing transaction. Output budget must be at least 768*item_count+256."`
+	Evidence         []AnnotationEvidence  `json:"evidence,omitempty" jsonschema:"User-supplied supporting observations (max 16); source references are not fetched or automatically verified."`
+	Provenance       string                `json:"provenance,omitempty" jsonschema:"Origin/attribution of the user judgment, max 512 bytes."`
+	AnchorText       string                `json:"anchor_text,omitempty" jsonschema:"Optional exact raw C line (max 2048 bytes) for decompile reattachment suggestions; does not bypass code_hash validation. Save it when adding a C-line note."`
+	ExpectedRevision string                `json:"expected_revision,omitempty" jsonschema:"Exact revision string from annotation_list/set. Required for updates by annotation_id and deletes; stale revisions are rejected."`
+	AnnotationPatch  *AnnotationPatch      `json:"annotation_patch,omitempty" jsonschema:"annotation_set by ID: optional sparse fields; omitted fields are preserved. Explicit empty strings clear text. Patch fields override nonempty top-level fields."`
+	AnnotationKind   string                `json:"annotation_kind,omitempty" jsonschema:"instruction (default), function, or decompile. decompile anchors a C-body line to its exact code_hash; function uses the entry VA."`
+	Label            string                `json:"label,omitempty" jsonschema:"User label, at most 256 UTF-8 bytes. Annotation metadata only; does not rename engine symbols."`
+	Comment          string                `json:"comment,omitempty" jsonschema:"User comment, at most 8192 UTF-8 bytes. New records require label or comment."`
+	Subject          string                `json:"subject,omitempty" jsonschema:"Optional register/operand/variable meaning target, e.g. rax or local_10. Scoped to this address/line; metadata only."`
+	AnnotationStatus string                `json:"annotation_status,omitempty" jsonschema:"hypothesis (default on set), confirmed, or rejected. User assessment, not engine validation. Also a list filter."`
+	Line             int                   `json:"line,omitempty" jsonschema:"1-based C-body L number from decompile line_numbers=true. Required with code_hash for annotation_kind=decompile."`
+	CodeHash         string                `json:"code_hash,omitempty" jsonschema:"SHA-256 C snapshot from decompile line_numbers=true. Changed snapshots show needs_review instead of attaching to another line."`
+	Query            string                `json:"query,omitempty" jsonschema:"annotation_list: literal case-insensitive substring in label/comment/subject/provenance/evidence (SQLite case folding is ASCII); max 512 bytes."`
+	LineNumbers      bool                  `json:"line_numbers,omitempty" jsonschema:"decompile: show C-body L numbers and code_hash for setting line annotations. Numbers exclude headers, notes and type definitions."`
 	annotations      map[string][]analysisAnnotation
 	annotationNotice string
 
@@ -132,12 +136,14 @@ var validOperations = map[string]bool{
 	"annotation_set":     true,
 	"annotation_list":    true,
 	"annotation_delete":  true,
+	"annotation_batch":   true,
+	"annotation_suggest": true,
 }
 
 // Handle dispatches to the appropriate operation.
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (*mcp.CallToolResult, AnalyzeOutput, error) {
 	op := strings.ToLower(strings.TrimSpace(input.Operation))
-	allOps := "disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan, decompile, type_info, annotation_set, annotation_list, annotation_delete"
+	allOps := "disassemble, instruction_search, pe_info, elf_info, macho_info, strings, hexdump, pattern_search, entropy, bin_diff, resource_info, imphash, rich_header, overlay_detect, dwarf_info, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan, decompile, type_info, annotation_set, annotation_list, annotation_delete, annotation_batch, annotation_suggest"
 	if op == "" {
 		return errorResult("operation is required (" + allOps + ")")
 	}
@@ -269,6 +275,10 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 		result, err = opDecompile(ctx, input)
 	case "type_info":
 		result, err = opTypeInfo(input)
+	case "annotation_batch":
+		result, err = opAnnotationBatch(ctx, input)
+	case "annotation_suggest":
+		result, err = opAnnotationSuggest(ctx, input)
 	case "annotation_set", "annotation_list", "annotation_delete":
 		result, err = opAnnotations(ctx, input)
 	}
@@ -286,7 +296,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name:        "analyze",
-		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several; a matching PDB or embedded DWARF is applied automatically, and the structs/enums the C names are printed after it), type_info for any other debug type (members with offsets, enum values). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Durable SQLite user labels/comments with revision-checked partial edits and bounded success receipts: annotation_set, annotation_list (query searches), annotation_delete; optional annotations_path selects the database for writes and rendered reads. disassemble/decompile show user notes separately from engine facts; decompile line_numbers=true supplies C-line/code_hash anchors (changed snapshots need review). PE annotations also accept rva. Annotation load errors are reported as warnings alongside analysis results. Prefer va for PE addresses. Use debug for runtime inspection.`,
+		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several; a matching PDB or embedded DWARF is applied automatically, and the structs/enums the C names are printed after it), type_info for any other debug type (members with offsets, enum values). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Durable SQLite user labels/comments with revision-checked partial edits and bounded success receipts: annotation_set, annotation_list (query searches), annotation_delete; optional annotations_path selects the database for writes and rendered reads. disassemble/decompile show user notes separately from engine facts; decompile line_numbers=true supplies C-line/code_hash anchors (changed snapshots need review). PE annotations also accept rva. annotation_batch writes up to 32 notes with per-item receipts. evidence/provenance record user-supplied grounds. Decompile collects instruction notes from verified function ranges. annotation_suggest proposes C-line reattachment using stored anchor_text; never moves notes automatically. Annotation load errors are reported as warnings alongside analysis results. Prefer va for PE addresses. Use debug for runtime inspection.`,
 	}, Handle)
 }
 

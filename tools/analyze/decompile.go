@@ -42,14 +42,8 @@ func opDecompile(ctx context.Context, input AnalyzeInput) (string, error) {
 	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath, PDBForce: input.PDBForce}
 	start := time.Now()
 	lines, failure := runDecompileWorker(ctx, req, time.Duration(timeout)*time.Second)
-	addresses := make([]string, 0, len(targets))
-	for _, line := range lines {
-		if line.Kind == "result" && line.Error == "" {
-			addresses = append(addresses, fmt.Sprintf("%016x", line.Entry))
-		}
-	}
 	var err error
-	input.annotations, input.annotationNotice, err = loadAnnotationAddresses(ctx, input, addresses)
+	input.annotations, input.annotationNotice, err = loadFunctionAnnotations(ctx, input, lines)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()

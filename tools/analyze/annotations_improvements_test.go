@@ -135,7 +135,7 @@ func TestAnnotationsLegacyMigrationAndExactRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Recreate the previous v1 schema, preserving the original note.
-	_, err = db.Exec("ALTER TABLE analysis_annotations DROP COLUMN revision; PRAGMA user_version=1")
+	_, err = db.Exec("ALTER TABLE analysis_annotations DROP COLUMN revision; ALTER TABLE analysis_annotations DROP COLUMN evidence; ALTER TABLE analysis_annotations DROP COLUMN provenance; ALTER TABLE analysis_annotations DROP COLUMN anchor_text; PRAGMA user_version=1")
 	db.Close()
 	if err != nil {
 		t.Fatal(err)

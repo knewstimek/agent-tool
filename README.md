@@ -125,8 +125,10 @@ Call through `toolbox` (`operation="call", tool="analyze", arguments={...}`); us
   as `needs_review` instead of attaching it to another line. Headers, annotations,
   and trailing type definitions do not count toward L numbers.
 - Function notes appear above the C body. Instruction notes appear inline in
-  disassembly; entry-address notes also appear at the C header. Other instruction
-  notes are not mapped to C lines without a verified source mapping.
+  disassembly. Decompile also gathers instruction notes inside exact PDB/.pdata
+  or sized ELF-symbol ranges, showing each original VA above the C body. Unknown
+  ranges fall back to entry notes with a notice; at most 16 ranges per function
+  are used. These notes are not guessed onto individual C lines.
 - Set without an ID creates a new anchor; it rejects an occupied anchor instead
   of overwriting another editor's work. Update by `annotation_id` requires the
   exact `expected_revision` string from set/list. Omitted fields are preserved;
@@ -147,14 +149,50 @@ Call through `toolbox` (`operation="call", tool="analyze", arguments={...}`); us
   Rendered views cap notes at 500; list retrieves the rest.
 - Annotation DB load failures produce a visible warning alongside the original
   disassembly/decompilation; annotation CRUD still reports DB errors normally.
-  Legacy v1 DBs remain readable without modification. Their first write atomically
-  adds revision tracking (v2), preserving existing notes at revision `"1"`.
-  Older tool builds that only understand v1 cannot open a v2 DB.
+  Legacy v1/v2 DBs remain readable without modification. Their first write
+  atomically migrates to v3, adding missing revision/evidence/provenance/anchor
+  fields. Existing revisions are preserved (v1 starts at `"1"`). Older builds
+  that only understand v1/v2 cannot open a v3 DB.
 
 Partial edit example (use the ID and revision returned by your last read):
 
 ```json
 {"operation":"annotation_set","file_path":"sample.exe","annotation_id":"<id>","expected_revision":"1","annotation_patch":{"comment":"Confirmed user pointer","annotation_status":"confirmed","label":""},"annotations_path":"project.annotations.sqlite"}
+```
+
+Batch and evidence example:
+
+```json
+{"operation":"annotation_batch","file_path":"sample.exe","annotations_path":"project.annotations.sqlite","batch":[{"operation":"set","rva":"0x1234","subject":"rax","comment":"User pointer","provenance":"manual analysis","evidence":[{"kind":"static","va":"0x140001230","source":"lookup_user call","detail":"Return value is used as a context pointer"}]},{"operation":"set","annotation_id":"<id>","expected_revision":"1","annotation_patch":{"annotation_status":"confirmed"}}]}
+```
+
+- A batch contains 1..32 `set`/`delete` items sharing one binary and DB. It opens
+  and hashes once; each item commits independently and returns an indexed receipt,
+  including conflicts. Successful items remain committed when another fails.
+  Required `max_output_chars` is at least `768 * item_count + 256`, checked before
+  any changes. The default budget supports 32 items. A DB-open error fails the
+  envelope; cancellation leaves completed items committed and marks remaining
+  items failed.
+- Optional `evidence` stores up to 16 user-supplied observations with `kind`
+  (`static`, `runtime`, `user`), optional exact-string `va`, `source`, and
+  required `detail`. `provenance` records the origin of the judgment. Neither
+  sources nor observations are fetched or automatically verified. Both appear
+  in saved/rendered notes and are searchable; sparse edits preserve them.
+  `annotation_patch` with `evidence:[]` or `provenance:""` explicitly clears them.
+- When saving a C-line note, include the exact raw line in `anchor_text`.
+  `annotation_suggest` with its `annotation_id` decompiles that function and
+  returns the current `code_hash`, revision and up to three candidate lines.
+  Unchanged snapshots use the original line; otherwise stored text or token
+  overlap proposes candidates. Equal top scores are marked `ambiguous`.
+  Generic/missing anchors may produce no candidates. Old notes without text need
+  manual selection after a snapshot change. **Suggestions never write the DB.**
+  After review, call `annotation_set` with ID, `expected_revision` and
+  `annotation_patch:{"line":N,"code_hash":"<current hash>","anchor_text":"<raw line>"}`.
+  The revision guard still applies. Source/detail/provenance limits are
+  512/1024/512 UTF-8 bytes; `anchor_text` is one C line, max 2048 bytes.
+
+```json
+{"operation":"annotation_suggest","file_path":"sample.exe","annotation_id":"<id>","annotations_path":"project.annotations.sqlite"}
 ```
 
 Keep private annotation databases out of public Git history. This repository ignores

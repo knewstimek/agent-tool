@@ -25,16 +25,20 @@ const annotationAppID = 0x4154414e
 const annotationLimit = 200
 
 type analysisAnnotation struct {
-	ID       string `json:"id"`
-	VA       string `json:"va"`
-	Kind     string `json:"kind"`
-	Subject  string `json:"subject,omitempty"`
-	Label    string `json:"label,omitempty"`
-	Comment  string `json:"comment,omitempty"`
-	Status   string `json:"status"`
-	Line     int    `json:"line,omitempty"`
-	CodeHash string `json:"code_hash,omitempty"`
-	Revision string `json:"revision"`
+	ID         string               `json:"id"`
+	VA         string               `json:"va"`
+	Kind       string               `json:"kind"`
+	Subject    string               `json:"subject,omitempty"`
+	Label      string               `json:"label,omitempty"`
+	Comment    string               `json:"comment,omitempty"`
+	Status     string               `json:"status"`
+	Line       int                  `json:"line,omitempty"`
+	CodeHash   string               `json:"code_hash,omitempty"`
+	Revision   string               `json:"revision"`
+	Evidence   []AnnotationEvidence `json:"evidence,omitempty"`
+	Provenance string               `json:"provenance,omitempty"`
+	AnchorText string               `json:"anchor_text,omitempty"`
+	scope      string
 }
 
 type annotationStore struct {
@@ -174,10 +178,13 @@ func openAnnotations(ctx context.Context, input AnalyzeInput, write bool) (*anno
 				line INTEGER NOT NULL,
 				code_hash TEXT NOT NULL,
 				revision INTEGER NOT NULL DEFAULT 1,
+				evidence TEXT NOT NULL DEFAULT '[]',
+				provenance TEXT NOT NULL DEFAULT '',
+				anchor_text TEXT NOT NULL DEFAULT '',
 				UNIQUE(binary_sha256, va, kind, subject, line, code_hash)
 			);
 			PRAGMA application_id=1096040782;
-			PRAGMA user_version=2;
+			PRAGMA user_version=3;
 			COMMIT;`); err != nil {
 			return fail(err)
 		}
@@ -190,14 +197,14 @@ func openAnnotations(ctx context.Context, input AnalyzeInput, write bool) (*anno
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fail(err)
 	}
-	if version != 1 && version != 2 {
+	if version < 1 || version > 3 {
 		return fail(fmt.Errorf("unsupported annotation database version %d", version))
 	}
-	if version == 1 && write {
+	if version < 3 && write {
 		if err := migrateAnnotationRevision(ctx, db); err != nil {
 			return fail(err)
 		}
-		version = 2
+		version = 3
 	}
 	hash, err := binarySHA256(ctx, input.FilePath)
 	if err != nil {
@@ -242,7 +249,7 @@ func annotationVA(input AnalyzeInput) (string, error) {
 func makeAnnotation(input AnalyzeInput) (analysisAnnotation, error) {
 	a := analysisAnnotation{ID: input.AnnotationID, Kind: input.AnnotationKind, Subject: input.Subject,
 		Label: input.Label, Comment: input.Comment, Status: input.AnnotationStatus, Line: input.Line,
-		CodeHash: strings.ToLower(input.CodeHash)}
+		CodeHash: strings.ToLower(input.CodeHash), Evidence: input.Evidence, Provenance: input.Provenance, AnchorText: input.AnchorText}
 	if a.Kind == "" {
 		a.Kind = "instruction"
 	}
@@ -269,6 +276,9 @@ func makeAnnotation(input AnalyzeInput) (analysisAnnotation, error) {
 	} else if a.Line != 0 || a.CodeHash != "" {
 		return a, fmt.Errorf("line and code_hash are only for annotation_kind=decompile")
 	}
+	if err := validateAnnotationEvidence(&a); err != nil {
+		return a, err
+	}
 	va, err := annotationVA(input)
 	a.VA = va
 	return a, err
@@ -278,7 +288,11 @@ const annotationColumns = "id, va, kind, subject, label, comment, status, line, 
 
 func scanAnnotation(row interface{ Scan(...any) error }) (analysisAnnotation, error) {
 	var a analysisAnnotation
-	err := row.Scan(&a.ID, &a.VA, &a.Kind, &a.Subject, &a.Label, &a.Comment, &a.Status, &a.Line, &a.CodeHash, &a.Revision)
+	var evidenceJSON string
+	err := row.Scan(&a.ID, &a.VA, &a.Kind, &a.Subject, &a.Label, &a.Comment, &a.Status, &a.Line, &a.CodeHash, &a.Revision, &evidenceJSON, &a.Provenance, &a.AnchorText)
+	if err == nil {
+		err = json.Unmarshal([]byte(evidenceJSON), &a.Evidence)
+	}
 	return a, err
 }
 
@@ -289,11 +303,11 @@ func (s *annotationStore) create(ctx context.Context, a analysisAnnotation) (ana
 	}
 	a.ID = hex.EncodeToString(id)
 	return scanAnnotation(s.db.QueryRowContext(ctx, `INSERT INTO analysis_annotations
-		(id,binary_sha256,va,kind,subject,label,comment,status,line,code_hash)
-		VALUES(?,?,?,?,?,?,?,?,?,?)
+		(id,binary_sha256,va,kind,subject,label,comment,status,line,code_hash,evidence,provenance,anchor_text)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(binary_sha256,va,kind,subject,line,code_hash) DO NOTHING
 		RETURNING `+s.columns(),
-		a.ID, s.hash, a.VA, a.Kind, a.Subject, a.Label, a.Comment, a.Status, a.Line, a.CodeHash))
+		a.ID, s.hash, a.VA, a.Kind, a.Subject, a.Label, a.Comment, a.Status, a.Line, a.CodeHash, annotationEvidenceJSON(a.Evidence), a.Provenance, a.AnchorText))
 }
 
 func opAnnotations(ctx context.Context, input AnalyzeInput) (string, error) {
@@ -313,6 +327,9 @@ func opAnnotations(ctx context.Context, input AnalyzeInput) (string, error) {
 		return "", fmt.Errorf("annotation_id is required; use annotation_list to find it")
 	}
 	if (op == "annotation_set" && input.AnnotationID != "") || op == "annotation_delete" {
+		if err := validateAnnotationID(input.AnnotationID); err != nil {
+			return "", err
+		}
 		if err := validateAnnotationRevision(input.ExpectedRevision); err != nil {
 			return "", err
 		}
@@ -388,7 +405,15 @@ func opAnnotations(ctx context.Context, input AnalyzeInput) (string, error) {
 				}
 			}
 			if input.Query != "" {
-				where += " AND instr(lower(label || char(10) || comment || char(10) || subject),lower(?))>0"
+				searchText := "label || char(10) || comment || char(10) || subject"
+				if s.version >= 3 {
+					searchText += " || char(10) || provenance || char(10) || coalesce((SELECT group_concat(" +
+						"coalesce(json_extract(value,'$.kind'),'') || char(10) || " +
+						"coalesce(json_extract(value,'$.va'),'') || char(10) || " +
+						"coalesce(json_extract(value,'$.source'),'') || char(10) || " +
+						"coalesce(json_extract(value,'$.detail'),''), char(10)) FROM json_each(evidence)), '')"
+				}
+				where += " AND instr(lower(" + searchText + "),lower(?))>0"
 				args = append(args, input.Query)
 			}
 			args = append(args, limit+1, input.ResultOffset)
@@ -512,6 +537,12 @@ func annotationText(a analysisAnnotation) string {
 	if a.Comment != "" {
 		parts = append(parts, strconv.Quote(a.Comment))
 	}
+	if a.Provenance != "" {
+		parts = append(parts, "provenance="+strconv.Quote(a.Provenance))
+	}
+	if len(a.Evidence) > 0 {
+		parts = append(parts, "evidence="+strconv.Quote(annotationEvidenceJSON(a.Evidence)))
+	}
 	// Quotes escape newlines/control characters: notes cannot impersonate code.
 	return strings.Join(parts, " ")
 }
@@ -546,7 +577,7 @@ func renderAnnotatedC(code string, notes []analysisAnnotation, numbered bool) st
 					a.ID, a.Line, a.CodeHash, annotationText(a))
 			}
 		case "instruction":
-			fmt.Fprintf(&sb, "// instruction note at function entry (no C source mapping): %s\n", annotationText(a))
+			fmt.Fprintf(&sb, "// instruction note @0x%s (%s; no C source mapping): %s\n", strings.TrimLeft(a.VA, "0"), a.scope, annotationText(a))
 		}
 	}
 	for i, line := range lines {
