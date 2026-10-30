@@ -377,12 +377,19 @@ command = "/path/to/agent-tool"
 # 초기 스키마 프로필 선택 (기본: core)
 agent-tool --profile core-lite
 
+# core에 선택한 도구만 추가 노출
+agent-tool --profile core+copy+delete+ssh+wintool
+
 # UTF-8이 아닌 프로젝트에서 폴백 인코딩 지정
 agent-tool --fallback-encoding EUC-KR
 ```
 
 프로필: `core-lite`(read/write/edit/grep/toolbox), `core`(11개 스키마),
 `coding`, `remote`, `analysis`, `full`.
+프리셋에 `+도구명`을 붙여 초기 목록을 조합할 수 있습니다.
+`core+copy+delete+ssh+wintool`은 15개를 노출하며 분석·기타 원격 도구는
+게이트웨이로 사용합니다. `AGENT_TOOL_PROFILE`과 toolbox `operation=profile`도
+같은 구문을 지원합니다. 알 수 없는 도구나 빈 구성 요소가 있으면 등록 전에 거부합니다.
 실행 중에는 클라이언트와 무관하게 동작하는 `toolbox` gateway를 우선 사용합니다.
 `operation=describe`는 한 도구의 스키마를 반환하며 `compact=true`와
 `tool_operation`을 함께 쓰면 한 operation으로 제한합니다. 반환된 `schema_handle`을

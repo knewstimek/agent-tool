@@ -31,13 +31,13 @@ import (
 	"agent-tool/tools/mkdir"
 	"agent-tool/tools/multiedit"
 	"agent-tool/tools/multiread"
-	"agent-tool/tools/netcheck"
 	mysqltool "agent-tool/tools/mysql"
+	"agent-tool/tools/netcheck"
 	"agent-tool/tools/patch"
 	"agent-tool/tools/procexec"
-	"agent-tool/tools/query"
 	"agent-tool/tools/prockill"
 	"agent-tool/tools/proclist"
+	"agent-tool/tools/query"
 	"agent-tool/tools/read"
 	redistool "agent-tool/tools/redis"
 	"agent-tool/tools/regexreplace"
@@ -127,14 +127,14 @@ func main() {
 			i++
 		case "--profile":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "error: --profile requires core-lite, core, coding, remote, analysis, or full")
+				fmt.Fprintln(os.Stderr, "error: --profile requires a preset, optionally followed by +tool names")
 				os.Exit(1)
 			}
 			profile = strings.ToLower(strings.TrimSpace(args[i+1]))
 			i++
 		default:
 			fmt.Fprintf(os.Stderr, "unknown command or flag: %s\n", args[i])
-			fmt.Fprintln(os.Stderr, "usage: agent-tool [--profile PROFILE] [--fallback-encoding ENC]")
+			fmt.Fprintln(os.Stderr, "usage: agent-tool [--profile PRESET[+TOOL...]] [--fallback-encoding ENC]")
 			os.Exit(1)
 		}
 	}

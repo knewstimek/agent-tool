@@ -35,7 +35,7 @@ type Input struct {
 	Operation      string         `json:"operation,omitempty" jsonschema:"list (default), describe, call, output, enable, disable, or profile"`
 	Tools          []string       `json:"tools,omitempty" jsonschema:"Tool names for enable/disable"`
 	Groups         []string       `json:"groups,omitempty" jsonschema:"Groups for enable/disable: core, file, coding, system, remote, data, analysis, windows"`
-	Profile        string         `json:"profile,omitempty" jsonschema:"Profile to add; core-lite, core, coding, remote, analysis, or full. core-lite is smallest at startup"`
+	Profile        string         `json:"profile,omitempty" jsonschema:"Profile to add: core-lite, core, coding, remote, analysis, or full; append +tool names for extra tools"`
 	Tool           string         `json:"tool,omitempty" jsonschema:"Target tool for describe/call"`
 	Arguments      map[string]any `json:"arguments,omitempty" jsonschema:"Target arguments for call; describe first if unknown"`
 	OutputID       string         `json:"output_id,omitempty" jsonschema:"Raw output ID for output"`
@@ -67,7 +67,7 @@ func NewManager(server *mcp.Server, specs []Spec, version ...string) *Manager {
 func (m *Manager) EnableProfile(profile string) error {
 	names, groups, ok := profileSelection(strings.ToLower(strings.TrimSpace(profile)))
 	if !ok {
-		return fmt.Errorf("unknown profile %q (use core-lite, core, coding, remote, analysis, or full)", profile)
+		return fmt.Errorf("unknown profile %q (use core-lite, core, coding, remote, analysis, or full; optionally append +tool names)", profile)
 	}
 	_, err := m.change(true, names, groups)
 	return err
@@ -102,7 +102,7 @@ func (m *Manager) Handle(ctx context.Context, req *mcp.CallToolRequest, input In
 	case "profile":
 		names, groups, ok := profileSelection(strings.ToLower(strings.TrimSpace(input.Profile)))
 		if !ok {
-			err = fmt.Errorf("unknown profile %q (use core-lite, core, coding, remote, analysis, or full)", input.Profile)
+			err = fmt.Errorf("unknown profile %q (use core-lite, core, coding, remote, analysis, or full; optionally append +tool names)", input.Profile)
 			break
 		}
 		changed, err = m.change(true, names, groups)
@@ -347,9 +347,28 @@ func profileGroups(profile string) ([]string, bool) {
 }
 
 func profileSelection(profile string) ([]string, []string, bool) {
-	if profile == "core-lite" {
-		return []string{"edit", "grep", "read", "write"}, nil, true
+	parts := strings.Split(profile, "+")
+	base := strings.TrimSpace(parts[0])
+	if len(parts) > 1 && base == "" {
+		return nil, nil, false
 	}
-	groups, ok := profileGroups(profile)
-	return nil, groups, ok
+	var names, groups []string
+	if base == "core-lite" {
+		names = []string{"edit", "grep", "read", "write"}
+	} else {
+		var ok bool
+		groups, ok = profileGroups(base)
+		if !ok {
+			return nil, nil, false
+		}
+	}
+	for _, extra := range parts[1:] {
+		extra = strings.TrimSpace(extra)
+		if extra == "" {
+			return nil, nil, false
+		}
+		names = append(names, extra)
+	}
+	// change validates every explicit name before registering any selected tool.
+	return names, groups, true
 }

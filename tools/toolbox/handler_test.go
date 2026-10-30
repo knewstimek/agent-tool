@@ -56,6 +56,61 @@ func TestCoreLiteEnablesOnlyFrequentTools(t *testing.T) {
 	}
 }
 
+func TestCompositeProfilesEnableOnlySelectedExtras(t *testing.T) {
+	for _, gateway := range []bool{false, true} {
+		server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "test"}, nil)
+		registered := map[string]int{}
+		specs := []Spec{}
+		for name, group := range map[string]string{
+			"read": "core", "edit": "core", "copy": "file", "delete": "file",
+			"ssh": "remote", "sftp": "remote", "wintool": "windows", "analyze": "analysis",
+		} {
+			name := name
+			specs = append(specs, Spec{Name: name, Group: group, Register: func() { registered[name]++ }})
+		}
+		m := NewManager(server, specs)
+		profile := "core+copy+delete+ssh+wintool+ssh"
+		if gateway {
+			result, _, err := m.Handle(context.Background(), nil, Input{Operation: "profile", Profile: profile})
+			if err != nil || result.IsError {
+				t.Fatalf("gateway profile failed: %v %v", result, err)
+			}
+		} else if err := m.EnableProfile(profile); err != nil {
+			t.Fatal(err)
+		}
+		active, _ := m.inventory()
+		if strings.Join(active, ",") != "copy,delete,edit,read,ssh,toolbox,wintool" {
+			t.Fatalf("unexpected composite profile tools: %v", active)
+		}
+		for _, name := range []string{"read", "edit", "copy", "delete", "ssh", "wintool"} {
+			if registered[name] != 1 {
+				t.Fatalf("registration count %s=%d", name, registered[name])
+			}
+		}
+		if registered["analyze"] != 0 || registered["sftp"] != 0 {
+			t.Fatalf("unselected tools registered: %v", registered)
+		}
+	}
+}
+
+func TestCompositeProfilesRejectInvalidSelectionsAtomically(t *testing.T) {
+	for _, profile := range []string{"core+copy+missing", "core+", "core++ssh", "+ssh", "missing+ssh"} {
+		server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "test"}, nil)
+		registered := 0
+		m := NewManager(server, []Spec{
+			{Name: "read", Group: "core", Register: func() { registered++ }},
+			{Name: "copy", Group: "file", Register: func() { registered++ }},
+			{Name: "ssh", Group: "remote", Register: func() { registered++ }},
+		})
+		if err := m.EnableProfile(profile); err == nil {
+			t.Fatalf("invalid profile accepted: %q", profile)
+		}
+		if registered != 0 {
+			t.Fatalf("invalid selection partially registered tools: %q", profile)
+		}
+	}
+}
+
 func TestCompactDescribeFiltersByTargetOperationAndReusesHandle(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "v1"}, nil)
 	m := NewManager(server, []Spec{

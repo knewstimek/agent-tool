@@ -380,13 +380,21 @@ command = "/path/to/agent-tool"
 # Select the initial schema profile (default: core)
 agent-tool --profile core-lite
 
+# Keep the core and eagerly expose only selected additional tools
+agent-tool --profile core+copy+delete+ssh+wintool
+
 # Set fallback encoding for projects with non-UTF-8 files
 agent-tool --fallback-encoding EUC-KR
 ```
 
 Profiles are presets: `core-lite` (read/write/edit/grep/toolbox), `core` (11
 schemas), `coding` (core plus broader file/build/shell tools), `remote`, `analysis`,
-and `full`. At runtime, prefer the
+and `full`. Append `+tool` names to a preset for a custom initial inventory;
+for example, `core+copy+delete+ssh+wintool` exposes 15 tools while leaving analysis
+and other remote tools behind the gateway. The same syntax works in
+`AGENT_TOOL_PROFILE` and toolbox `operation=profile`. Unknown tools or empty
+components reject the whole selection before any tools are registered.
+At runtime, prefer the
 client-independent `toolbox` gateway: `operation=describe` returns one tool's schema
 (`compact=true` plus `tool_operation` limits it to one operation), and
 `operation=call` invokes it through the stable toolbox binding. Re-send a returned
