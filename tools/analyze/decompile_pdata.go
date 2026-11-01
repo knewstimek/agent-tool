@@ -100,6 +100,29 @@ func (p *pdataIndex) containing(imageBase, va uint64) (uint64, bool) {
 	return imageBase + uint64(begin), true
 }
 
+// extent is the function at entry as its .pdata ranges give it: the entry's
+// own range and every chained fragment that resolves to it, or nil when entry
+// is not the start of a primary .pdata function.
+func (p *pdataIndex) extent(imageBase, entry uint64) [][2]uint64 {
+	if p == nil || entry < imageBase || entry-imageBase > 0xffffffff {
+		return nil
+	}
+	rva := uint32(entry - imageBase)
+	if fr := findFunc(p.table, rva); fr == nil || fr.begin != rva {
+		return nil
+	}
+	if _, chained := p.primary[rva]; chained {
+		return nil
+	}
+	var out [][2]uint64
+	for _, fr := range p.table {
+		if fr.begin == rva || p.primary[fr.begin] == rva {
+			out = append(out, [2]uint64{imageBase + uint64(fr.begin), imageBase + uint64(fr.end)})
+		}
+	}
+	return out
+}
+
 // x64 unwind operations (UNWIND_CODE.UnwindOp).
 const (
 	uwopPushNonvol    = 0

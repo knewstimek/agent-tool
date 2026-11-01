@@ -77,8 +77,11 @@ type decompileLine struct {
 	ErrorKind string   `json:"error_kind,omitempty"` // input, load, engine, flow, panic, memory
 	// Assumed are the assume_branches addresses applied in this function.
 	Assumed []uint64 `json:"assumed,omitempty"`
-	Error   string   `json:"error,omitempty"`
-	Secs    float64  `json:"secs,omitempty"`
+	// Bounded is the .pdata extent the flow was limited to after the
+	// unbounded flow ran away.
+	Bounded [][2]uint64 `json:"bounded,omitempty"`
+	Error   string      `json:"error,omitempty"`
+	Secs    float64     `json:"secs,omitempty"`
 }
 
 // RunDecompileWorker serves decompileRequests, one JSON value each, from in
@@ -184,6 +187,9 @@ type decompileTarget struct {
 	containing func(va uint64) (uint64, bool)
 	// frame is a function's prologue frame from x64 PE unwind info.
 	frame func(entry uint64) (prologueFrame, bool)
+	// extent is a function's exact address ranges from x64 PE .pdata (its
+	// own range plus chained fragments), nil when unknown.
+	extent func(entry uint64) [][2]uint64
 }
 
 // decompile decompiles one target. ghidraFormat selects Ghidra's exact
@@ -217,7 +223,7 @@ func (t *decompileTarget) decompileAssuming(target string, maxInstr int, ghidraF
 		}
 		hooks = []bridge.InstructionHook{assumed}
 	}
-	res, err := t.prog.Decompile(decomp.Function{
+	fn := decomp.Function{
 		InstructionHooks: hooks,
 		Entry:            entry,
 		Name:             short,
@@ -229,7 +235,25 @@ func (t *decompileTarget) decompileAssuming(target string, maxInstr int, ghidraF
 		HostLocalTypes:   localTypes,
 		TrackedRegs:      t.tracked,
 		GhidraFormat:     ghidraFormat,
-	})
+	}
+	res, err := t.prog.Decompile(fn)
+	// A runaway flow (junk bytes behind opaque predicates) is retried inside
+	// the function's exact .pdata extent: x64 unwinding requires a function's
+	// code to lie in its own .pdata ranges, so flow leaving them is not this
+	// function's code -- tail jumps to other functions are already calls. The
+	// exits end in halt_missing() with Ghidra's out-of-bounds warning, and the
+	// rest of the function prints. Functions that decompile unbounded keep
+	// Ghidra's whole-space flow.
+	if errors.Is(err, bridge.ErrTooManyInstructions) && t.extent != nil {
+		if ext := t.extent(entry); len(ext) != 0 {
+			for _, r := range ext {
+				fn.FlowBounds = append(fn.FlowBounds, bridge.AddrRange{Lo: r[0], Hi: r[1]})
+			}
+			if bres, berr := t.prog.Decompile(fn); berr == nil || !errors.Is(berr, bridge.ErrTooManyInstructions) {
+				res, err, line.Bounded = bres, berr, ext
+			}
+		}
+	}
 	line.Secs = time.Since(start).Seconds()
 	if assumed != nil {
 		unapplied := map[uint64]bool{}
@@ -417,6 +441,7 @@ func loadDecompileTarget(path, pdbPath string, pdbForce bool) (*decompileTarget,
 			if pd = loadPdata(f, bin.imageBase); pd != nil {
 				t.containing = func(va uint64) (uint64, bool) { return pd.containing(bin.imageBase, va) }
 				t.frame = func(entry uint64) (prologueFrame, bool) { return pd.frame(bin.imageBase, entry) }
+				t.extent = func(entry uint64) [][2]uint64 { return pd.extent(bin.imageBase, entry) }
 			}
 		}
 		host = newPEHost(f, bin, pd)

@@ -1228,11 +1228,15 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   dead worker never reached continue on a fresh one.
 
   A path into bytes that are no instruction ends in halt_baddata() as in Ghidra; the
-  rest of the function still decompiles. A flow over the instruction limit fails at
-  once ("Flow exceeded maximum allowable instructions", with how many paths hit
-  undecodable bytes): many such paths mean junk bytes behind opaque predicates
-  (obfuscation). Static analysis cannot tell those from real branches with
-  certainty, so give the directions a runtime trace established:
+  rest of the function still decompiles. A flow over the instruction limit (junk
+  bytes behind opaque predicates, i.e. obfuscation) is retried inside the function's
+  exact x64 .pdata extent: flow leaving it is marked "Function flow out of bounds:
+  X flows to Y" + halt_missing() and the rest prints (Ghidra itself times out on
+  such functions). Without .pdata (x86, leaf functions) it fails at once with
+  "Flow exceeded maximum allowable instructions" and the number of paths that hit
+  undecodable bytes. Junk inside the extent can remain; static analysis cannot
+  tell it from real branches with certainty, so give the directions a runtime
+  trace established:
     analyze(operation="decompile", file_path=..., va="0x140012340",
             assume_branches="0x140012375=taken,0x1400123a2=fallthrough")
   Each listed conditional jump is fixed to that side before flow is followed (as if

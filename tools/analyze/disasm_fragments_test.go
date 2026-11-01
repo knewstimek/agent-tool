@@ -40,6 +40,20 @@ func TestDisassembleNotesChainedFragments(t *testing.T) {
 		t.Skip("no small split function")
 	}
 
+	// The decompiler's flow bounds: the owner's range plus every fragment,
+	// and nothing for an address that is only a fragment.
+	ext := pd.extent(imageBase, imageBase+uint64(owner))
+	hasFrag := false
+	for _, r := range ext {
+		hasFrag = hasFrag || r[0] == imageBase+uint64(frag)
+	}
+	if len(ext) < 2 || !hasFrag {
+		t.Errorf("extent(owner) = %#x, want the owner and fragment 0x%x", ext, imageBase+uint64(frag))
+	}
+	if e := pd.extent(imageBase, imageBase+uint64(frag)); e != nil {
+		t.Errorf("extent(fragment) = %#x, want nil", e)
+	}
+
 	for _, tc := range []struct {
 		va   uint32
 		want string

@@ -217,6 +217,13 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 			if r.Note != "" {
 				fmt.Fprintf(&sb, "// note: %s\n", r.Note)
 			}
+			if len(r.Bounded) != 0 {
+				var parts []string
+				for _, b := range r.Bounded {
+					parts = append(parts, fmt.Sprintf("0x%x-0x%x", b[0], b[1]))
+				}
+				fmt.Fprintf(&sb, "// note: the whole-space flow exceeded the instruction limit (junk bytes behind opaque predicates), so flow was limited to the function's .pdata extent %s; each exit is marked \"Function flow out of bounds\" + halt_missing(). Code inside the extent may still include junk paths (halt_baddata); a runtime trace plus assume_branches removes them\n", strings.Join(parts, ", "))
+			}
 			if len(r.Assumed) != 0 {
 				fmt.Fprintf(&sb, "// note: assume_branches applied at %s; the C below omits the other side of each\n", hexList(r.Assumed))
 			}
