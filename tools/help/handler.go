@@ -1224,7 +1224,21 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
 
   Each call runs in a separate worker process (same executable) with a 2 GB heap
   limit and timeout_sec (default 60, max 600); a timeout or memory blow-up kills only
-  the worker, and the result reports which functions completed.
+  the worker, the result reports which functions completed, and the functions the
+  dead worker never reached continue on a fresh one.
+
+  A path into bytes that are no instruction ends in halt_baddata() as in Ghidra; the
+  rest of the function still decompiles. A flow over the instruction limit fails at
+  once ("Flow exceeded maximum allowable instructions", with how many paths hit
+  undecodable bytes): many such paths mean junk bytes behind opaque predicates
+  (obfuscation). Static analysis cannot tell those from real branches with
+  certainty, so give the directions a runtime trace established:
+    analyze(operation="decompile", file_path=..., va="0x140012340",
+            assume_branches="0x140012375=taken,0x1400123a2=fallthrough")
+  Each listed conditional jump is fixed to that side before flow is followed (as if
+  patched to jmp / nop); the other side is not decompiled, the C marks each one, and
+  addresses no decompiled flow reached are listed. A Gosleigh extension: Ghidra
+  rejects conditional-branch flow overrides.
 
   Parameters:
     va: Function entry as hex VA or symbol name (PDB names are qualified:
@@ -1232,6 +1246,7 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
     pdb_path: PDB file when not beside the image; "none" disables the PDB
     pdb_force: Load pdb_path even if its GUID does not match (warns)
     timeout_sec: Worker time limit (default 60, max 600)
+    assume_branches: <hex address>=taken|fallthrough, comma-separated (max 256)
     max_output_chars: Output cap (default 32768)
     result_offset: Character offset to continue a truncated output
 

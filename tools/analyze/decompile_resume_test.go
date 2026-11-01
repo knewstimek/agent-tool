@@ -11,7 +11,9 @@ import (
 // it never reached go to a fresh worker.
 func TestDecompileResumesAfterWorkerDeath(t *testing.T) {
 	var calls [][]string
-	defer func(r func(context.Context, decompileRequest, time.Duration) ([]decompileLine, string)) { decompileRunner = r }(decompileRunner)
+	defer func(r func(context.Context, decompileRequest, time.Duration) ([]decompileLine, string)) {
+		decompileRunner = r
+	}(decompileRunner)
 	decompileRunner = func(_ context.Context, req decompileRequest, _ time.Duration) ([]decompileLine, string) {
 		calls = append(calls, req.Targets)
 		lines := []decompileLine{{Kind: "load", Format: "PE x64", Spec: "x86:LE:64:default:windows"}}

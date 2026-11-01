@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -39,10 +40,13 @@ func opDecompile(ctx context.Context, input AnalyzeInput) (string, error) {
 		return "", fmt.Errorf("timeout_sec must be at most %d", decompileMaxTimeout)
 	}
 
-	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath, PDBForce: input.PDBForce}
+	assume, err := parseAssumeBranches(input.AssumeBranches)
+	if err != nil {
+		return "", err
+	}
+	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath, PDBForce: input.PDBForce, AssumeBranches: assume}
 	start := time.Now()
 	lines, failure := runDecompileWorkerResuming(ctx, req, time.Duration(timeout)*time.Second)
-	var err error
 	input.annotations, input.annotationNotice, err = loadFunctionAnnotations(ctx, input, lines)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -185,6 +189,25 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 		sb.WriteString("No debug types or prototypes are applied: parameter/local types and callee signatures are inferred by the decompiler (Ghidra-equivalent core), so treat names like param_1/local_10 and undefined types as recovered, not declared.\n")
 	}
 
+	if assume, _ := parseAssumeBranches(input.AssumeBranches); len(assume) != 0 {
+		used := map[uint64]bool{}
+		for _, r := range results {
+			for _, a := range r.Assumed {
+				used[a] = true
+			}
+		}
+		var unused []uint64
+		for a := range assume {
+			if !used[a] {
+				unused = append(unused, a)
+			}
+		}
+		if len(unused) != 0 {
+			sort.Slice(unused, func(i, j int) bool { return unused[i] < unused[j] })
+			fmt.Fprintf(&sb, "WARNING: assume_branches not applied at %s: no decompiled flow reached a conditional jump there (check the address with disassemble).\n", hexList(unused))
+		}
+	}
+
 	for _, t := range targets {
 		r, have := results[t]
 		sb.WriteString("\n")
@@ -193,6 +216,9 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 			fmt.Fprintf(&sb, "// %s @ 0x%x (%.2fs)\n", r.Name, r.Entry, r.Secs)
 			if r.Note != "" {
 				fmt.Fprintf(&sb, "// note: %s\n", r.Note)
+			}
+			if len(r.Assumed) != 0 {
+				fmt.Fprintf(&sb, "// note: assume_branches applied at %s; the C below omits the other side of each\n", hexList(r.Assumed))
 			}
 			for _, w := range r.Warnings {
 				fmt.Fprintf(&sb, "// warning: %s\n", w)
@@ -206,6 +232,7 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 			if s := decompileSuggestion(r.ErrorKind, t); s != "" {
 				sb.WriteString("// " + s + "\n")
 			}
+
 		case fatals[t].Kind != "":
 			f := fatals[t]
 			fmt.Fprintf(&sb, "// %s: %s error: %s\n", t, f.ErrorKind, f.Error)
@@ -239,7 +266,7 @@ func decompileSuggestion(kind, target string) string {
 		}
 		return "Try: analyze function_at va=" + target + " to find the function start, or pe_info/elf_info for symbols"
 	case "flow":
-		return "The control flow from this entry is too large to decompile. When many paths end at undecodable bytes it runs into junk bytes (obfuscation, opaque predicates) rather than real code: read the real path with analyze disassemble va=" + target + ", or check the entry with function_at"
+		return "The control flow from this entry is too large to decompile. Many paths ending at undecodable bytes mean junk bytes behind opaque predicates (obfuscation). Read the real path with analyze disassemble va=" + target + "; once a runtime trace or the disassembly confirms which side a remaining conditional jump takes, pass assume_branches=\"0x...=taken,0x...=fallthrough\""
 	case "memory", "timeout":
 		return "Try: decompile it alone with a larger timeout_sec, or analyze disassemble va=" + target + " stop_at_ret=true"
 	default:

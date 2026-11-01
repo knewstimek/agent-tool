@@ -21,6 +21,7 @@ import (
 	"github.com/knewstimek/gosleigh/pkg/address"
 	"github.com/knewstimek/gosleigh/pkg/bridge"
 	"github.com/knewstimek/gosleigh/pkg/decomp"
+	"github.com/knewstimek/gosleigh/pkg/ext/branchassume"
 	"github.com/knewstimek/gosleigh/pkg/loader"
 	"github.com/knewstimek/gosleigh/pkg/pcode"
 	"github.com/knewstimek/gosleigh/pkg/specs"
@@ -37,11 +38,14 @@ const DecompileWorkerArg = "__decompile-worker"
 type decompileRequest struct {
 	Path string `json:"path"`
 	// PDBPath overrides where the PE's PDB is looked for; "none" disables it.
-	PDBPath         string   `json:"pdb_path,omitempty"`
-	PDBForce        bool     `json:"pdb_force,omitempty"` // load PDBPath despite a GUID mismatch
-	Targets         []string `json:"targets"`
-	MaxInstructions int      `json:"max_instructions,omitempty"`
-	MemLimitMB      int      `json:"mem_limit_mb"`
+	PDBPath  string   `json:"pdb_path,omitempty"`
+	PDBForce bool     `json:"pdb_force,omitempty"` // load PDBPath despite a GUID mismatch
+	Targets  []string `json:"targets"`
+	// AssumeBranches fixes conditional branches by address ("taken" or
+	// "fallthrough"); it changes only the flow, not the loaded binary.
+	AssumeBranches  map[uint64]string `json:"assume_branches,omitempty"`
+	MaxInstructions int               `json:"max_instructions,omitempty"`
+	MemLimitMB      int               `json:"mem_limit_mb"`
 }
 
 // decompileLine is one JSON line of worker stdout. Lines are written as each
@@ -71,8 +75,10 @@ type decompileLine struct {
 	Types     string   `json:"types,omitempty"` // definitions of the debug types C names
 	Warnings  []string `json:"warnings,omitempty"`
 	ErrorKind string   `json:"error_kind,omitempty"` // input, load, engine, flow, panic, memory
-	Error     string   `json:"error,omitempty"`
-	Secs      float64  `json:"secs,omitempty"`
+	// Assumed are the assume_branches addresses applied in this function.
+	Assumed []uint64 `json:"assumed,omitempty"`
+	Error   string   `json:"error,omitempty"`
+	Secs    float64  `json:"secs,omitempty"`
 }
 
 // RunDecompileWorker serves decompileRequests, one JSON value each, from in
@@ -149,9 +155,10 @@ func RunDecompileWorker(in io.Reader, out io.Writer) int {
 			l.LoadSecs, l.Reused = 0, true
 		}
 		emit(l)
+		assume := assumeDirections(req.AssumeBranches)
 		for _, target := range req.Targets {
 			current.Store(target)
-			emit(t.decompile(target, req.MaxInstructions, false))
+			emit(t.decompileAssuming(target, req.MaxInstructions, false, assume))
 		}
 		current.Store("")
 		emit(decompileLine{Kind: "done"})
@@ -182,6 +189,15 @@ type decompileTarget struct {
 // decompile decompiles one target. ghidraFormat selects Ghidra's exact
 // layout, which only the golden measurement needs.
 func (t *decompileTarget) decompile(target string, maxInstr int, ghidraFormat bool) decompileLine {
+	return t.decompileAssuming(target, maxInstr, ghidraFormat, nil)
+}
+
+// decompileAssuming is decompile with conditional branches fixed to one
+// direction (assume_branches; Gosleigh's branchassume extension). The
+// directions are the caller's knowledge -- typically a runtime trace of an
+// obfuscated function -- since static analysis cannot tell an opaque
+// predicate in obfuscator-made code from a real branch with certainty.
+func (t *decompileTarget) decompileAssuming(target string, maxInstr int, ghidraFormat bool, assume map[uint64]branchassume.Direction) decompileLine {
 	line := decompileLine{Kind: "result", Target: target}
 	entry, note, err := t.resolve(target)
 	if err != nil {
@@ -192,19 +208,41 @@ func (t *decompileTarget) decompile(target string, maxInstr int, ghidraFormat bo
 	start := time.Now()
 	_, short := displayParts(t.host.funcs[entry])
 	localNames, localTypes := t.hostLocals(entry)
+	var hooks []bridge.InstructionHook
+	var assumed *branchassume.Hook
+	if len(assume) != 0 {
+		assumed = branchassume.New(assume)
+		for a := range assume {
+			assumed.SetReason(a, "assume_branches, not analysis")
+		}
+		hooks = []bridge.InstructionHook{assumed}
+	}
 	res, err := t.prog.Decompile(decomp.Function{
-		Entry:           entry,
-		Name:            short,
-		DisplayName:     ghidraName(t.host.funcs[entry]),
-		MaxInstructions: maxInstr,
-		Host:            t.host,
-		FlowOverrides:   tailCallOverrides(t, entry),
-		HostLocals:      localNames,
-		HostLocalTypes:  localTypes,
-		TrackedRegs:     t.tracked,
-		GhidraFormat:    ghidraFormat,
+		InstructionHooks: hooks,
+		Entry:            entry,
+		Name:             short,
+		DisplayName:      ghidraName(t.host.funcs[entry]),
+		MaxInstructions:  maxInstr,
+		Host:             t.host,
+		FlowOverrides:    tailCallOverrides(t, entry),
+		HostLocals:       localNames,
+		HostLocalTypes:   localTypes,
+		TrackedRegs:      t.tracked,
+		GhidraFormat:     ghidraFormat,
 	})
 	line.Secs = time.Since(start).Seconds()
+	if assumed != nil {
+		unapplied := map[uint64]bool{}
+		for _, a := range assumed.Unapplied() {
+			unapplied[a] = true
+		}
+		for a := range assume {
+			if !unapplied[a] {
+				line.Assumed = append(line.Assumed, a)
+			}
+		}
+		sort.Slice(line.Assumed, func(i, j int) bool { return line.Assumed[i] < line.Assumed[j] })
+	}
 	if err != nil {
 		line.ErrorKind = "engine"
 		msg := err.Error()
