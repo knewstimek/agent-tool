@@ -214,17 +214,20 @@ func (t *decompileTarget) decompileAssuming(target string, maxInstr int, ghidraF
 	start := time.Now()
 	_, short := displayParts(t.host.funcs[entry])
 	localNames, localTypes := t.hostLocals(entry)
-	var hooks []bridge.InstructionHook
+	// A fresh hook per attempt: it records which branches the flow reached.
 	var assumed *branchassume.Hook
-	if len(assume) != 0 {
+	newHooks := func() []bridge.InstructionHook {
+		if len(assume) == 0 {
+			return nil
+		}
 		assumed = branchassume.New(assume)
 		for a := range assume {
 			assumed.SetReason(a, "assume_branches, not analysis")
 		}
-		hooks = []bridge.InstructionHook{assumed}
+		return []bridge.InstructionHook{assumed}
 	}
 	fn := decomp.Function{
-		InstructionHooks: hooks,
+		InstructionHooks: newHooks(),
 		Entry:            entry,
 		Name:             short,
 		DisplayName:      ghidraName(t.host.funcs[entry]),
@@ -249,8 +252,12 @@ func (t *decompileTarget) decompileAssuming(target string, maxInstr int, ghidraF
 			for _, r := range ext {
 				fn.FlowBounds = append(fn.FlowBounds, bridge.AddrRange{Lo: r[0], Hi: r[1]})
 			}
+			first := assumed
+			fn.InstructionHooks = newHooks()
 			if bres, berr := t.prog.Decompile(fn); berr == nil || !errors.Is(berr, bridge.ErrTooManyInstructions) {
 				res, err, line.Bounded = bres, berr, ext
+			} else {
+				assumed = first // report the attempt whose error is returned
 			}
 		}
 	}
