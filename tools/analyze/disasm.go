@@ -34,8 +34,10 @@ func opDisassembleContext(ctx context.Context, input AnalyzeInput) (string, erro
 	// Also auto-detects arch/mode and provides symbol map for annotations.
 	var funcEndFileOff int64 = -1   // function boundary from .pdata or heuristic
 	var symbolMap map[uint64]string // VA -> symbol name for inline annotations
+	var resolved *disasmResolved
 	if input.VA != "" {
-		resolved, err := disasmResolveVA(input.FilePath, input.VA)
+		var err error
+		resolved, err = disasmResolveVA(input.FilePath, input.VA)
 		if err != nil {
 			return "", err
 		}
@@ -112,10 +114,12 @@ func opDisassembleContext(ctx context.Context, input AnalyzeInput) (string, erro
 		readSize = fileSize - int64(offset)
 	}
 	// Clamp read to function boundary from .pdata (prevents disassembly past function end)
+	clamped := false
 	if funcEndFileOff > 0 && int64(offset) < funcEndFileOff {
 		funcReadSize := funcEndFileOff - int64(offset)
 		if funcReadSize < readSize {
 			readSize = funcReadSize
+			clamped = true
 		}
 	}
 
@@ -143,6 +147,7 @@ func opDisassembleContext(ctx context.Context, input AnalyzeInput) (string, erro
 	}
 
 	var text string
+	reachedEnd := false
 	switch arch {
 	case "arm":
 		if mode == 64 {
@@ -151,10 +156,16 @@ func opDisassembleContext(ctx context.Context, input AnalyzeInput) (string, erro
 			text, err = disasmARM32(data, baseAddr, offset, count)
 		}
 	default:
-		text, err = disasmX86Opts(data, baseAddr, offset, count, mode, symbolMap, common.FlexBool(input.StopAtRet))
+		text, reachedEnd, err = disasmX86Run(data, baseAddr, offset, count, mode, symbolMap, common.FlexBool(input.StopAtRet))
 	}
 	if err != nil {
 		return "", err
+	}
+	// Without this note the output just ends at the clamp, indistinguishable
+	// from a complete function, while MSVC hot/cold splitting puts the rest of
+	// the function in other .pdata ranges and a heuristic end may be a guess.
+	if clamped && reachedEnd && resolved != nil && resolved.endNote != nil {
+		text += resolved.endNote(baseAddr + uint64(funcEndFileOff))
 	}
 	return renderDisassemblyAnnotations(ctx, input, text)
 }
@@ -193,6 +204,13 @@ func disasmX86(data []byte, baseAddr uint64, offset, count, mode int, symbols ma
 // When stopAtRet is true, stops after a RET/RETF instruction that is followed by
 // INT3/NOP padding or a new function prologue (confirmed function boundary).
 func disasmX86Opts(data []byte, baseAddr uint64, offset, count, mode int, symbols map[uint64]string, stopAtRet bool) (string, error) {
+	text, _, err := disasmX86Run(data, baseAddr, offset, count, mode, symbols, stopAtRet)
+	return text, err
+}
+
+// disasmX86Run is disasmX86Opts that also reports whether every byte of data
+// was consumed (neither the instruction cap nor stop_at_ret ended it first).
+func disasmX86Run(data []byte, baseAddr uint64, offset, count, mode int, symbols map[uint64]string, stopAtRet bool) (string, bool, error) {
 	var sb strings.Builder
 	pos := 0
 	decoded := 0
@@ -258,7 +276,7 @@ func disasmX86Opts(data []byte, baseAddr uint64, offset, count, mode int, symbol
 			"To continue, disassemble with va=\"0x%x\" (or offset=%d), optionally with a larger count or stop_at_ret=true. **",
 			count, nextVA, offset+pos))
 	}
-	return sb.String(), nil
+	return sb.String(), !stoppedAtRet && pos >= len(data), nil
 }
 
 // isRetInstruction checks if the instruction bytes are a RET variant.
@@ -364,7 +382,10 @@ type disasmResolved struct {
 	arch           string // "x86" or "arm"
 	mode           int    // 16, 32, or 64
 	funcEndFileOff int64  // -1 if unknown
-	symbols        map[uint64]string
+	// endNote explains the funcEndFileOff boundary once the output reaches
+	// it (endVA is that boundary's VA); nil when there is nothing to add.
+	endNote func(endVA uint64) string
+	symbols map[uint64]string
 	closer         func() // close the binary file handle
 }
 
@@ -434,8 +455,18 @@ func disasmResolvePE(filePath string, va uint64) (*disasmResolved, error) {
 	}
 
 	// Function boundary from .pdata or heuristic
-	if endOff, _, found := pdataOrHeuristicEndOffset(f, rva, uint32(fileOff)); found {
+	if endOff, heuristic, found := pdataOrHeuristicEndOffset(f, rva, uint32(fileOff)); found {
 		r.funcEndFileOff = int64(endOff)
+		if heuristic {
+			r.endNote = func(endVA uint64) string {
+				return fmt.Sprintf("\n** stopped at the estimated function end 0x%x (no .pdata entry; heuristic boundary). "+
+					"If the code continues, disassemble with va=\"0x%x\". **", endVA, endVA)
+			}
+		} else {
+			// f stays open until the caller's closer runs, so the unwind
+			// info is read only when the output actually reaches the end.
+			r.endNote = func(uint64) string { return pdataFragmentsNote(loadPdata(f, imageBase), imageBase, rva) }
+		}
 	}
 
 	r.symbols = peSymbolMap(f, imageBase)
@@ -567,6 +598,47 @@ func disasmResolveMachO(filePath string, va uint64) (*disasmResolved, error) {
 
 	r.symbols = machoSymbolMap(f, imageBase)
 	return r, nil
+}
+
+// pdataFragmentsNote lists the other .pdata ranges of the function that owns
+// rva when the compiler split it (UNW_FLAG_CHAININFO fragments), or "" when
+// the range is the whole function.
+func pdataFragmentsNote(pd *pdataIndex, imageBase uint64, rva uint32) string {
+	if pd == nil {
+		return ""
+	}
+	cur := findFunc(pd.table, rva)
+	if cur == nil {
+		return ""
+	}
+	ownerOf := func(begin uint32) uint32 {
+		if p, ok := pd.primary[begin]; ok {
+			return p
+		}
+		return begin
+	}
+	owner := ownerOf(cur.begin)
+	var others []string
+	for _, fr := range pd.table {
+		if fr.begin != cur.begin && ownerOf(fr.begin) == owner {
+			others = append(others, fmt.Sprintf("0x%x-0x%x", imageBase+uint64(fr.begin), imageBase+uint64(fr.end)))
+		}
+	}
+	if len(others) == 0 {
+		return ""
+	}
+	const maxListed = 16
+	more := ""
+	if len(others) > maxListed {
+		more = fmt.Sprintf(", ... (%d more)", len(others)-maxListed)
+		others = others[:maxListed]
+	}
+	of := ""
+	if owner != cur.begin {
+		of = fmt.Sprintf(" This range is a split-off fragment of the function at 0x%x.", imageBase+uint64(owner))
+	}
+	return fmt.Sprintf("\n** reached the end of this .pdata range, but the function is split into %d range(s).%s "+
+		"Other ranges: %s%s. Disassemble each with va=<start>. **", len(others)+1, of, strings.Join(others, ", "), more)
 }
 
 // resolveSymbol looks up target addresses in the symbol map for CALL/JMP/LEA instructions.
