@@ -32,6 +32,14 @@ func TestDecompileAssumeBranches(t *testing.T) {
 	if err != nil {
 		t.Skip("gcc not found")
 	}
+	// Linux distributions build with CET by default (functions start with
+	// endbr64); MinGW does not.
+	for _, flags := range [][]string{nil, {"-fcf-protection=full"}} {
+		t.Run(strings.Join(append([]string{"gcc"}, flags...), " "), func(t *testing.T) { assumeBranchesOn(t, gcc, flags) })
+	}
+}
+
+func assumeBranchesOn(t *testing.T, gcc string, flags []string) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "junk.c")
 	code := "__attribute__((noinline)) int guarded(int x) {\n" +
@@ -43,7 +51,7 @@ func TestDecompileAssumeBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(dir, "junk.exe")
-	if out, err := exec.Command(gcc, "-g", "-O2", "-o", bin, src).CombinedOutput(); err != nil {
+	if out, err := exec.Command(gcc, append(append([]string{"-g", "-O2"}, flags...), "-o", bin, src)...).CombinedOutput(); err != nil {
 		t.Skipf("gcc cannot build here: %v\n%s", err, out)
 	}
 	tg, err := loadDecompileTarget(bin, "none", false)
@@ -59,6 +67,11 @@ func TestDecompileAssumeBranches(t *testing.T) {
 		code, ok := tg.codeAt(va)
 		if !ok {
 			t.Fatalf("no code at 0x%x", va)
+		}
+		// Linux gcc starts functions with endbr64, which x86asm does not know.
+		if len(code) >= 4 && code[0] == 0xf3 && code[1] == 0x0f && code[2] == 0x1e && code[3] == 0xfa {
+			va += 4
+			continue
 		}
 		inst, err := x86asm.Decode(code, 64)
 		if err != nil {
