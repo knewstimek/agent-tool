@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/knewstimek/gosleigh/pkg/address"
+	"github.com/knewstimek/gosleigh/pkg/bridge"
 	"github.com/knewstimek/gosleigh/pkg/decomp"
 	"github.com/knewstimek/gosleigh/pkg/loader"
 	"github.com/knewstimek/gosleigh/pkg/pcode"
@@ -69,7 +70,7 @@ type decompileLine struct {
 	C         string   `json:"c,omitempty"`
 	Types     string   `json:"types,omitempty"` // definitions of the debug types C names
 	Warnings  []string `json:"warnings,omitempty"`
-	ErrorKind string   `json:"error_kind,omitempty"` // input, load, engine, panic, memory
+	ErrorKind string   `json:"error_kind,omitempty"` // input, load, engine, flow, panic, memory
 	Error     string   `json:"error,omitempty"`
 	Secs      float64  `json:"secs,omitempty"`
 }
@@ -207,6 +208,9 @@ func (t *decompileTarget) decompile(target string, maxInstr int, ghidraFormat bo
 	if err != nil {
 		line.ErrorKind = "engine"
 		msg := err.Error()
+		if errors.Is(err, bridge.ErrTooManyInstructions) {
+			line.ErrorKind = "flow"
+		}
 		if errors.Is(err, decomp.ErrPanic) {
 			line.ErrorKind = "panic"
 			if os.Getenv("AGENT_TOOL_DECOMPILE_STACK") == "" {

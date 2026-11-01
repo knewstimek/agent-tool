@@ -41,7 +41,7 @@ func opDecompile(ctx context.Context, input AnalyzeInput) (string, error) {
 
 	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath, PDBForce: input.PDBForce}
 	start := time.Now()
-	lines, failure := runDecompileWorker(ctx, req, time.Duration(timeout)*time.Second)
+	lines, failure := runDecompileWorkerResuming(ctx, req, time.Duration(timeout)*time.Second)
 	var err error
 	input.annotations, input.annotationNotice, err = loadFunctionAnnotations(ctx, input, lines)
 	if err != nil {
@@ -51,6 +51,53 @@ func opDecompile(ctx context.Context, input AnalyzeInput) (string, error) {
 		input.annotations, input.annotationNotice = nil, annotationLoadWarning(err)
 	}
 	return formatDecompile(input, targets, lines, failure, time.Since(start)), nil
+}
+
+// decompileRunner is the worker round trip; tests replace it.
+var decompileRunner = runDecompileWorker
+
+// runDecompileWorkerResuming runs the request and, when one function kills
+// the worker (memory limit, crash), sends the functions it never reached to a
+// fresh worker within the same time budget: one pathological function must
+// not cost the results of the others in the call.
+func runDecompileWorkerResuming(ctx context.Context, req decompileRequest, timeout time.Duration) ([]decompileLine, string) {
+	deadline := time.Now().Add(timeout)
+	lines, failure := decompileRunner(ctx, req, timeout)
+	for {
+		done := map[string]bool{}
+		killed := false
+		for _, l := range lines {
+			if (l.Kind == "result" || l.Kind == "fatal") && l.Target != "" {
+				done[l.Target] = true
+				killed = killed || l.Kind == "fatal"
+			}
+		}
+		var rest []string
+		for _, t := range req.Targets {
+			if !done[t] {
+				rest = append(rest, t)
+			}
+		}
+		left := time.Until(deadline)
+		if !killed || len(rest) == 0 || left <= 0 || ctx.Err() != nil {
+			return lines, failure
+		}
+		next := req
+		next.Targets = rest
+		more, f := decompileRunner(ctx, next, left)
+		progress := false
+		for _, l := range more {
+			if l.Kind == "load" {
+				continue // the first load line describes the binary
+			}
+			lines = append(lines, l)
+			progress = progress || l.Target != ""
+		}
+		failure = f
+		if !progress {
+			return lines, failure
+		}
+	}
 }
 
 func splitTargets(s string) []string {
@@ -81,15 +128,21 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 	}
 	var load *decompileLine
 	results := map[string]decompileLine{}
+	fatals := map[string]decompileLine{}
 	var fatal *decompileLine
 	for i := range lines {
 		switch lines[i].Kind {
 		case "load":
-			load = &lines[i]
+			if load == nil {
+				load = &lines[i]
+			}
 		case "result":
 			results[lines[i].Target] = lines[i]
 		case "fatal":
 			fatal = &lines[i]
+			if lines[i].Target != "" {
+				fatals[lines[i].Target] = lines[i]
+			}
 		}
 	}
 
@@ -153,9 +206,10 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 			if s := decompileSuggestion(r.ErrorKind, t); s != "" {
 				sb.WriteString("// " + s + "\n")
 			}
-		case fatal != nil && fatal.Target == t:
-			fmt.Fprintf(&sb, "// %s: %s error: %s\n", t, fatal.ErrorKind, fatal.Error)
-			if s := decompileSuggestion(fatal.ErrorKind, t); s != "" {
+		case fatals[t].Kind != "":
+			f := fatals[t]
+			fmt.Fprintf(&sb, "// %s: %s error: %s\n", t, f.ErrorKind, f.Error)
+			if s := decompileSuggestion(f.ErrorKind, t); s != "" {
 				sb.WriteString("// " + s + "\n")
 			}
 		default:
@@ -184,6 +238,8 @@ func decompileSuggestion(kind, target string) string {
 			return "" // a name: the error lists the candidates
 		}
 		return "Try: analyze function_at va=" + target + " to find the function start, or pe_info/elf_info for symbols"
+	case "flow":
+		return "The control flow from this entry is too large to decompile. When many paths end at undecodable bytes it runs into junk bytes (obfuscation, opaque predicates) rather than real code: read the real path with analyze disassemble va=" + target + ", or check the entry with function_at"
 	case "memory", "timeout":
 		return "Try: decompile it alone with a larger timeout_sec, or analyze disassemble va=" + target + " stop_at_ret=true"
 	default:
