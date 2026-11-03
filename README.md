@@ -205,15 +205,21 @@ remove them.
 ### Smart Indentation
 LLMs typically output spaces, but many projects use tabs. AgentTool auto-converts indentation to match the file's existing style.
 
-- Reads `.editorconfig` for `indent_style` and `indent_size`
-- Falls back to content-based detection (first 100 lines)
-- Protects legacy files: won't convert if actual content contradicts `.editorconfig`
+- Inherits `indent_style` and `indent_size` per property from parent `.editorconfig` files, respecting `root = true` and `unset`
+- Falls back to a bounded content sample (up to 1,000 lines / 256 KiB), including long lines and LF, CRLF, or CR endings; equal-frequency indent units consistently prefer the smaller observed unit
+- Preserves the detected space width when existing space indentation conflicts with a tab setting
+- Converts tabs/spaces and space widths such as 2 ↔ 4; converted matches stay at line boundaries, and tab-depth correction preserves relative nesting
+- Rejects equally plausible tab-depth candidates instead of choosing one arbitrarily
+- Detection is heuristic, not a language formatter; use `dry_run=true` to review an automatic edit
 
 ### Encoding Preservation
 Edits preserve the original file encoding instead of forcing UTF-8.
 
 - **Detection priority**: BOM → `.editorconfig` charset → BOM-less UTF-16 → valid UTF-8 → chardet auto-detection → fallback encoding
 - **Supported**: UTF-8, UTF-8 BOM, EUC-KR, Shift-JIS, ISO-8859-1, UTF-16 (LE/BE, with or without BOM), and more
+- **Inherited settings**: `charset` inherits independently of indentation settings; new files honor `charset = utf-8-bom` by writing a UTF-8 BOM
+- **Decode failures**: malformed UTF-8/UTF-16, detected lossy decoding, and unsupported encodings return errors. `write` refuses to overwrite an existing file whose encoding cannot be read
+- **Detection limits**: automatic detection remains heuristic; specify the correct `charset` when a legacy encoding is ambiguous
 - **No false warnings on ASCII**: valid UTF-8 is verified directly, so plain ASCII files never raise a low-confidence warning
 - **Line endings**: Detects LF, CRLF, CR, and mixed files. `edit` matches a multi-line `old_string` whether the file uses CRLF or LF, including files that mix both, and text inserted by `edit`/`regexreplace` follows the newline style of the region it lands in, so the rest of the file is left byte-identical
 
