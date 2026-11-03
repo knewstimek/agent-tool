@@ -471,7 +471,7 @@ Defaults: 200 lines per file and 32768 total characters. Per-file and overall
 next_offset/next_file_index metadata identify continuation. Hashes are opt-in.
 Resume the SAME original input list with start_file_index=next_file_index and
 resume_offset=next_offset (omit resume_offset when zero). The resumed offset
-applies only to that file; later files retain their original ranges.
+applies only within that file's original window; later files retain their original ranges.
 Global encoding can be overridden by files entries\' encoding. Existing BOMs win.
 Relative paths use the configured workspace or client MCP root.
 Parameters: file_paths (array, max 50), files (path/offset/limit/encoding entries),

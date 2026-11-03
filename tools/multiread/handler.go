@@ -172,7 +172,9 @@ readLoop:
 		if i < startFile {
 			continue
 		}
-		if i == startFile && input.ResumeOffset != nil {
+		originalOffset := entry.Offset
+		resuming := i == startFile && input.ResumeOffset != nil
+		if resuming {
 			entry.Offset = *input.ResumeOffset
 		}
 		filePath := entry.Path
@@ -302,9 +304,20 @@ readLoop:
 			}
 		}
 
+		windowStart := startIdx
+		if resuming {
+			if originalOffset < 0 {
+				windowStart = max(totalLines+originalOffset, 0)
+			} else {
+				windowStart = min(max(originalOffset-1, 0), totalLines)
+			}
+		}
 		endIdx = totalLines
-		if entry.Limit > 0 && entry.Limit < endIdx-startIdx {
-			endIdx = startIdx + entry.Limit
+		if entry.Limit > 0 && entry.Limit < endIdx-windowStart {
+			endIdx = windowStart + entry.Limit
+		}
+		if resuming {
+			startIdx = min(max(startIdx, windowStart), endIdx)
 		}
 
 		// Format with line numbers
