@@ -60,7 +60,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WriteInput) (*m
 			return errorResult(fmt.Sprintf("path is a directory: %s", input.FilePath))
 		}
 		// Detect encoding of existing file
-		_, encInfo, err = common.ReadFileWithEncoding(input.FilePath, hintCharset)
+		_, encInfo, err = common.ReadFileWithEncodingHash(input.FilePath, hintCharset)
 		if err != nil {
 			return errorResult(fmt.Sprintf("cannot preserve existing file encoding: %v", err))
 		}

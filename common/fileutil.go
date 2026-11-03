@@ -29,6 +29,8 @@ const chardetSampleSize = 64 * 1024 // 64KB
 
 // EncodingInfo holds encoding information for a file.
 type EncodingInfo struct {
+	RawSHA256  string // Optional hash of the exact bytes decoded; also guards same-file writes.
+	RawSize    int64  // Size of the captured raw bytes, before decoding.
 	Charset    string // IANA name: "UTF-8", "EUC-KR", "Shift_JIS", etc.
 	HasBOM     bool   // whether UTF-8 BOM is present
 	Confidence int    // chardet detection confidence (0-100). 100 when hint/BOM/fallback is used.
@@ -136,6 +138,16 @@ var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 // ReadFileWithEncoding reads a file and returns UTF-8 text along with encoding info.
 // If hintCharset is non-empty (e.g. from .editorconfig), it takes highest priority.
 func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo, error) {
+	return readFileWithEncoding(path, hintCharset, false)
+}
+
+// ReadFileWithEncodingHash captures the hash from the same bytes as the text.
+// Passing its EncodingInfo to WriteFileWithEncoding guards against stale writes.
+func ReadFileWithEncodingHash(path string, hintCharset string) (string, EncodingInfo, error) {
+	return readFileWithEncoding(path, hintCharset, true)
+}
+
+func readFileWithEncoding(path string, hintCharset string, includeHash bool) (string, EncodingInfo, error) {
 	// symlink check: block symlinks if allow_symlinks is false
 	if !GetAllowSymlinks() {
 		if lfi, err := os.Lstat(path); err == nil && lfi.Mode()&os.ModeSymlink != 0 {
@@ -153,12 +165,23 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 		return "", EncodingInfo{}, fmt.Errorf("file too large (%d bytes, max %d bytes). Use set_config max_file_size_mb to adjust the limit", fi.Size(), limit)
 	}
 
-	raw, err := os.ReadFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return "", EncodingInfo{}, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return "", EncodingInfo{}, fmt.Errorf("failed to read file: %w", err)
 	}
+	if int64(len(raw)) > limit {
+		return "", EncodingInfo{}, fmt.Errorf("file grew beyond size limit (%d bytes)", limit)
+	}
 
-	info := EncodingInfo{Charset: "UTF-8", Confidence: 100, UsedSource: "bom"}
+	info := EncodingInfo{Charset: "UTF-8", Confidence: 100, UsedSource: "bom", RawSize: int64(len(raw))}
+	if includeHash {
+		info.RawSHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
+	}
 
 	// Check for UTF-8 BOM (BOM always takes highest priority)
 	if bytes.HasPrefix(raw, utf8BOM) {
@@ -323,6 +346,10 @@ func decodeUTF16(raw []byte, littleEndian bool, info EncodingInfo) (string, Enco
 	return decoded, info, nil
 }
 
+// Fixed stripes bound lock memory while serializing same-path writes within
+// this process. External writers are detected by the snapshot hash check.
+var fileWriteLocks [64]sync.Mutex
+
 // WriteFileWithEncoding converts UTF-8 text back to the original encoding and saves it.
 func WriteFileWithEncoding(path string, content string, info EncodingInfo) error {
 	if !utf8.ValidString(content) {
@@ -371,6 +398,26 @@ func WriteFileWithEncoding(path string, content string, info EncodingInfo) error
 				return fmt.Errorf("encoding conversion failed (%s): %w", info.Charset, err)
 			}
 			data = encoded
+		}
+	}
+
+	// Serialize the hash check and replacement with other writes through this
+	// helper. A captured hash rejects an edit based on a stale source snapshot.
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("cannot resolve write path: %w", err)
+	}
+	key := sha256.Sum256([]byte(strings.ToLower(filepath.Clean(absolute))))
+	lock := &fileWriteLocks[int(key[0])%len(fileWriteLocks)]
+	lock.Lock()
+	defer lock.Unlock()
+	if info.RawSHA256 != "" {
+		actual, err := ComputeFileHash(path)
+		if err != nil {
+			return fmt.Errorf("cannot verify source before write: %w", err)
+		}
+		if !strings.EqualFold(actual, info.RawSHA256) {
+			return fmt.Errorf("file changed since it was read; re-read and retry the edit")
 		}
 	}
 

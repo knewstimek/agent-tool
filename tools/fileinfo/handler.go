@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"agent-tool/common"
 	"agent-tool/tools/edit"
@@ -12,6 +13,7 @@ import (
 )
 
 type FileInfoInput struct {
+	Encoding string `json:"encoding,omitempty" jsonschema:"Charset override, e.g. CP949; overrides .editorconfig, BOM takes priority"`
 	FilePath string `json:"file_path,omitempty" jsonschema:"File path. Relative paths use workspace/MCP root"`
 	Path     string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 }
@@ -45,7 +47,10 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input FileInfoInput) 
 	}
 
 	// Detect encoding
-	hintCharset := edit.FindEditorConfigCharset(input.FilePath)
+	hintCharset := strings.TrimSpace(input.Encoding)
+	if hintCharset == "" {
+		hintCharset = edit.FindEditorConfigCharset(input.FilePath)
+	}
 	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
@@ -59,10 +64,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input FileInfoInput) 
 	}
 
 	// Count every recognized newline form, including legacy bare-CR files.
-	totalLines := lineInfo.CRLFCount + lineInfo.LFCount + lineInfo.CRCount + 1
-	if content == "" {
-		totalLines = 0
-	}
+	totalLines := common.TextLineCount(content)
 
 	// Detect indentation
 	indent := edit.DetectIndent(input.FilePath, content)

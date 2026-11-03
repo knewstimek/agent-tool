@@ -1,9 +1,11 @@
 package edit
 
 import (
+	"agent-tool/common"
 	"bufio"
 	"iter"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -322,13 +324,14 @@ func readEditorConfigProps(ecPath, filePath string) (map[string]string, bool) {
 	ecDir := filepath.Dir(ecPath)
 
 	scanner := bufio.NewScanner(f)
+	scanner.Split(common.ScanTextLines)
 	props := make(map[string]string)
 	inMatchingSection := false
 	inSection := false
 	root := false
 
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(strings.TrimPrefix(scanner.Text(), "\ufeff"))
 		if line == "" || line[0] == '#' || line[0] == ';' {
 			continue
 		}
@@ -339,15 +342,14 @@ func readEditorConfigProps(ecPath, filePath string) (map[string]string, bool) {
 			patterns := expandBraces(pattern)
 			inMatchingSection = false
 			for _, p := range patterns {
-				var matched bool
+				matched := false
 				if strings.Contains(p, "/") {
-					// Pattern with path: match using relative path from .editorconfig location
-					relPath, relErr := filepath.Rel(ecDir, filePath)
-					if relErr == nil {
-						matched, _ = filepath.Match(p, filepath.ToSlash(relPath))
+					rel, err := filepath.Rel(ecDir, filePath)
+					if err == nil {
+						matched = matchEditorConfigPath(strings.TrimPrefix(p, "/"), filepath.ToSlash(rel))
 					}
 				} else {
-					matched, _ = filepath.Match(p, filename)
+					matched, _ = path.Match(p, filename)
 				}
 				if matched {
 					inMatchingSection = true
@@ -373,22 +375,16 @@ func readEditorConfigProps(ecPath, filePath string) (map[string]string, bool) {
 func editorConfigResult(props map[string]string) *EditorConfigResult {
 	// Return result if at least one of indent or charset is found
 	var indent *IndentStyle
-	if props["indent_style"] == "tab" {
-		size := 4
-		if v, ok := props["indent_size"]; ok {
-			if n := parseInt(v); n > 0 {
-				size = n
-			}
+	if style := props["indent_style"]; style == "tab" || style == "space" {
+		size := parseInt(props["indent_size"])
+		width := parseInt(props["tab_width"])
+		if width > 0 && (style == "tab" || size <= 0) {
+			size = width
 		}
-		indent = &IndentStyle{UseTabs: true, IndentSize: size}
-	} else if props["indent_style"] == "space" {
-		size := 4
-		if v, ok := props["indent_size"]; ok {
-			if n := parseInt(v); n > 0 {
-				size = n
-			}
+		if size <= 0 {
+			size = 4
 		}
-		indent = &IndentStyle{UseTabs: false, IndentSize: size}
+		indent = &IndentStyle{UseTabs: style == "tab", IndentSize: size}
 	}
 
 	charset := props["charset"] // "utf-8", "euc-kr", "latin1", "utf-8-bom", etc.
@@ -401,6 +397,36 @@ func editorConfigResult(props map[string]string) *EditorConfigResult {
 		Indent:  indent,
 		Charset: charset,
 	}
+}
+
+// Match path segments with ** spanning zero or more directories. path.Match
+// keeps ordinary wildcard semantics independent of the host OS separator.
+func matchEditorConfigPath(pattern, name string) bool {
+	parts, names := strings.Split(pattern, "/"), strings.Split(name, "/")
+	type state struct{ p, n int }
+	cache := map[state]bool{}
+	known := map[state]bool{}
+	var match func(int, int) bool
+	match = func(p, n int) bool {
+		key := state{p, n}
+		if known[key] {
+			return cache[key]
+		}
+		result := false
+		switch {
+		case p == len(parts):
+			result = n == len(names)
+		case parts[p] == "**":
+			result = match(p+1, n) || (n < len(names) && match(p, n+1))
+		case n < len(names):
+			ok, _ := path.Match(parts[p], names[n])
+			result = ok && match(p+1, n+1)
+		}
+		known[key] = true
+		cache[key] = result
+		return result
+	}
+	return match(0, 0)
 }
 
 func expandBraces(pattern string) []string {

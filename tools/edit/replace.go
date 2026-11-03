@@ -49,6 +49,26 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 		// forceStyle: force-convert newStr to fileStyle when indent_style is explicitly specified
 		if forceStyle {
 			newStyle := DetectIndentOfString(newStr)
+			// A flat snippet's absolute depth does not establish its indent unit.
+			// Preserve columns instead of treating eight leading spaces as one level.
+			if !newStyle.UseTabs {
+				depth := -1
+				flat := true
+				for line := range indentLines(normalizedNew) {
+					if strings.TrimSpace(line) == "" {
+						continue
+					}
+					n := len(line) - len(strings.TrimLeft(line, " \t"))
+					if depth >= 0 && depth != n {
+						flat = false
+						break
+					}
+					depth = n
+				}
+				if flat && fileStyle.IndentSize > 0 {
+					newStyle.IndentSize = min(newStyle.IndentSize, fileStyle.IndentSize)
+				}
+			}
 			if newStyle.UseTabs != fileStyle.UseTabs || newStyle.IndentSize != fileStyle.IndentSize {
 				finalNew = ConvertIndent(normalizedNew, newStyle, fileStyle)
 			}
@@ -63,6 +83,9 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 	// indent unit, especially in files mixing legacy space and tab regions.
 	if !forceStyle {
 		if result, ok := replaceUniqueIndentedLine(m, normalizedOld, normalizedNew, fileStyle); ok {
+			return result
+		}
+		if result, ok := replaceUniqueIndentedBlock(m, normalizedOld, normalizedNew, replaceAll, fileStyle); ok {
 			return result
 		}
 	}

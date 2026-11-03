@@ -45,7 +45,7 @@ func TestHandleLineEndingMatrix(t *testing.T) {
 		{"LF", "hit one\nmiss\nhit two\n", 2},
 		{"CRLF", "hit one\r\nmiss\r\nhit two\r\n", 2},
 		{"mixed", "hit one\r\nmiss\nhit two\r\n", 2},
-		{"CR only", "hit one\rmiss\rhit two\r", 1}, // a lone CR is not a line break here
+		{"CR only", "hit one\rmiss\rhit two\r", 2},
 		{"no trailing newline", "hit one\r\nmiss\r\nhit two", 2},
 	}
 	patterns := []struct {
@@ -56,7 +56,7 @@ func TestHandleLineEndingMatrix(t *testing.T) {
 		{"plain", "hit", nil}, // nil = use the shape's line count
 		{"start anchored", "^hit", nil},
 		{"end anchored", "hit one$", map[string]int{
-			"LF": 1, "CRLF": 1, "mixed": 1, "CR only": 0, "no trailing newline": 1,
+			"LF": 1, "CRLF": 1, "mixed": 1, "CR only": 1, "no trailing newline": 1,
 		}},
 	}
 
@@ -87,10 +87,7 @@ func TestHandleLineEndingMatrix(t *testing.T) {
 				if want > 0 && got != want {
 					t.Fatalf("content mode found %d lines, want %d: %q", got, want, text)
 				}
-				// Only a TRAILING CR is a terminator. A CR-only file is one
-				// line here -- the same as read, sloc and GNU grep -- so its
-				// interior CRs are content and must survive; stripping them
-				// would also desync grep's line numbers from read's.
+				// Every newline form uses the same logical lines as read.
 				for _, out := range strings.Split(text, "\n") {
 					if strings.HasSuffix(out, "\r") {
 						t.Fatalf("displayed line keeps its terminator CR: %q", out)

@@ -25,6 +25,7 @@ const maxTotalBytes int64 = 100 * 1024 * 1024 // 100MB
 
 // fileEntry holds per-file read parameters resolved from input.
 type fileEntry struct {
+	Encoding      string
 	Path          string
 	Offset        int
 	Limit         int
@@ -33,12 +34,16 @@ type fileEntry struct {
 
 // FileRange specifies per-file read range. Used in the "files" parameter.
 type FileRange struct {
-	Path   string `json:"path" jsonschema:"Absolute or workspace-relative file path"`
-	Offset *int   `json:"offset,omitempty" jsonschema:"Line offset (1-based, negative = from end). Default: 1"`
-	Limit  *int   `json:"limit,omitempty" jsonschema:"Max lines to read. Default: 200. Set 0 to remove the line limit"`
+	Encoding string `json:"encoding,omitempty" jsonschema:"Per-file charset override; otherwise inherits global encoding; BOM takes priority"`
+	Path     string `json:"path" jsonschema:"Absolute or workspace-relative file path"`
+	Offset   *int   `json:"offset,omitempty" jsonschema:"Line offset (1-based, negative = from end). Default: 1"`
+	Limit    *int   `json:"limit,omitempty" jsonschema:"Max lines to read. Default: 200. Set 0 to remove the line limit"`
 }
 
 type MultiReadInput struct {
+	StartFileIndex int    `json:"start_file_index,omitempty" jsonschema:"Resume at this 1-based index in the original file list; default 1"`
+	ResumeOffset   *int   `json:"resume_offset,omitempty" jsonschema:"Override offset only for start_file_index; other files retain their original ranges"`
+	Encoding       string `json:"encoding,omitempty" jsonschema:"Default charset override, e.g. EUC-KR or CP949; files entries may override it; BOM takes priority"`
 	// Simple mode: list of paths, all using the same offset/limit.
 	// Both "file_paths" and "paths" are accepted (alias for compatibility).
 	FilePaths      []string `json:"file_paths,omitempty" jsonschema:"File paths to read. All files use the global offset/limit. Use files for per-file ranges"`
@@ -46,7 +51,7 @@ type MultiReadInput struct {
 	Offset         *int     `json:"offset,omitempty" jsonschema:"Line number to start from (1-based, negative = from end). Default: 1"`
 	Limit          *int     `json:"limit,omitempty" jsonschema:"Maximum lines per file. Default: 200. Set 0 or all=true to remove the line limit"`
 	All            bool     `json:"all,omitempty" jsonschema:"Remove the default per-file line limit. The total character budget still applies. Default: false"`
-	MaxOutputChars int      `json:"max_output_chars,omitempty" jsonschema:"Maximum total returned text characters across all files. Default: 32768, Max: 131072"`
+	MaxOutputChars int      `json:"max_output_chars,omitempty" jsonschema:"Maximum total returned text characters across all files. Default: 32768, Min: 256, Max: 131072"`
 	MaxLineChars   int      `json:"max_line_chars,omitempty" jsonschema:"Maximum characters returned from one line. Default: 4000, Max: 32768"`
 	IncludeHash    bool     `json:"include_hash,omitempty" jsonschema:"Include per-file SHA-256 hashes. Default: false"`
 
@@ -94,14 +99,18 @@ func resolveEntries(input MultiReadInput) ([]fileEntry, string) {
 					return nil, fmt.Sprintf("files[%d].limit must be non-negative", i)
 				}
 			}
-			entries[i] = fileEntry{Path: f.Path, Offset: off, Limit: lim, LimitProvided: provided}
+			charset := strings.TrimSpace(f.Encoding)
+			if charset == "" {
+				charset = strings.TrimSpace(input.Encoding)
+			}
+			entries[i] = fileEntry{Path: f.Path, Offset: off, Limit: lim, LimitProvided: provided, Encoding: charset}
 		}
 		return entries, ""
 	}
 	// Fallback to file_paths with global offset/limit
 	entries := make([]fileEntry, len(input.FilePaths))
 	for i, p := range input.FilePaths {
-		entries[i] = fileEntry{Path: p, Offset: globalOffset, Limit: globalLimit, LimitProvided: globalLimitProvided}
+		entries[i] = fileEntry{Path: p, Offset: globalOffset, Limit: globalLimit, LimitProvided: globalLimitProvided, Encoding: strings.TrimSpace(input.Encoding)}
 	}
 	return entries, ""
 }
@@ -126,9 +135,16 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MultiReadInput)
 	if len(entries) > maxFiles {
 		return errorResult(fmt.Sprintf("too many files: %d (maximum %d)", len(entries), maxFiles))
 	}
+	startFile := max(input.StartFileIndex, 1) - 1
+	if input.StartFileIndex < 0 || startFile > len(entries) {
+		return errorResult("start_file_index is outside the input file list")
+	}
 	maxOutputChars := input.MaxOutputChars
 	if maxOutputChars <= 0 {
 		maxOutputChars = common.DefaultOutputChars
+	}
+	if maxOutputChars < 256 {
+		return errorResult("max_output_chars must be at least 256 for content and continuation metadata")
 	}
 	if maxOutputChars > common.HardOutputChars {
 		return errorResult(fmt.Sprintf("max_output_chars must be at most %d", common.HardOutputChars))
@@ -146,39 +162,61 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MultiReadInput)
 	var totalBytesRead int64
 	filesRead := 0
 	usedChars := 0
-	contentBudget := maxOutputChars - 768
-	if contentBudget < 256 {
-		contentBudget = maxOutputChars
-	}
+	contentBudget := maxOutputChars - min(768, maxOutputChars/2)
 	truncated := false
 	nextFileIndex := 0
 	nextOffset := 0
 
 readLoop:
 	for i, entry := range entries {
+		if i < startFile {
+			continue
+		}
+		if i == startFile && input.ResumeOffset != nil {
+			entry.Offset = *input.ResumeOffset
+		}
 		filePath := entry.Path
-		if i > 0 && !common.AppendWithinRuneBudget(&sb, &usedChars, "\n", contentBudget) {
+		appendError := func(message string) bool {
+			errorCount++
+			available := contentBudget - usedChars
+			if available < 16 {
+				truncated = true
+				nextFileIndex = i + 1
+				nextOffset = 0
+				return false
+			}
+			message, cut := common.TruncateRunes(message, available, "…\n")
+			truncated = truncated || cut
+			return common.AppendWithinRuneBudget(&sb, &usedChars, message, contentBudget)
+		}
+		if i > startFile && !common.AppendWithinRuneBudget(&sb, &usedChars, "\n", contentBudget) {
 			truncated = true
 			nextFileIndex = i + 1
 			break
 		}
 
 		if filePath == "" {
-			common.AppendWithinRuneBudget(&sb, &usedChars, "=== (empty path) ===\nERROR: empty file path\n", contentBudget)
-			errorCount++
+			if !appendError(fmt.Sprintf("ERROR: file[%d] has an empty path\n", i+1)) {
+				break
+			}
 			continue
 		}
 
 		resolvedPath, resolveErr := common.ResolveRequestPath(ctx, req, filePath)
 		if resolveErr != nil {
-			common.AppendWithinRuneBudget(&sb, &usedChars, fmt.Sprintf("=== %s ===\nERROR: cannot resolve path: %v\n", filePath, resolveErr), contentBudget)
-			errorCount++
+			if !appendError(fmt.Sprintf("ERROR: cannot resolve %s: %v\n", filePath, resolveErr)) {
+				break
+			}
 			continue
 		}
 		filePath = resolvedPath
 
 		// Header for each file
-		if !common.AppendWithinRuneBudget(&sb, &usedChars, fmt.Sprintf("=== %s (%s) ===\n", filepath.Base(filePath), filePath), contentBudget) {
+		header := fmt.Sprintf("=== %s (%s) ===\n", filepath.Base(filePath), filePath)
+		var headerCut bool
+		header, headerCut = common.TruncateRunes(header, max(contentBudget-usedChars-64, 32), "… ===\n")
+		truncated = truncated || headerCut
+		if !common.AppendWithinRuneBudget(&sb, &usedChars, header, contentBudget) {
 			truncated = true
 			nextFileIndex = i + 1
 			break
@@ -186,38 +224,55 @@ readLoop:
 
 		fi, err := os.Stat(filePath)
 		if err != nil {
+			message := ""
 			if os.IsNotExist(err) {
-				common.AppendWithinRuneBudget(&sb, &usedChars, fmt.Sprintf("ERROR: file not found: %s\n", filePath), contentBudget)
+				message = fmt.Sprintf("ERROR: file not found: %s\n", filePath)
 			} else {
-				common.AppendWithinRuneBudget(&sb, &usedChars, fmt.Sprintf("ERROR: cannot access file: %v\n", err), contentBudget)
+				message = fmt.Sprintf("ERROR: cannot access file: %v\n", err)
 			}
-			errorCount++
+			if !appendError(message) {
+				break
+			}
 			continue
 		}
 		if fi.IsDir() {
-			common.AppendWithinRuneBudget(&sb, &usedChars, fmt.Sprintf("ERROR: path is a directory, not a file: %s\n", filePath), contentBudget)
-			errorCount++
+			if !appendError(fmt.Sprintf("ERROR: path is a directory, not a file: %s\n", filePath)) {
+				break
+			}
+			continue
+		}
+		if fi.Size() > common.GetMaxFileSize() {
+			if !appendError(fmt.Sprintf("ERROR: file too large (%d bytes); skipped\n", fi.Size())) {
+				break
+			}
 			continue
 		}
 
 		// Check total memory budget before reading
 		totalBytesRead += fi.Size()
 		if totalBytesRead > maxTotalBytes {
-			common.AppendWithinRuneBudget(&sb, &usedChars, "ERROR: total size limit exceeded (100MB), skipping remaining files\n", contentBudget)
-			errorCount++
+			appendError("ERROR: total size limit exceeded (100MB), resume with remaining files\n")
 			truncated = true
 			nextFileIndex = i + 1
 			break
 		}
 
 		// .editorconfig charset hint
-		hintCharset := edit.FindEditorConfigCharset(filePath)
+		hintCharset := entry.Encoding
+		if hintCharset == "" {
+			hintCharset = edit.FindEditorConfigCharset(filePath)
+		}
 
 		// Read with encoding detection
-		content, encInfo, err := common.ReadFileWithEncoding(filePath, hintCharset)
+		reader := common.ReadFileWithEncoding
+		if input.IncludeHash {
+			reader = common.ReadFileWithEncodingHash
+		}
+		content, encInfo, err := reader(filePath, hintCharset)
 		if err != nil {
-			common.AppendWithinRuneBudget(&sb, &usedChars, fmt.Sprintf("ERROR: failed to read file: %v\n", err), contentBudget)
-			errorCount++
+			if !appendError(fmt.Sprintf("ERROR: failed to read file: %v\n", err)) {
+				break
+			}
 			continue
 		}
 		filesRead++
@@ -241,19 +296,21 @@ readLoop:
 				offset = 1
 			}
 			if offset > totalLines {
-				offset = totalLines
+				startIdx = totalLines
+			} else {
+				startIdx = offset - 1
 			}
-			startIdx = offset - 1
 		}
 
 		endIdx = totalLines
-		if entry.Limit > 0 && startIdx+entry.Limit < endIdx {
+		if entry.Limit > 0 && entry.Limit < endIdx-startIdx {
 			endIdx = startIdx + entry.Limit
 		}
 
 		// Format with line numbers
 		scanner := bufio.NewScanner(strings.NewReader(content))
 		scanner.Buffer(make([]byte, 64*1024), len(content)+1)
+		scanner.Split(common.ScanTextLines)
 		lineNum := 0
 		returnedLines := 0
 		lineTruncated := false
@@ -262,7 +319,12 @@ readLoop:
 				break
 			}
 			if lineNum >= startIdx {
-				lineText, wasTruncated := common.TruncateRunes(scanner.Text(), maxLineChars, "… [line truncated]")
+				lineBudget := maxLineChars
+				if returnedLines == 0 && i == startFile {
+					available := contentBudget - usedChars - len(fmt.Sprintf("%6d\t\n", lineNum+1))
+					lineBudget = min(lineBudget, max(available, 0))
+				}
+				lineText, wasTruncated := common.TruncateRunes(scanner.Text(), lineBudget, "… [line truncated]")
 				lineTruncated = lineTruncated || wasTruncated
 				formatted := fmt.Sprintf("%6d\t%s\n", lineNum+1, lineText)
 				if !common.AppendWithinRuneBudget(&sb, &usedChars, formatted, contentBudget) {
@@ -276,8 +338,9 @@ readLoop:
 			lineNum++
 		}
 		if err := scanner.Err(); err != nil {
-			common.AppendWithinRuneBudget(&sb, &usedChars, fmt.Sprintf("ERROR: scanner failed: %v\n", err), contentBudget)
-			errorCount++
+			if !appendError(fmt.Sprintf("ERROR: scanner failed: %v\n", err)) {
+				break
+			}
 			continue
 		}
 
@@ -288,10 +351,8 @@ readLoop:
 
 		// File hash (only for files <= 10MB)
 		fileHash := ""
-		if input.IncludeHash && fi.Size() <= readHashThreshold {
-			if h, err := common.ComputeFileHash(filePath); err == nil {
-				fileHash = h
-			}
+		if input.IncludeHash && encInfo.RawSize <= readHashThreshold {
+			fileHash = encInfo.RawSHA256
 		}
 
 		fileTruncated := endIdx < totalLines || lineTruncated
@@ -314,8 +375,12 @@ readLoop:
 		footer += "]\n"
 		if !common.AppendWithinRuneBudget(&sb, &usedChars, footer, contentBudget) {
 			truncated = true
-			nextFileIndex = i + 1
-			nextOffset = endIdx + 1
+			// All rows in this requested window were emitted. A missing footer
+			// must not turn limit=1 into a continuation over the whole file.
+			if i+1 < len(entries) {
+				nextFileIndex = i + 2
+				nextOffset = 0
+			}
 			break
 		}
 	}
@@ -330,7 +395,7 @@ readLoop:
 	summary += "]"
 	sb.WriteString(summary)
 
-	result, finalTruncated := common.TruncateRunes(sb.String(), maxOutputChars, "\n[truncated=true; retry with the remaining file_paths and next_offset from the previous footer]")
+	result, finalTruncated := common.TruncateRunes(sb.String(), maxOutputChars, "\n[truncated=true; resume the original list with start_file_index and resume_offset]")
 	truncated = truncated || finalTruncated
 
 	return &mcp.CallToolResult{
@@ -349,10 +414,11 @@ func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name: "multiread",
 		Description: `Reads multiple files in a single call to reduce API round-trips.
-Encoding-aware: auto-detects file encoding for each file.
+Encoding-aware: auto-detects each file, with optional global/per-file encoding overrides.
 Supports offset/limit for reading specific line ranges.
 Defaults to 200 lines per file and 32768 characters total across the call.
 Returns visible per-file and overall truncation metadata with continuation positions.
+Resume the same input list with start_file_index=next_file_index and resume_offset=next_offset (omit resume_offset when zero).
 Use file_paths or paths (string array) with global offset/limit, or files (object array) for per-file offset/limit.
 If a file fails, the error is included in output and remaining files continue.
 Maximum 50 files per request.`,

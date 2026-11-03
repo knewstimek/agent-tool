@@ -435,6 +435,8 @@ func searchFile(path string, re *regexp.Regexp, maxResults int, opts searchOpts)
 	// files_with_matches: short-circuit on first match
 	if opts.outputMode == "files_with_matches" {
 		scanner := bufio.NewScanner(strings.NewReader(content))
+		scanner.Buffer(make([]byte, 64*1024), len(content)+1)
+		scanner.Split(common.ScanTextLines)
 		for scanner.Scan() {
 			if re.MatchString(scanner.Text()) {
 				if !appendDisplay(resultPath(path, opts)) {
@@ -444,23 +446,11 @@ func searchFile(path string, re *regexp.Regexp, maxResults int, opts searchOpts)
 				return result, nil
 			}
 		}
-		return result, nil
+		return result, scanner.Err()
 	}
 
 	// Split content into lines for indexed access
-	lines := strings.Split(content, "\n")
-	// Drop trailing empty line caused by final newline
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	// Drop the CR of a CRLF line ending. It is a terminator, not content: left
-	// in, an end-anchored pattern ("^foo$") never matches a CRLF file, and the
-	// stray CR would garble the displayed line. files_with_matches uses
-	// bufio.ScanLines, which already strips it -- without this the two modes
-	// disagree about the same file.
-	for i, line := range lines {
-		lines[i] = strings.TrimSuffix(line, "\r")
-	}
+	lines := common.TextLines(content)
 
 	// Find all matching line indices
 	var matchIndices []int

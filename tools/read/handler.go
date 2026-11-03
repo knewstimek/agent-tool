@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -45,7 +46,7 @@ type ReadInput struct {
 	StartLine      *int   `json:"start_line,omitempty" jsonschema:"Alias for offset"`
 	EndLine        *int   `json:"end_line,omitempty" jsonschema:"Inclusive end with start_line"`
 	All            bool   `json:"all,omitempty" jsonschema:"Disable line cap; character cap remains"`
-	MaxOutputChars int    `json:"max_output_chars,omitempty" jsonschema:"Output character cap; default 32768, max 131072"`
+	MaxOutputChars int    `json:"max_output_chars,omitempty" jsonschema:"Output character cap; default 32768, min 256, max 131072"`
 	MaxLineChars   int    `json:"max_line_chars,omitempty" jsonschema:"Per-line character cap; default 4000, max 32768"`
 	IncludeHash    *bool  `json:"include_hash,omitempty" jsonschema:"Include SHA-256; default true"`
 }
@@ -74,7 +75,10 @@ func parseFlexOffset(v any) (int, int, error) {
 	case nil:
 		return 0, 0, nil
 	case float64:
-		return int(val), 0, nil
+		if n, ok := asInt(val); ok {
+			return n, 0, nil
+		}
+		return 0, 0, fmt.Errorf("offset must be a finite integer within range")
 	case int:
 		return val, 0, nil
 	case string:
@@ -94,7 +98,7 @@ func parseFlexOffset(v any) (int, int, error) {
 				if e < s {
 					s, e = e, s
 				}
-				return s, e - s + 1, nil
+				return checkedOffsetRange(s, e)
 			}
 		}
 		// Dash range: "370-396" (parts[0]!="" prevents matching negative like "-5")
@@ -105,7 +109,7 @@ func parseFlexOffset(v any) (int, int, error) {
 				if e < s {
 					s, e = e, s
 				}
-				return s, e - s + 1, nil
+				return checkedOffsetRange(s, e)
 			}
 		}
 		// Plain number
@@ -122,7 +126,7 @@ func parseFlexOffset(v any) (int, int, error) {
 				if e < s {
 					s, e = e, s
 				}
-				return s, e - s + 1, nil
+				return checkedOffsetRange(s, e)
 			}
 		}
 		return 0, 0, fmt.Errorf("invalid offset array -- expected [start, end] integers")
@@ -131,9 +135,34 @@ func parseFlexOffset(v any) (int, int, error) {
 	}
 }
 
+func checkedOffsetRange(start, end int) (int, int, error) {
+	if start == 0 {
+		start = 1
+	}
+	if end == 0 {
+		end = 1
+	}
+	if end < start {
+		start, end = end, start
+	}
+	if start < 0 && end > 0 {
+		return 0, 0, fmt.Errorf("range endpoints must both be positive or both negative")
+	}
+	maxInt := int(^uint(0) >> 1)
+	if end-start == maxInt {
+		return 0, 0, fmt.Errorf("offset range is too large")
+	}
+	return start, end - start + 1, nil
+}
+
 func asInt(v interface{}) (int, bool) {
 	switch val := v.(type) {
 	case float64:
+		maxInt := int(^uint(0) >> 1)
+		if math.IsNaN(val) || math.IsInf(val, 0) || math.Trunc(val) != val ||
+			val < -float64(maxInt)-1 || val >= float64(maxInt) {
+			return 0, false
+		}
 		return int(val), true
 	case int:
 		return val, true
@@ -151,16 +180,6 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 	// Accept start_line/end_line as aliases for offset/limit
 	if input.StartLine != nil && input.Offset == nil {
 		input.Offset = *input.StartLine
-	}
-	if input.EndLine != nil {
-		startLine := 1
-		if input.StartLine != nil {
-			startLine = *input.StartLine
-		}
-		if *input.EndLine >= startLine {
-			limit := *input.EndLine - startLine + 1
-			input.Limit = &limit
-		}
 	}
 	if input.FilePath == "" {
 		return errorResult("file_path is required")
@@ -195,7 +214,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 	}
 
 	// Read with encoding detection
-	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
+	includeHash := input.IncludeHash == nil || *input.IncludeHash
+	reader := common.ReadFileWithEncoding
+	if includeHash {
+		reader = common.ReadFileWithEncodingHash
+	}
+	content, encInfo, err := reader(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
 	}
@@ -230,6 +254,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 	if maxOutputChars <= 0 {
 		maxOutputChars = common.DefaultOutputChars
 	}
+	if maxOutputChars < 256 {
+		return errorResult("max_output_chars must be at least 256 for content and continuation metadata")
+	}
 	if maxOutputChars > common.HardOutputChars {
 		return errorResult(fmt.Sprintf("max_output_chars must be at most %d", common.HardOutputChars))
 	}
@@ -256,14 +283,24 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 			offset = 1
 		}
 		if offset > totalLines {
-			offset = totalLines
+			startIdx = totalLines
+		} else {
+			startIdx = offset - 1
 		}
-		startIdx = offset - 1
 	}
 
 	endIdx = totalLines
-	if limit > 0 && startIdx+limit < endIdx {
+	if limit > 0 && limit < endIdx-startIdx {
 		endIdx = startIdx + limit
+	}
+
+	if input.EndLine != nil {
+		if *input.EndLine < 1 || *input.EndLine < startIdx+1 {
+			return errorResult("end_line must be positive and at or after the resolved start line")
+		}
+		if *input.EndLine < endIdx {
+			endIdx = *input.EndLine
+		}
 	}
 
 	// Process only the needed range. The scanner buffer is raised to the decoded
@@ -272,22 +309,25 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 	var sb strings.Builder
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	scanner.Buffer(make([]byte, 64*1024), len(content)+1)
+	scanner.Split(common.ScanTextLines)
 	lineNum := 0
 	returnedLines := 0
 	outputTruncated := false
 	lineTruncated := false
 	nextOffset := 0
-	contentBudget := maxOutputChars - 512 // reserve room for metadata/footer
-	if contentBudget < 256 {
-		contentBudget = maxOutputChars
-	}
+	contentBudget := maxOutputChars - min(512, maxOutputChars/2)
 	usedChars := 0
 	for scanner.Scan() {
 		if lineNum >= endIdx {
 			break
 		}
 		if lineNum >= startIdx {
-			lineText, wasLineTruncated := common.TruncateRunes(scanner.Text(), maxLineChars, "… [line truncated]")
+			lineBudget := maxLineChars
+			if returnedLines == 0 {
+				available := contentBudget - usedChars - len(fmt.Sprintf("%6d\t\n", lineNum+1))
+				lineBudget = min(lineBudget, max(available, 0))
+			}
+			lineText, wasLineTruncated := common.TruncateRunes(scanner.Text(), lineBudget, "… [line truncated]")
 			lineTruncated = lineTruncated || wasLineTruncated
 			formatted := fmt.Sprintf("%6d\t%s\n", lineNum+1, lineText)
 			if !common.AppendWithinRuneBudget(&sb, &usedChars, formatted, contentBudget) {
@@ -325,11 +365,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 	// Add file hash only when requested. It is useful with edit.expected_hash,
 	// but callers can disable it when reading many short-lived files.
 	var fileHash string
-	includeHash := input.IncludeHash == nil || *input.IncludeHash
-	if includeHash && fi.Size() <= readHashThreshold {
-		if h, err := common.ComputeFileHash(input.FilePath); err == nil {
-			fileHash = h
-		}
+	if includeHash && encInfo.RawSize <= readHashThreshold {
+		fileHash = encInfo.RawSHA256
 	}
 
 	if warning := common.EncodingWarning(encInfo); warning != "" {
@@ -352,8 +389,11 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 	}
 	footer += "]"
 	sb.WriteString(footer)
-	result, finalTruncated := common.TruncateRunes(sb.String(), maxOutputChars,
-		fmt.Sprintf("\n[truncated=true; next_offset=%d]", max(startIdx+returnedLines+1, 1)))
+	marker := "\n[truncated=true; raise max_output_chars or max_line_chars]"
+	if nextOffset > 0 {
+		marker = fmt.Sprintf("\n[truncated=true; next_offset=%d]", nextOffset)
+	}
+	result, finalTruncated := common.TruncateRunes(sb.String(), maxOutputChars, marker)
 	truncated = truncated || finalTruncated
 
 	out := ReadOutput{

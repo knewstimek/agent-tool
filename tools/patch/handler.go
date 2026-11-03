@@ -17,10 +17,12 @@ import (
 const maxPatchSize = 10 * 1024 * 1024 // 10MB
 
 type PatchInput struct {
-	FilePath string      `json:"file_path,omitempty" jsonschema:"File to patch. Relative paths use the configured workspace or MCP client root"`
-	Path     string      `json:"path,omitempty" jsonschema:"Alias for file_path"`
-	Patch    string      `json:"patch" jsonschema:"Unified diff text (output of the diff tool)"`
-	DryRun   interface{} `json:"dry_run,omitempty" jsonschema:"Preview patch result without modifying the file: true or false. Default: false"`
+	Encoding     string      `json:"encoding,omitempty" jsonschema:"Charset override, e.g. CP949; overrides .editorconfig, BOM takes priority"`
+	ExpectedHash string      `json:"expected_hash,omitempty" jsonschema:"Expected raw-file SHA-256; mismatch rejects the patch"`
+	FilePath     string      `json:"file_path,omitempty" jsonschema:"File to patch. Relative paths use the configured workspace or MCP client root"`
+	Path         string      `json:"path,omitempty" jsonschema:"Alias for file_path"`
+	Patch        string      `json:"patch" jsonschema:"Unified diff text (output of the diff tool)"`
+	DryRun       interface{} `json:"dry_run,omitempty" jsonschema:"Preview patch result without modifying the file: true or false. Default: false"`
 }
 
 type PatchOutput struct {
@@ -73,10 +75,16 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PatchInput) (*m
 	}
 
 	// Read file (encoding-aware)
-	hintCharset := edit.FindEditorConfigCharset(input.FilePath)
-	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
+	hintCharset := strings.TrimSpace(input.Encoding)
+	if hintCharset == "" {
+		hintCharset = edit.FindEditorConfigCharset(input.FilePath)
+	}
+	content, encInfo, err := common.ReadFileWithEncodingHash(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
+	}
+	if input.ExpectedHash != "" && !strings.EqualFold(input.ExpectedHash, encInfo.RawSHA256) {
+		return errorResult(fmt.Sprintf("hash mismatch: expected %s, got %s", input.ExpectedHash, encInfo.RawSHA256))
 	}
 
 	// Each line keeps the exact bytes that terminated it instead of the file
@@ -86,12 +94,15 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input PatchInput) (*m
 	lines := splitKeepingTerminators(content)
 	origLineCount := len(lines)
 	dominant := common.DetectLineEnding(content)
-	endsWithNewline := strings.HasSuffix(content, "\n") || content == ""
+	endsWithNewline := strings.HasSuffix(content, "\n") || strings.HasSuffix(content, "\r") || content == ""
 
 	// Apply hunks in reverse order — applying from the end prevents line number shifts
 	for i := len(hunks) - 1; i >= 0; i-- {
 		h := hunks[i]
 		startIdx := h.srcStart - 1 // 0-based
+		if h.srcCount == 0 {
+			startIdx = h.srcStart
+		}
 
 		// Validate startIdx
 		if startIdx < 0 {
@@ -219,18 +230,19 @@ type srcLine struct {
 	term string
 }
 
-// splitKeepingTerminators splits on LF while recording each line's own ending,
+// splitKeepingTerminators records LF, CRLF and CR line endings,
 // so lines outside the patched hunks are written back byte-identical.
 func splitKeepingTerminators(content string) []srcLine {
 	var out []srcLine
 	start := 0
 	for i := 0; i < len(content); i++ {
-		if content[i] != '\n' {
+		if content[i] != '\n' && content[i] != '\r' {
 			continue
 		}
-		text, term := content[start:i], "\n"
-		if i > start && content[i-1] == '\r' {
-			text, term = content[start:i-1], "\r\n"
+		text, term := content[start:i], content[i:i+1]
+		if content[i] == '\r' && i+1 < len(content) && content[i+1] == '\n' {
+			term = "\r\n"
+			i++
 		}
 		out = append(out, srcLine{text: text, term: term})
 		start = i + 1
@@ -278,7 +290,7 @@ func parseUnifiedDiff(patch string) ([]hunk, error) {
 
 	for _, line := range lines {
 		// Skip --- / +++ headers
-		if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
+		if current == nil && (strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++")) {
 			continue
 		}
 
@@ -342,6 +354,20 @@ func parseUnifiedDiff(patch string) ([]hunk, error) {
 		}
 	}
 
+	for i, h := range hunks {
+		src, dst := 0, 0
+		for _, line := range h.lines {
+			if line.op != '+' {
+				src++
+			}
+			if line.op != '-' {
+				dst++
+			}
+		}
+		if src != h.srcCount || dst != h.dstCount {
+			return nil, fmt.Errorf("hunk %d: header expects %d/%d source/target lines but body has %d/%d", i+1, h.srcCount, h.dstCount, src, dst)
+		}
+	}
 	return hunks, nil
 }
 

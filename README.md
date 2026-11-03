@@ -205,11 +205,11 @@ remove them.
 ### Smart Indentation
 LLMs typically output spaces, but many projects use tabs. AgentTool auto-converts indentation to match the file's existing style.
 
-- Inherits `indent_style` and `indent_size` per property from parent `.editorconfig` files, respecting `root = true` and `unset`
+- Inherits `indent_style`, `indent_size`, and `tab_width` per property from parent `.editorconfig` files, respecting `root = true`, `unset`, `indent_size=tab`, and common `**` path patterns
 - Falls back to a content sample of up to 8 MiB, without a fixed line-count cap. Long lines and LF, CRLF, or CR endings are supported; both indent and dedent transitions inform width detection, with deterministic ties
 - Preserves the detected space width when existing space indentation conflicts with a tab setting
 - Converts tabs/spaces and space widths such as 2 ↔ 4; converted matches stay at line boundaries, and tab-depth correction preserves relative nesting
-- When a single-line anchor's body occurs exactly once, its actual local indentation and alignment guide the replacement, preserving minority styles in mixed files
+- Unique line and multiline block anchors use actual local indentation and prefix mappings, preserving minority styles, alignment, and indented blank lines. Block nesting must agree
 - Rejects equally plausible tab-depth candidates instead of choosing one arbitrarily
 - Detection is heuristic, not a language formatter; use `dry_run=true` to review an automatic edit
 
@@ -220,10 +220,18 @@ Edits preserve the original file encoding instead of forcing UTF-8.
 - **Supported**: UTF-8, UTF-8 BOM, EUC-KR, Shift-JIS, ISO-8859-1, UTF-16 (LE/BE, with or without BOM), and more
 - **Inherited settings**: `charset` inherits independently of indentation settings; new files honor `charset = utf-8-bom` by writing a UTF-8 BOM
 - **Decode failures**: malformed UTF-8/UTF-16, detected lossy decoding, and unsupported encodings return errors. `write` refuses to overwrite an existing file whose encoding cannot be read
-- **Retry without project changes**: `read`, `edit`, `multiedit`, and `write` accept `encoding="EUC-KR"`, `encoding="CP949"`, or another supported charset, overriding `.editorconfig`. An existing BOM still takes priority; use `convert_encoding` for intentional conversion
+- **Retry without project changes**: `read`, `multiread`, `edit`, `multiedit`, `write`, `patch`, and `file_info` accept `encoding="EUC-KR"`, `encoding="CP949"`, or another supported charset, overriding `.editorconfig`. An existing BOM still takes priority; use `convert_encoding` for intentional conversion
 - **Detection limits**: automatic detection remains heuristic; its 64 KiB sample starts after the ASCII preamble so long headers do not hide legacy text. Specify `encoding` or `charset` when the result is ambiguous
 - **No false warnings on ASCII**: valid UTF-8 is verified directly, so plain ASCII files never raise a low-confidence warning
 - **Line endings**: Detects LF, CRLF, CR, and mixed files. `edit` matches a multi-line `old_string` whether the file uses CRLF or LF, including files that mix both, and text inserted by `edit`/`regexreplace` follows the newline style of the region it lands in, so the rest of the file is left byte-identical
+
+### Consistent reads and edit batches
+
+- `read`, `multiread`, `file_info`, `grep`, and `patch` agree on LF, CRLF, and CR line boundaries. A final terminator adds no phantom line; reading past EOF returns no lines.
+- Read hashes come from the same raw bytes as the text. `edit`, `multiedit`, `write`, and `patch` check their captured source hash before saving. `expected_hash` is available on `edit`, `multiedit`, and `patch`.
+- `multiedit` supports the same `encoding` and `indent_style` options as `edit`; each replacement sees the previous result, and a failed replacement leaves the whole file unchanged.
+- `multiread` accepts global or per-file `encoding`. Resume the original input list with `start_file_index=next_file_index` and `resume_offset=next_offset` (omit the offset when zero); later files keep their original ranges.
+- Read output budgets are 256–131072 characters. An oversized first line is visibly shortened so paging can advance; raise `max_output_chars` or `max_line_chars` to inspect it in full.
 
 ### Token-safe directory listings
 `listdir` defaults to 500 entries per page and returns `next_cursor` when more

@@ -1,12 +1,29 @@
 package common
 
 import (
+	"bufio"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestLongLineTruncationKeepsAllocationBounded(t *testing.T) {
+	input := strings.Repeat("\uac00", 2*1024*1024)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got, cut := TruncateRunes(input, 4000, "…")
+	runtime.ReadMemStats(&after)
+	if !cut || utf8.RuneCountInString(got) != 4000 || !utf8.ValidString(got) {
+		t.Fatal("invalid truncated prefix")
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1024*1024 {
+		t.Fatalf("short prefix allocated %d bytes", allocated)
+	}
+}
 
 func TestTruncateRunesKeepsUTF8Valid(t *testing.T) {
 	got, truncated := TruncateRunes("가나다라마바사", 5, "…")
@@ -29,6 +46,28 @@ func TestAppendWithinRuneBudgetIsAtomic(t *testing.T) {
 	}
 	if sb.String() != "가나" || used != 2 {
 		t.Fatalf("partial fragment was appended: %q, used=%d", sb.String(), used)
+	}
+}
+
+func TestEveryTextLineFormUsesSameBoundaries(t *testing.T) {
+	for _, text := range []string{"", "a\r\nb\rc\n", "\r\n\r", "a\r", "a\r\nb"} {
+		scanner := bufio.NewScanner(strings.NewReader(text))
+		scanner.Buffer(make([]byte, 2), 1024)
+		scanner.Split(ScanTextLines)
+		var scanned []string
+		for scanner.Scan() {
+			scanned = append(scanned, scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			t.Fatal(err)
+		}
+		lines := TextLines(text)
+		if !reflect.DeepEqual(lines, scanned) && !(len(lines) == 0 && len(scanned) == 0) {
+			t.Fatalf("%q: lines=%q scanned=%q", text, lines, scanned)
+		}
+		if TextLineCount(text) != len(scanned) {
+			t.Fatalf("%q: count mismatch", text)
+		}
 	}
 }
 

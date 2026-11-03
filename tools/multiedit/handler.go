@@ -22,11 +22,13 @@ type EditOp struct {
 
 // MultiEditInput is the input for the multiedit tool.
 type MultiEditInput struct {
-	Encoding string      `json:"encoding,omitempty" jsonschema:"Charset override, e.g. EUC-KR or CP949; overrides .editorconfig, BOM takes priority"`
-	FilePath string      `json:"file_path,omitempty" jsonschema:"File to edit. Relative paths use the configured workspace or MCP client root"`
-	Path     string      `json:"path,omitempty" jsonschema:"Alias for file_path"`
-	Edits    []EditOp    `json:"edits" jsonschema:"Ordered list of replacements to apply sequentially"`
-	DryRun   interface{} `json:"dry_run,omitempty" jsonschema:"Preview changes without modifying the file: true or false. Default: false"`
+	ExpectedHash string      `json:"expected_hash,omitempty" jsonschema:"Expected raw-file SHA-256; mismatch rejects the whole batch"`
+	IndentStyle  string      `json:"indent_style,omitempty" jsonschema:"tabs or spaces-N; default auto-detect, same as edit"`
+	Encoding     string      `json:"encoding,omitempty" jsonschema:"Charset override, e.g. EUC-KR or CP949; overrides .editorconfig, BOM takes priority"`
+	FilePath     string      `json:"file_path,omitempty" jsonschema:"File to edit. Relative paths use the configured workspace or MCP client root"`
+	Path         string      `json:"path,omitempty" jsonschema:"Alias for file_path"`
+	Edits        []EditOp    `json:"edits" jsonschema:"Ordered list of replacements to apply sequentially"`
+	DryRun       interface{} `json:"dry_run,omitempty" jsonschema:"Preview changes without modifying the file: true or false. Default: false"`
 }
 
 // MultiEditOutput is the output of the multiedit tool.
@@ -72,18 +74,31 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MultiEditInput)
 	if hintCharset == "" {
 		hintCharset = edit.FindEditorConfigCharset(input.FilePath)
 	}
-	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
+	content, encInfo, err := common.ReadFileWithEncodingHash(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
 	}
+	if input.ExpectedHash != "" && !strings.EqualFold(input.ExpectedHash, encInfo.RawSHA256) {
+		return errorResult(fmt.Sprintf("hash mismatch: expected %s, got %s. Re-read the file before editing.", input.ExpectedHash, encInfo.RawSHA256))
+	}
 
 	fileStyle := edit.DetectIndent(input.FilePath, content)
+	forceStyle := input.IndentStyle != ""
+	if forceStyle {
+		fileStyle, err = edit.ParseIndentStyle(input.IndentStyle)
+		if err != nil {
+			return errorResult(fmt.Sprintf("invalid indent_style: %v", err))
+		}
+	}
 
 	// Apply edits sequentially; abort on first failure (atomic -- nothing written yet)
 	current := content
 	var messages []string
 	for i, op := range input.Edits {
-		result := edit.Replace(current, op.OldString, op.NewString, common.FlexBool(op.ReplaceAll), fileStyle, false)
+		if i > 0 && !forceStyle {
+			fileStyle = edit.DetectIndent(input.FilePath, current)
+		}
+		result := edit.Replace(current, op.OldString, op.NewString, common.FlexBool(op.ReplaceAll), fileStyle, forceStyle)
 		if !result.Applied {
 			return errorResult(fmt.Sprintf("edits[%d]: %s", i, result.Message))
 		}

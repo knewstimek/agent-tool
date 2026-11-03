@@ -132,7 +132,7 @@ func helpEncoding() string {
 ## How encoding detection works
 Priority order:
 1. BOM (UTF-8, UTF-16LE, UTF-16BE) -- conclusive, checked first
-2. Per-call encoding override (read/edit/multiedit/write), then inherited .editorconfig 'charset'
+2. Per-call encoding override (read/multiread/edit/multiedit/write/patch/file_info), then inherited .editorconfig 'charset'
 3. BOM-less UTF-16 (detected from NUL-byte layout; chardet does not report it)
 4. Valid UTF-8 -- verified, not guessed, so it outranks chardet and never warns
 5. chardet auto-detection (confidence >= 50%; up to 64 KiB after the ASCII preamble)
@@ -143,7 +143,7 @@ Step 4 matters for plain ASCII: chardet cannot tell it from Latin-1 and reports
 
 ## Retry a file without changing project settings
 Pass encoding="EUC-KR", encoding="CP949", or encoding="Shift_JIS" to
-read/edit/multiedit/write. This overrides .editorconfig; an existing BOM still wins.
+read/multiread/edit/multiedit/write/patch/file_info. This overrides .editorconfig; an existing BOM still wins.
 The same encoding is preserved on edits. For intentional conversion use convert_encoding.
 Malformed input and lossy decoding return an error before writes.
 
@@ -189,7 +189,7 @@ func helpIndentation() string {
 
 ## How indentation detection works
 Priority order:
-1. .editorconfig 'indent_style' and 'indent_size'
+1. Inherited .editorconfig indent_style, indent_size and tab_width (including indent_size=tab); ** path patterns supported
 2. File content analysis (up to 8 MiB, no fixed line-count cap; LF/CRLF/CR supported)
 3. Legacy protection: if .editorconfig says tabs but file uses spaces, spaces are preserved
 
@@ -198,8 +198,9 @@ LLMs typically output spaces. agent-tool auto-converts to match the file's style
 - Spaces → Tabs (when file uses tabs)
 - Tabs → Spaces (when file uses spaces)
 - Spaces 2 → Spaces 4 (different indent sizes)
-- A unique single-line body uses its actual local indentation, preserving minority styles
-  and alignment rather than forcing the file-wide majority onto that region
+- Unique line and block matches use actual local indentation and prefix mappings,
+  preserving minority styles, alignment and indented blank lines. Block nesting
+  must agree; a different nesting shape is not silently reinterpreted
 - Both indent and dedent transitions inform width detection; equal votes prefer the
   smaller observed unit. Equally plausible depth matches need more context
 
@@ -237,39 +238,45 @@ When new_string contains non-ASCII text, the result echoes those words back so
 you can check them: a string composed as \uXXXX escapes hides its own typos
 (one wrong hex digit is still a valid character), and rendering it as text is
 the only way to spot that. U+FFFD in the input is reported as corruption.
-Parameters: file_path, old_string, new_string, replace_all, dry_run, indent_style
+Parameters: file_path, old_string, new_string, replace_all, dry_run, indent_style, encoding, expected_hash
+The source hash is captured with the text and checked again before saving.
 
 ## multiedit
 Apply several old_string -> new_string replacements to one file in a single call.
 Edits run in order, each seeing the previous result, and the whole batch is
 atomic: if one edit fails the file is left untouched. Matching, indentation and
 line-ending behavior are identical to edit.
-Parameters: file_path, edits (array of old_string/new_string/replace_all), dry_run
+Parameters: file_path, edits (array of old_string/new_string/replace_all), dry_run,
+encoding, indent_style, expected_hash. Later edits detect the style of the current batch result.
 
 ## read
 Read a file with encoding auto-detection. Returns content with line numbers.
 Image files (PNG, JPG, GIF, BMP, WebP, TIFF, ICO) are returned as base64 ImageContent.
 SVG files are returned as text. Supports negative offset to read from end.
-Offset accepts integer, string range "100-200", or [start, end] array.
+Offset accepts an integer, string range "100-200", or [start, end] integer array.
+end_line caps the resolved start, including an explicit offset; past EOF returns no lines.
+LF, CRLF and CR are logical line breaks across read, multiread, file_info, grep and patch.
 Defaults: 400 lines, max_output_chars=32768, max_line_chars=4000. When output is
 incomplete, truncated=true and next_offset identify the exact continuation.
 Use all=true to remove the default line limit; the character safety budget remains.
 Relative paths use the configured workspace or client MCP root. Hash output can be
-disabled with include_hash=false.
-Parameters: file_path, offset, limit, all, max_output_chars, max_line_chars, include_hash
+disabled with include_hash=false. Hashes describe the same raw bytes as the returned text.
+max_output_chars is 256..131072. A first line exceeding the available budget is
+visibly shortened, so line-based paging can advance; raise the budget to inspect it in full.
+Parameters: file_path, offset, limit, start_line, end_line, all, max_output_chars,
+max_line_chars, include_hash, encoding
 
 ## write
 Create or overwrite a file. Preserves encoding for existing files.
 U+FFFD in the content is reported: it means the text was already corrupted
 before reaching the tool and the original characters cannot be recovered.
-Parameters: file_path, content
+Parameters: file_path, content, encoding
 
 ## grep
 Search file contents with regex. Encoding-aware.
-A CRLF line ending is treated as a terminator, not as content: "^foo$" matches
-in a CRLF file and displayed lines carry no stray CR. A lone CR is NOT a line
-break (same as read and GNU grep), so a classic-Mac CR-only file is one line --
-use file_info to see which endings a file actually uses.
+LF, CRLF and CR are line terminators in every output mode, matching read's
+line numbers. End-anchored patterns work with each form, and files_with_matches
+does not silently stop at a long line.
 Output modes: content (default, matching lines), files_with_matches (paths only), count (match counts).
 Context: use before/after/context to include surrounding lines (like grep -B/-A/-C).
 Defaults: max_results=100, max_line_chars=4000, max_output_chars=32768.
@@ -462,9 +469,14 @@ Each file is read with encoding auto-detection and line numbering.
 Files are separated with headers. Errors on individual files don't stop processing.
 Defaults: 200 lines per file and 32768 total characters. Per-file and overall
 next_offset/next_file_index metadata identify continuation. Hashes are opt-in.
+Resume the SAME original input list with start_file_index=next_file_index and
+resume_offset=next_offset (omit resume_offset when zero). The resumed offset
+applies only to that file; later files retain their original ranges.
+Global encoding can be overridden by files entries\' encoding. Existing BOMs win.
 Relative paths use the configured workspace or client MCP root.
-Parameters: file_paths (array, max 50), offset, limit, all, max_output_chars,
-max_line_chars, include_hash
+Parameters: file_paths (array, max 50), files (path/offset/limit/encoding entries),
+offset, limit, all, max_output_chars (256..131072), max_line_chars, include_hash,
+encoding, start_file_index, resume_offset
 
 ## regexreplace
 Regex find-and-replace in files or across directories.

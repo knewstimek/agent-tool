@@ -75,21 +75,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 		hintCharset = FindEditorConfigCharset(input.FilePath)
 	}
 
-	// If expected_hash is specified, compare with SHA-256 of original file bytes
-	if input.ExpectedHash != "" {
-		actualHash, err := common.ComputeFileHash(input.FilePath)
-		if err != nil {
-			return errorResult(fmt.Sprintf("failed to compute file hash: %v", err))
-		}
-		if !strings.EqualFold(input.ExpectedHash, actualHash) {
-			return errorResult(fmt.Sprintf("hash mismatch: expected %s, got %s. File may have been modified by another process.", input.ExpectedHash, actualHash))
-		}
-	}
-
 	// Read file (with encoding detection)
-	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
+	content, encInfo, err := common.ReadFileWithEncodingHash(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
+	}
+	if input.ExpectedHash != "" && !strings.EqualFold(input.ExpectedHash, encInfo.RawSHA256) {
+		return errorResult(fmt.Sprintf("hash mismatch: expected %s, got %s. Re-read the file before editing.", input.ExpectedHash, encInfo.RawSHA256))
 	}
 
 	// Determine indentation style
@@ -153,6 +145,9 @@ func Register(server *mcp.Server) {
 		Description: `Replace exact text in a file. Preserves encoding and local line endings, adapts indentation using the file and .editorconfig, and supports dry-run plus hash-guarded edits.`,
 	}, Handle)
 }
+
+// ParseIndentStyle parses the shared edit/multiedit indent_style option.
+func ParseIndentStyle(s string) (IndentStyle, error) { return parseIndentStyleOption(s) }
 
 // parseIndentStyleOption parses the indent_style option string.
 // "tabs" → UseTabs=true, "spaces-4" → UseTabs=false, IndentSize=4

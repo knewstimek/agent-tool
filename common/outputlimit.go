@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -17,36 +18,99 @@ const (
 	HardOutputChars = 128 * 1024
 )
 
-// TextLineCount returns the number of lines bufio.ScanLines will expose. A
-// final newline terminates the last line; it does not create a phantom empty
-// line that would send an agent to a nonexistent continuation offset.
+// ScanTextLines recognizes LF, CRLF and bare CR without phantom final lines.
+func ScanTextLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
+		n := i + 1
+		if data[i] == '\r' {
+			if n == len(data) && !atEOF {
+				return 0, nil, nil
+			}
+			if n < len(data) && data[n] == '\n' {
+				n++
+			}
+		}
+		return n, data[:i], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+// TextLineCount uses the same newline forms as ScanTextLines. A final
+// terminator does not create a nonexistent continuation line.
 func TextLineCount(text string) int {
 	if text == "" {
 		return 0
 	}
-	count := strings.Count(text, "\n")
-	if !strings.HasSuffix(text, "\n") {
+	count := 0
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '\r':
+			count++
+			if i+1 < len(text) && text[i+1] == '\n' {
+				i++
+			}
+		case '\n':
+			count++
+		}
+	}
+	if last := text[len(text)-1]; last != '\r' && last != '\n' {
 		count++
 	}
 	return count
+}
+
+// TextLines returns views of each logical line, without copying line bodies.
+func TextLines(text string) []string {
+	lines := make([]string, 0, TextLineCount(text))
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] != '\r' && text[i] != '\n' {
+			continue
+		}
+		lines = append(lines, text[start:i])
+		if text[i] == '\r' && i+1 < len(text) && text[i+1] == '\n' {
+			i++
+		}
+		start = i + 1
+	}
+	if start < len(text) {
+		lines = append(lines, text[start:])
+	}
+	return lines
 }
 
 // TruncateRunes limits text by Unicode code points rather than bytes so tool
 // output never contains a broken UTF-8 sequence. The caller supplies the
 // suffix because different tools need different continuation guidance.
 func TruncateRunes(text string, maxRunes int, suffix string) (string, bool) {
-	if maxRunes < 0 || utf8.RuneCountInString(text) <= maxRunes {
+	if maxRunes < 0 {
 		return text, false
 	}
-	if maxRunes == 0 {
-		return "", true
+	keep := maxRunes - utf8.RuneCountInString(suffix)
+	if keep <= 0 {
+		keep = maxRunes
+		suffix = ""
 	}
-	runes := []rune(text)
-	if len([]rune(suffix)) >= maxRunes {
-		return string(runes[:maxRunes]), true
+	prefixEnd, count := 0, 0
+	// Visit only the output prefix, rather than allocating a rune slice for a
+	// potentially multi-megabyte line that will be shortened to a few KB.
+	for i := range text {
+		if count == keep {
+			prefixEnd = i
+		}
+		if count == maxRunes {
+			prefix := text[:prefixEnd]
+			if !utf8.ValidString(prefix) {
+				prefix = strings.ToValidUTF8(prefix, "\ufffd")
+			}
+			return prefix + suffix, true
+		}
+		count++
 	}
-	keep := maxRunes - len([]rune(suffix))
-	return string(runes[:keep]) + suffix, true
+	return text, false
 }
 
 // AppendWithinRuneBudget appends text only when the complete fragment fits.

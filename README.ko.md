@@ -204,11 +204,11 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
 ### 스마트 들여쓰기
 LLM은 보통 공백으로 출력하지만, 많은 프로젝트가 탭을 사용합니다. AgentTool은 파일의 기존 스타일에 맞게 들여쓰기를 자동 변환합니다.
 
-- 부모 `.editorconfig`의 `indent_style`, `indent_size`를 속성별로 상속하며, `root = true`와 `unset` 반영
+- 부모 `.editorconfig`의 `indent_style`, `indent_size`, `tab_width`를 속성별로 상속. `root = true`, `unset`, `indent_size=tab`과 흔한 `**` 경로 패턴 반영
 - 설정이 없으면 줄 수 제한 없이 최대 8 MiB 범위에서 내용 기반 감지. 긴 줄과 LF·CRLF·CR 줄바꿈을 처리하며, 들여쓰기와 내어쓰기 변화를 함께 활용하고 동률은 일관되게 판정
 - 기존 공백 들여쓰기가 탭 설정과 충돌하면 파일에서 감지한 공백 너비 유지
 - 탭↔공백과 2칸↔4칸 등의 공백 너비 변환 지원. 변환한 검색 문자열도 줄 경계를 지키며, 탭 깊이 보정 시 상대 중첩 유지
-- 한 줄 검색 문자열의 본문이 파일에서 유일하면 해당 줄의 실제 들여쓰기와 정렬을 기준으로 치환하여 혼합 파일의 소수 스타일도 보존
+- 유일한 한 줄·여러 줄 블록의 실제 들여쓰기와 접두 공백 대응을 활용하여 혼합 파일의 소수 스타일, 정렬, 빈 줄의 들여쓰기 보존. 블록의 상대 중첩 구조는 일치해야 함
 - 동일하게 타당한 탭 깊이 후보가 여러 개면 임의로 선택하지 않고 오류 반환
 - 감지는 언어 포매터가 아닌 추정 방식이므로, 자동 편집 결과는 `dry_run=true`로 검토 가능
 
@@ -219,10 +219,18 @@ UTF-8로 강제 변환하지 않고, 원본 파일 인코딩을 유지합니다.
 - **지원 인코딩**: UTF-8, UTF-8 BOM, EUC-KR, Shift-JIS, ISO-8859-1, UTF-16 (LE/BE, BOM 유무 무관) 등
 - **설정 상속**: `charset`은 들여쓰기 설정과 독립적으로 상속. 새 파일의 `charset = utf-8-bom` 설정은 실제 UTF-8 BOM 기록에 반영
 - **디코딩 실패**: 잘못된 UTF-8·UTF-16, 감지된 손실성 디코딩, 지원하지 않는 인코딩은 오류 반환. `write`는 기존 파일의 인코딩을 읽을 수 없으면 덮어쓰기 거부
-- **설정 변경 없이 재시도**: `read`, `edit`, `multiedit`, `write`에 `encoding="EUC-KR"`, `encoding="CP949"` 등 지원하는 인코딩 지정 가능. `.editorconfig`보다 우선하며 기존 BOM은 유지. 의도적인 인코딩 변환은 `convert_encoding` 사용
+- **설정 변경 없이 재시도**: `read`, `multiread`, `edit`, `multiedit`, `write`, `patch`, `file_info`에 `encoding="EUC-KR"`, `encoding="CP949"` 등 지원하는 인코딩 지정 가능. `.editorconfig`보다 우선하며 기존 BOM은 유지. 의도적인 인코딩 변환은 `convert_encoding` 사용
 - **감지 한계**: 자동 감지는 추정 방식이며, 긴 헤더 뒤의 레거시 텍스트를 놓치지 않도록 ASCII 머리말 이후부터 64 KiB 표본을 사용. 결과가 모호하면 `encoding` 또는 `charset` 명시
 - **ASCII 오탐 경고 없음**: 유효한 UTF-8 은 직접 검증하므로 순수 ASCII 파일에 신뢰도 경고가 뜨지 않음
 - **줄바꿈**: LF, CRLF, CR, 혼합 파일을 구분. `edit`은 CRLF/LF 어느 쪽이든 여러 줄 `old_string`을 매칭하며(둘이 섞인 파일 포함), `edit`/`regexreplace`로 삽입되는 문자열은 해당 위치 구역의 줄바꿈을 따라가므로 나머지 바이트는 그대로 유지됨
+
+### 일관된 읽기와 묶음 편집
+
+- `read`, `multiread`, `file_info`, `grep`, `patch`가 LF·CRLF·CR 줄 경계를 동일하게 처리. 끝 개행은 가짜 줄을 만들지 않으며, EOF 뒤를 읽으면 0줄 반환.
+- 읽기 해시는 표시한 텍스트와 같은 원본 바이트에서 계산. `edit`, `multiedit`, `write`, `patch`는 저장 전에 읽었던 원본의 해시를 다시 확인. `expected_hash`는 `edit`, `multiedit`, `patch`에서 지정 가능.
+- `multiedit`도 `edit`과 같은 `encoding`·`indent_style` 옵션 지원. 각 치환은 앞선 결과를 대상으로 하며, 중간 치환 실패 시 파일 전체를 그대로 유지.
+- `multiread`는 전역·파일별 `encoding` 지원. 원래 입력 목록에 `start_file_index=next_file_index`, `resume_offset=next_offset`을 지정해 이어 읽기(오프셋이 0이면 생략). 뒤쪽 파일은 원래 요청 범위 유지.
+- 읽기 출력 예산은 256~131072자. 첫 줄이 예산보다 길면 잘렸음을 표시하고 다음 줄로 진행하며, 전체 줄을 보려면 `max_output_chars` 또는 `max_line_chars` 확대.
 
 ### 토큰을 보호하는 디렉토리 목록
 `listdir`는 기본적으로 페이지당 500개까지만 반환하고, 항목이 더 있으면
