@@ -22,6 +22,7 @@ type EditOp struct {
 
 // MultiEditInput is the input for the multiedit tool.
 type MultiEditInput struct {
+	Encoding string      `json:"encoding,omitempty" jsonschema:"Charset override, e.g. EUC-KR or CP949; overrides .editorconfig, BOM takes priority"`
 	FilePath string      `json:"file_path,omitempty" jsonschema:"File to edit. Relative paths use the configured workspace or MCP client root"`
 	Path     string      `json:"path,omitempty" jsonschema:"Alias for file_path"`
 	Edits    []EditOp    `json:"edits" jsonschema:"Ordered list of replacements to apply sequentially"`
@@ -67,7 +68,10 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MultiEditInput)
 		return errorResult(fmt.Sprintf("cannot access file: %v", err))
 	}
 
-	hintCharset := edit.FindEditorConfigCharset(input.FilePath)
+	hintCharset := strings.TrimSpace(input.Encoding)
+	if hintCharset == "" {
+		hintCharset = edit.FindEditorConfigCharset(input.FilePath)
+	}
 	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))

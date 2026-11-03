@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"agent-tool/common"
 	"agent-tool/tools/edit"
@@ -18,6 +19,7 @@ import (
 const smallLocaleFileRunes = 200
 
 type WriteInput struct {
+	Encoding string `json:"encoding,omitempty" jsonschema:"Charset override, e.g. EUC-KR or Shift_JIS; overrides .editorconfig, existing BOM takes priority"`
 	FilePath string `json:"file_path,omitempty" jsonschema:"File path; relative to workspace/MCP root"`
 	Path     string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 	Content  string `json:"content" jsonschema:"Content to write to the file"`
@@ -48,20 +50,22 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WriteInput) (*m
 
 	// Preserve encoding info if existing file exists
 	var encInfo common.EncodingInfo
+	hintCharset := strings.TrimSpace(input.Encoding)
+	if hintCharset == "" {
+		hintCharset = edit.FindEditorConfigCharset(input.FilePath)
+	}
 
 	if fi, err := os.Stat(input.FilePath); err == nil {
 		if fi.IsDir() {
 			return errorResult(fmt.Sprintf("path is a directory: %s", input.FilePath))
 		}
 		// Detect encoding of existing file
-		hintCharset := edit.FindEditorConfigCharset(input.FilePath)
 		_, encInfo, err = common.ReadFileWithEncoding(input.FilePath, hintCharset)
 		if err != nil {
 			return errorResult(fmt.Sprintf("cannot preserve existing file encoding: %v", err))
 		}
 	} else {
 		// New file: check .editorconfig charset hint, default to UTF-8
-		hintCharset := edit.FindEditorConfigCharset(input.FilePath)
 		if hintCharset != "" {
 			encInfo = common.EncodingInfo{Charset: hintCharset}
 		} else {

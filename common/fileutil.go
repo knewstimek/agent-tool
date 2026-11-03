@@ -24,7 +24,7 @@ import (
 const DefaultMaxFileSize int64 = 100 * 1024 * 1024
 
 // chardetSampleSize is the maximum number of bytes used for encoding detection.
-// chardet does not need the entire file; a sample from the beginning is sufficient.
+// Sample at the first non-ASCII byte to avoid wasting it on ASCII preambles.
 const chardetSampleSize = 64 * 1024 // 64KB
 
 // EncodingInfo holds encoding information for a file.
@@ -238,10 +238,22 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 		info.UsedSource = "utf8"
 	}
 
-	// 4. chardet detection (uses only a front sample — full file not needed)
+	// 4. chardet detection (bounded sample after any ASCII preamble)
 	if charset == "" {
+		// A long ASCII preamble says nothing about the legacy encoding.
+		// Start at its first high-bit byte so the sample includes actual text.
+		detectSample := raw
+		for i, b := range raw {
+			if b >= 0x80 {
+				detectSample = raw[i:]
+				break
+			}
+		}
+		if len(detectSample) > chardetSampleSize {
+			detectSample = detectSample[:chardetSampleSize]
+		}
 		detector := chardet.NewTextDetector()
-		result, detectErr := detector.DetectBest(sample)
+		result, detectErr := detector.DetectBest(detectSample)
 		if detectErr == nil && result.Confidence >= 50 {
 			charset = normalizeCharsetName(result.Charset)
 			info.Confidence = result.Confidence
@@ -492,7 +504,7 @@ func normalizeCharsetName(name string) string {
 		return "UTF-8"
 	case "utf-8-bom":
 		return "UTF-8" // BOM is handled separately
-	case "euc-kr", "euckr":
+	case "euc-kr", "euckr", "cp949", "windows-949", "uhc":
 		return "EUC-KR"
 	case "shift_jis", "shift-jis", "shiftjis", "sjis":
 		return "Shift_JIS"
@@ -503,7 +515,7 @@ func normalizeCharsetName(name string) string {
 	case "utf-16le":
 		return "UTF-16LE"
 	default:
-		return strings.ToUpper(name)
+		return strings.ToUpper(strings.TrimSpace(name))
 	}
 }
 

@@ -59,6 +59,14 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 		return applyReplace(m, normalizedOld, finalNew, replaceAll)
 	}
 
+	// A unique line body gives stronger local evidence than a guessed global
+	// indent unit, especially in files mixing legacy space and tab regions.
+	if !forceStyle {
+		if result, ok := replaceUniqueIndentedLine(m, normalizedOld, normalizedNew, fileStyle); ok {
+			return result
+		}
+	}
+
 	// 2nd pass: match after indent conversion (spaces -> tabs or tabs -> spaces)
 	srcStyle := DetectIndentOfString(oldStr)
 	if srcStyle.UseTabs != fileStyle.UseTabs || srcStyle.IndentSize != fileStyle.IndentSize {

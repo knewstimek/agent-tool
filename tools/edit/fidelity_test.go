@@ -45,7 +45,7 @@ func TestReplaceAmbiguousConvertedIndent(t *testing.T) {
 
 func TestIndentSampling(t *testing.T) {
 	for _, ending := range []string{"\n", "\r\n", "\r"} {
-		for _, prefix := range []string{"", strings.Repeat("// header"+ending, 150), strings.Repeat("x", 70*1024) + ending} {
+		for _, prefix := range []string{"", strings.Repeat("// header"+ending, 1500), strings.Repeat("x", 300*1024) + ending} {
 			got := DetectIndentOfString(prefix + "a" + ending + "  b" + ending + "    c")
 			if got.UseTabs || got.IndentSize != 2 {
 				t.Fatalf("ending=%q prefix=%d: %+v", ending, len(prefix), got)
@@ -56,6 +56,19 @@ func TestIndentSampling(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		if got := DetectIndentOfString("  a\n      b\n"); got.IndentSize != 2 {
 			t.Fatalf("tie: %+v", got)
+		}
+	}
+}
+
+func TestIndentDedentationEvidence(t *testing.T) {
+	for _, text := range []string{"      a\n    b\n  c\n", "        a\n    b\n"} {
+		want := 2
+		if strings.HasPrefix(text, "        ") {
+			want = 4
+		}
+		got := DetectIndentOfString(text)
+		if got.UseTabs || got.IndentSize != want {
+			t.Fatalf("descending nesting: %+v want=%d", got, want)
 		}
 	}
 }

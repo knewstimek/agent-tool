@@ -206,20 +206,22 @@ remove them.
 LLMs typically output spaces, but many projects use tabs. AgentTool auto-converts indentation to match the file's existing style.
 
 - Inherits `indent_style` and `indent_size` per property from parent `.editorconfig` files, respecting `root = true` and `unset`
-- Falls back to a bounded content sample (up to 1,000 lines / 256 KiB), including long lines and LF, CRLF, or CR endings; equal-frequency indent units consistently prefer the smaller observed unit
+- Falls back to a content sample of up to 8 MiB, without a fixed line-count cap. Long lines and LF, CRLF, or CR endings are supported; both indent and dedent transitions inform width detection, with deterministic ties
 - Preserves the detected space width when existing space indentation conflicts with a tab setting
 - Converts tabs/spaces and space widths such as 2 ↔ 4; converted matches stay at line boundaries, and tab-depth correction preserves relative nesting
+- When a single-line anchor's body occurs exactly once, its actual local indentation and alignment guide the replacement, preserving minority styles in mixed files
 - Rejects equally plausible tab-depth candidates instead of choosing one arbitrarily
 - Detection is heuristic, not a language formatter; use `dry_run=true` to review an automatic edit
 
 ### Encoding Preservation
 Edits preserve the original file encoding instead of forcing UTF-8.
 
-- **Detection priority**: BOM → `.editorconfig` charset → BOM-less UTF-16 → valid UTF-8 → chardet auto-detection → fallback encoding
+- **Detection priority**: BOM → per-call `encoding` override → inherited `.editorconfig` charset → BOM-less UTF-16 → valid UTF-8 → chardet auto-detection → fallback encoding
 - **Supported**: UTF-8, UTF-8 BOM, EUC-KR, Shift-JIS, ISO-8859-1, UTF-16 (LE/BE, with or without BOM), and more
 - **Inherited settings**: `charset` inherits independently of indentation settings; new files honor `charset = utf-8-bom` by writing a UTF-8 BOM
 - **Decode failures**: malformed UTF-8/UTF-16, detected lossy decoding, and unsupported encodings return errors. `write` refuses to overwrite an existing file whose encoding cannot be read
-- **Detection limits**: automatic detection remains heuristic; specify the correct `charset` when a legacy encoding is ambiguous
+- **Retry without project changes**: `read`, `edit`, `multiedit`, and `write` accept `encoding="EUC-KR"`, `encoding="CP949"`, or another supported charset, overriding `.editorconfig`. An existing BOM still takes priority; use `convert_encoding` for intentional conversion
+- **Detection limits**: automatic detection remains heuristic; its 64 KiB sample starts after the ASCII preamble so long headers do not hide legacy text. Specify `encoding` or `charset` when the result is ambiguous
 - **No false warnings on ASCII**: valid UTF-8 is verified directly, so plain ASCII files never raise a low-confidence warning
 - **Line endings**: Detects LF, CRLF, CR, and mixed files. `edit` matches a multi-line `old_string` whether the file uses CRLF or LF, including files that mix both, and text inserted by `edit`/`regexreplace` follows the newline style of the region it lands in, so the rest of the file is left byte-identical
 
@@ -597,7 +599,7 @@ When used with AI coding agents, be aware of prompt injection risks:
 - **Zip Bomb protection**: Single file limit (1GB), total extraction limit (5GB)
 - **Symlinks**: Skipped by default. Enable via `set_config allow_symlinks=true` (tar only; zip symlinks always skipped). Even when enabled, symlinks targeting outside the output directory are blocked
 - **File size limit**: Configurable max file size (default 100MB) prevents OOM on large files. Adjustable via `set_config max_file_size_mb=N`
-- **Encoding safety**: chardet uses 64KB sample (not full file) for memory efficiency
+- **Encoding safety**: chardet uses a 64 KiB sample after the ASCII preamble; malformed input is reported before an edit can persist lossy text
 
 For maximum security, review the AI agent's tool calls before approving, especially for SSH commands, HTTP requests to external URLs, and database queries.
 

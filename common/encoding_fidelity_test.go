@@ -4,8 +4,30 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestLegacyEncodingAfterLargeASCIIPreamble(t *testing.T) {
+	header := strings.Repeat("// ASCII header\n", 8192)
+	legacy := bytes.Repeat([]byte{0xc7, 0xd1, 0xb1, 0xdb, 0x20, 0xc5, 0xd7, 0xbd, 0xba, 0xc6, 0xae, 0x0a}, 40)
+	raw := append([]byte(header), legacy...)
+	p := filepath.Join(t.TempDir(), "legacy.txt")
+	if err := os.WriteFile(p, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, info, err := ReadFileWithEncoding(p, "")
+	if err != nil || got != header+strings.Repeat("\ud55c\uae00 \ud14c\uc2a4\ud2b8\n", 40) {
+		t.Fatalf("legacy body missed: charset=%s err=%v", info.Charset, err)
+	}
+	if err := WriteFileWithEncoding(p, got, info); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(p)
+	if !bytes.Equal(raw, after) {
+		t.Fatal("round trip changed legacy body")
+	}
+}
 
 func TestRejectLossyDecoding(t *testing.T) {
 	tests := []struct {

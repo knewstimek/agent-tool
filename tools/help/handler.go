@@ -132,14 +132,20 @@ func helpEncoding() string {
 ## How encoding detection works
 Priority order:
 1. BOM (UTF-8, UTF-16LE, UTF-16BE) -- conclusive, checked first
-2. .editorconfig 'charset' value
+2. Per-call encoding override (read/edit/multiedit/write), then inherited .editorconfig 'charset'
 3. BOM-less UTF-16 (detected from NUL-byte layout; chardet does not report it)
 4. Valid UTF-8 -- verified, not guessed, so it outranks chardet and never warns
-5. chardet auto-detection (confidence >= 50%)
+5. chardet auto-detection (confidence >= 50%; up to 64 KiB after the ASCII preamble)
 6. Fallback encoding (currently: ` + common.GetFallbackEncoding() + `)
 
 Step 4 matters for plain ASCII: chardet cannot tell it from Latin-1 and reports
 ~11-33% confidence, which would otherwise warn on most files in a typical repo.
+
+## Retry a file without changing project settings
+Pass encoding="EUC-KR", encoding="CP949", or encoding="Shift_JIS" to
+read/edit/multiedit/write. This overrides .editorconfig; an existing BOM still wins.
+The same encoding is preserved on edits. For intentional conversion use convert_encoding.
+Malformed input and lossy decoding return an error before writes.
 
 ## Setting up for non-UTF-8 projects
 
@@ -184,7 +190,7 @@ func helpIndentation() string {
 ## How indentation detection works
 Priority order:
 1. .editorconfig 'indent_style' and 'indent_size'
-2. File content analysis (first 100 lines)
+2. File content analysis (up to 8 MiB, no fixed line-count cap; LF/CRLF/CR supported)
 3. Legacy protection: if .editorconfig says tabs but file uses spaces, spaces are preserved
 
 ## Smart indentation conversion
@@ -192,6 +198,10 @@ LLMs typically output spaces. agent-tool auto-converts to match the file's style
 - Spaces → Tabs (when file uses tabs)
 - Tabs → Spaces (when file uses spaces)
 - Spaces 2 → Spaces 4 (different indent sizes)
+- A unique single-line body uses its actual local indentation, preserving minority styles
+  and alignment rather than forcing the file-wide majority onto that region
+- Both indent and dedent transitions inform width detection; equal votes prefer the
+  smaller observed unit. Equally plausible depth matches need more context
 
 ## Explicit override
 The edit tool supports an 'indent_style' parameter:

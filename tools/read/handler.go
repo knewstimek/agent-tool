@@ -37,6 +37,7 @@ const maxImageSize = 20 * 1024 * 1024
 const readHashThreshold = 10 * 1024 * 1024 // 10MB
 
 type ReadInput struct {
+	Encoding       string `json:"encoding,omitempty" jsonschema:"Charset override, e.g. EUC-KR or Shift_JIS; overrides .editorconfig, BOM takes priority"`
 	FilePath       string `json:"file_path,omitempty" jsonschema:"Absolute or workspace/MCP-root-relative file path"`
 	Path           string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 	Offset         any    `json:"offset,omitempty" jsonschema:"Start line: 1-based integer, negative from end, 'start-end', or [start,end]; default 1"`
@@ -188,7 +189,10 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 	}
 
 	// .editorconfig charset hint
-	hintCharset := edit.FindEditorConfigCharset(input.FilePath)
+	hintCharset := strings.TrimSpace(input.Encoding)
+	if hintCharset == "" {
+		hintCharset = edit.FindEditorConfigCharset(input.FilePath)
+	}
 
 	// Read with encoding detection
 	content, encInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)

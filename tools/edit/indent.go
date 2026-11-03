@@ -145,12 +145,12 @@ func HasLeadingSpaces(text string) bool {
 	return false
 }
 
-// indentLines samples up to 1000 lines and 256 KiB without Scanner's token
+// indentLines samples up to 8 MiB without a line-count or Scanner token
 // limit. CR, LF and CRLF files use the same detection path.
 func indentLines(content string) iter.Seq[string] {
 	return func(yield func(string) bool) {
-		if len(content) > 256*1024 {
-			content = content[:256*1024]
+		if len(content) > 8*1024*1024 {
+			content = content[:8*1024*1024]
 			// Exclude a partial final line.
 			if end := strings.LastIndexAny(content, "\r\n"); end >= 0 {
 				content = content[:end]
@@ -158,7 +158,7 @@ func indentLines(content string) iter.Seq[string] {
 				return
 			}
 		}
-		for count := 0; content != "" && count < 1000; count++ {
+		for content != "" {
 			end := strings.IndexAny(content, "\r\n")
 			if end < 0 {
 				yield(content)
@@ -196,8 +196,13 @@ func detectIndentFromContent(content string) IndentStyle {
 		} else if line[0] == ' ' && reLeadingSpaces.MatchString(line) {
 			spaceLines++
 			nSpaces := len(line) - len(strings.TrimLeft(line, " "))
-			// Valid indent unit: 1-8. 9+ is likely alignment, so excluded.
-			if diff := nSpaces - prevSpaces; diff > 0 && diff <= 8 {
+			// Both indentation and dedentation reveal the unit. Large changes
+			// are more likely alignment or skipped nesting levels.
+			diff := nSpaces - prevSpaces
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > 0 && diff <= 8 {
 				spaceDiffs[diff]++
 			}
 			prevSpaces = nSpaces

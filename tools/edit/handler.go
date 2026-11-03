@@ -15,6 +15,7 @@ import (
 
 // EditInput is the input parameter for the Edit tool.
 type EditInput struct {
+	Encoding     string      `json:"encoding,omitempty" jsonschema:"Charset override, e.g. EUC-KR or Shift_JIS; overrides .editorconfig, BOM takes priority"`
 	FilePath     string      `json:"file_path,omitempty" jsonschema:"File path; relative to workspace/MCP root"`
 	Path         string      `json:"path,omitempty" jsonschema:"Alias for file_path"`
 	OldString    string      `json:"old_string,omitempty" jsonschema:"Exact text to find in the file"`
@@ -69,7 +70,10 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 	}
 
 	// Get charset hint from .editorconfig
-	hintCharset := FindEditorConfigCharset(input.FilePath)
+	hintCharset := strings.TrimSpace(input.Encoding)
+	if hintCharset == "" {
+		hintCharset = FindEditorConfigCharset(input.FilePath)
+	}
 
 	// If expected_hash is specified, compare with SHA-256 of original file bytes
 	if input.ExpectedHash != "" {
