@@ -2,6 +2,7 @@ package edit
 
 import (
 	"bufio"
+	"iter"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,7 +24,6 @@ type EditorConfigResult struct {
 var (
 	reLeadingSpaces = regexp.MustCompile(`^  +\S`)
 	reSectionHeader = regexp.MustCompile(`^\[(.+)\]`)
-	reRootTrue      = regexp.MustCompile(`(?i)^\s*root\s*=\s*true`)
 )
 
 // DetectIndent detects the indentation style from file content.
@@ -31,10 +31,10 @@ var (
 func DetectIndent(filePath string, content string) IndentStyle {
 	// 1. Check .editorconfig
 	if ec := findEditorConfig(filePath); ec != nil {
-		// Legacy protection: if .editorconfig says tabs but the file has no tab lines
-		// and space indentation exists, preserve the file's existing space style.
+		// Preserve the content style when space indentation predominates over
+		// a conflicting tab setting.
 		if ec.UseTabs && !detectTabsFromContent(content) && hasSpaceIndentation(content) {
-			return IndentStyle{UseTabs: false, IndentSize: ec.IndentSize}
+			return detectIndentFromContent(content)
 		}
 		return *ec
 	}
@@ -145,24 +145,49 @@ func HasLeadingSpaces(text string) bool {
 	return false
 }
 
-// detectIndentFromContent scans up to 100 lines to estimate the indentation style.
+// indentLines samples up to 1000 lines and 256 KiB without Scanner's token
+// limit. CR, LF and CRLF files use the same detection path.
+func indentLines(content string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		if len(content) > 256*1024 {
+			content = content[:256*1024]
+			// Exclude a partial final line.
+			if end := strings.LastIndexAny(content, "\r\n"); end >= 0 {
+				content = content[:end]
+			} else {
+				return
+			}
+		}
+		for count := 0; content != "" && count < 1000; count++ {
+			end := strings.IndexAny(content, "\r\n")
+			if end < 0 {
+				yield(content)
+				return
+			}
+			line := content[:end]
+			next := end + 1
+			if content[end] == '\r' && next < len(content) && content[next] == '\n' {
+				next++
+			}
+			content = content[next:]
+			if !yield(line) {
+				return
+			}
+		}
+	}
+}
+
+// detectIndentFromContent estimates the indentation style from a bounded sample.
 // Uses tabs if tab lines >= space lines; otherwise estimates indentSize from space diffs between consecutive lines.
 func detectIndentFromContent(content string) IndentStyle {
-	scanner := bufio.NewScanner(strings.NewReader(content))
 	tabLines := 0
 	spaceLines := 0
-	lineCount := 0
 	spaceDiffs := make(map[int]int) // indent depth difference frequency
 
 	prevSpaces := 0
-	for scanner.Scan() {
-		if lineCount >= 100 {
-			break
-		}
-		line := scanner.Text()
-		lineCount++
+	for line := range indentLines(content) {
 
-		if len(line) == 0 {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
 
@@ -189,7 +214,7 @@ func detectIndentFromContent(content string) IndentStyle {
 	indentSize := 4
 	maxCount := 0
 	for size, count := range spaceDiffs {
-		if count > maxCount {
+		if count > maxCount || count == maxCount && size < indentSize {
 			maxCount = count
 			indentSize = size
 		}
@@ -201,19 +226,12 @@ func detectIndentFromContent(content string) IndentStyle {
 // detectTabsFromContent returns whether tab-indented lines outnumber space-indented lines.
 // Used by DetectIndent to verify consistency between .editorconfig and actual file content.
 func detectTabsFromContent(content string) bool {
-	scanner := bufio.NewScanner(strings.NewReader(content))
 	tabLines := 0
 	spaceLines := 0
-	lineCount := 0
 
-	for scanner.Scan() {
-		if lineCount >= 100 {
-			break
-		}
-		line := scanner.Text()
-		lineCount++
+	for line := range indentLines(content) {
 
-		if len(line) == 0 {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		if line[0] == '\t' {
@@ -229,16 +247,10 @@ func detectTabsFromContent(content string) bool {
 // hasSpaceIndentation returns whether at least one line with space indentation exists.
 // Unlike detectTabsFromContent, checks only for existence rather than ratio.
 func hasSpaceIndentation(content string) bool {
-	scanner := bufio.NewScanner(strings.NewReader(content))
-	lineCount := 0
-	for scanner.Scan() {
-		if lineCount >= 100 {
-			break
-		}
-		if reLeadingSpaces.MatchString(scanner.Text()) {
+	for line := range indentLines(content) {
+		if reLeadingSpaces.MatchString(line) {
 			return true
 		}
-		lineCount++
 	}
 	return false
 }
@@ -265,17 +277,18 @@ func findEditorConfig(filePath string) *IndentStyle {
 
 func findEditorConfigFull(filePath string) *EditorConfigResult {
 	dir := filepath.Dir(filePath)
-
+	props := make(map[string]string)
 	for {
-		ecPath := filepath.Join(dir, ".editorconfig")
-		if _, err := os.Stat(ecPath); err == nil {
-			if result := parseEditorConfig(ecPath, filePath); result != nil {
-				return result
+		local, root := readEditorConfigProps(filepath.Join(dir, ".editorconfig"), filePath)
+		// Walk nearest first, inheriting only properties not specified below.
+		// Keep "unset" until after merging so it blocks inheritance too.
+		for key, value := range local {
+			if _, exists := props[key]; !exists {
+				props[key] = value
 			}
-			// Stop searching upward if root=true, even if no matching settings (result==nil)
-			if isRootEditorConfig(ecPath) {
-				break
-			}
+		}
+		if root {
+			break
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -283,15 +296,20 @@ func findEditorConfigFull(filePath string) *EditorConfigResult {
 		}
 		dir = parent
 	}
-	return nil
+	for key, value := range props {
+		if value == "unset" {
+			delete(props, key)
+		}
+	}
+	return editorConfigResult(props)
 }
 
-// parseEditorConfig extracts settings matching filePath from a .editorconfig file.
+// readEditorConfigProps returns matching properties and the preamble's root flag.
 // filePath must be an absolute path.
-func parseEditorConfig(ecPath, filePath string) *EditorConfigResult {
+func readEditorConfigProps(ecPath, filePath string) (map[string]string, bool) {
 	f, err := os.Open(ecPath)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer f.Close()
 
@@ -301,6 +319,8 @@ func parseEditorConfig(ecPath, filePath string) *EditorConfigResult {
 	scanner := bufio.NewScanner(f)
 	props := make(map[string]string)
 	inMatchingSection := false
+	inSection := false
+	root := false
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -309,6 +329,7 @@ func parseEditorConfig(ecPath, filePath string) *EditorConfigResult {
 		}
 
 		if m := reSectionHeader.FindStringSubmatch(line); m != nil {
+			inSection = true
 			pattern := m[1]
 			patterns := expandBraces(pattern)
 			inMatchingSection = false
@@ -331,15 +352,20 @@ func parseEditorConfig(ecPath, filePath string) *EditorConfigResult {
 			continue
 		}
 
-		if inMatchingSection {
-			if idx := strings.Index(line, "="); idx >= 0 {
-				key := strings.TrimSpace(strings.ToLower(line[:idx]))
-				val := strings.TrimSpace(strings.ToLower(line[idx+1:]))
+		if idx := strings.Index(line, "="); idx >= 0 {
+			key := strings.TrimSpace(strings.ToLower(line[:idx]))
+			val := strings.TrimSpace(strings.ToLower(line[idx+1:]))
+			if !inSection && key == "root" {
+				root = val == "true"
+			} else if inMatchingSection {
 				props[key] = val
 			}
 		}
 	}
+	return props, root
+}
 
+func editorConfigResult(props map[string]string) *EditorConfigResult {
 	// Return result if at least one of indent or charset is found
 	var indent *IndentStyle
 	if props["indent_style"] == "tab" {
@@ -370,14 +396,6 @@ func parseEditorConfig(ecPath, filePath string) *EditorConfigResult {
 		Indent:  indent,
 		Charset: charset,
 	}
-}
-
-func isRootEditorConfig(ecPath string) bool {
-	data, err := os.ReadFile(ecPath)
-	if err != nil {
-		return false
-	}
-	return reRootTrue.Match(data)
 }
 
 func expandBraces(pattern string) []string {

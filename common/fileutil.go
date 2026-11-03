@@ -164,6 +164,9 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 	if bytes.HasPrefix(raw, utf8BOM) {
 		info.HasBOM = true
 		raw = raw[len(utf8BOM):]
+		if !utf8.Valid(raw) {
+			return "", info, fmt.Errorf("invalid UTF-8 after BOM; refusing lossy decoding")
+		}
 		return string(raw), info, nil
 	}
 
@@ -255,22 +258,27 @@ func ReadFileWithEncoding(path string, hintCharset string) (string, EncodingInfo
 
 	info.Charset = charset
 
-	// Return as-is if UTF-8
+	if info.Charset == "UTF-16LE" || info.Charset == "UTF-16BE" {
+		return decodeUTF16(raw, info.Charset == "UTF-16LE", info)
+	}
+
+	// Never expose invalid UTF-8 as successfully decoded text.
 	if info.Charset == "UTF-8" {
+		if !utf8.Valid(raw) {
+			return "", info, fmt.Errorf("invalid UTF-8 (%s); specify the correct charset", info.UsedSource)
+		}
 		return string(raw), info, nil
 	}
 
 	// Decode to UTF-8 if a different encoding
 	enc, err := ianaindex.IANA.Encoding(info.Charset)
 	if err != nil || enc == nil {
-		info.Charset = "UTF-8"
-		return string(raw), info, nil
+		return "", info, fmt.Errorf("unsupported encoding: %s", info.Charset)
 	}
 
 	decoded, err := decodeBytes(raw, enc)
 	if err != nil {
-		info.Charset = "UTF-8"
-		return string(raw), info, nil
+		return "", info, fmt.Errorf("decoding failed (%s): %w", info.Charset, err)
 	}
 
 	return decoded, info, nil
@@ -287,9 +295,8 @@ func utf16Encoding(littleEndian bool) encoding.Encoding {
 	return unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM)
 }
 
-// decodeUTF16 decodes BOM-stripped UTF-16 bytes, falling back to the raw bytes
-// if the codec rejects them (a truncated surrogate, say) so a bad guess degrades
-// to the old behaviour instead of failing the read.
+// decodeUTF16 rejects malformed input rather than returning replacement text
+// that an edit could silently persist over the original bytes.
 func decodeUTF16(raw []byte, littleEndian bool, info EncodingInfo) (string, EncodingInfo, error) {
 	if info.UsedSource == "" || info.UsedSource == "bom" {
 		if !info.HasBOM {
@@ -299,17 +306,20 @@ func decodeUTF16(raw []byte, littleEndian bool, info EncodingInfo) (string, Enco
 	info.Confidence = 100
 	decoded, err := decodeBytes(raw, utf16Encoding(littleEndian))
 	if err != nil {
-		info.Charset = "UTF-8"
-		info.HasBOM = false
-		info.UsedSource = "fallback"
-		info.Confidence = 0
-		return string(raw), info, nil
+		return "", info, fmt.Errorf("decoding failed (%s): %w", info.Charset, err)
 	}
 	return decoded, info, nil
 }
 
 // WriteFileWithEncoding converts UTF-8 text back to the original encoding and saves it.
 func WriteFileWithEncoding(path string, content string, info EncodingInfo) error {
+	if !utf8.ValidString(content) {
+		return fmt.Errorf("content is not valid UTF-8")
+	}
+	if strings.EqualFold(strings.TrimSpace(info.Charset), "utf-8-bom") {
+		info.HasBOM = true
+	}
+	info.Charset = normalizeCharsetName(info.Charset)
 	// Preserve original file permissions
 	perm := os.FileMode(0644)
 	if fi, err := os.Stat(path); err == nil {
@@ -342,7 +352,7 @@ func WriteFileWithEncoding(path string, content string, info EncodingInfo) error
 	} else {
 		enc, err := ianaindex.IANA.Encoding(info.Charset)
 		if err != nil || enc == nil {
-			data = []byte(content)
+			return fmt.Errorf("unsupported encoding: %s", info.Charset)
 		} else {
 			encoded, err := encodeString(content, enc)
 			if err != nil {
@@ -523,7 +533,16 @@ func decodeBytes(raw []byte, enc encoding.Encoding) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return string(decoded), nil
+	text := string(decoded)
+	// Decoders may replace malformed input without reporting an error. A genuine
+	// U+FFFD is allowed only when it round-trips to the same source bytes.
+	if strings.ContainsRune(text, utf8.RuneError) {
+		original, encodeErr := encodeString(text, enc)
+		if encodeErr != nil || !bytes.Equal(original, raw) {
+			return "", fmt.Errorf("invalid byte sequence; refusing lossy decoding")
+		}
+	}
+	return text, nil
 }
 
 // encodeString converts a UTF-8 string to bytes in the given encoding.

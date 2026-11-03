@@ -61,12 +61,12 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 
 	// 2nd pass: match after indent conversion (spaces -> tabs or tabs -> spaces)
 	srcStyle := DetectIndentOfString(oldStr)
-	if srcStyle.UseTabs != fileStyle.UseTabs {
+	if srcStyle.UseTabs != fileStyle.UseTabs || srcStyle.IndentSize != fileStyle.IndentSize {
 		convertedOld := ConvertIndent(normalizedOld, srcStyle, fileStyle)
 		convertedNew := ConvertIndent(normalizedNew, srcStyle, fileStyle)
 
-		if strings.Count(norm, convertedOld) > 0 {
-			return applyReplace(m, convertedOld, convertedNew, replaceAll)
+		if countOccurrences(norm, convertedOld, hasLeadingWhitespace(convertedOld)) > 0 {
+			return applySpans(m, convertedOld, convertedNew, hasLeadingWhitespace(convertedOld), replaceAll)
 		}
 	}
 
@@ -75,8 +75,8 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 		convertedOld := SpacesToTabs(normalizedOld, fileStyle.IndentSize)
 		convertedNew := SpacesToTabs(normalizedNew, fileStyle.IndentSize)
 
-		if strings.Count(norm, convertedOld) > 0 {
-			return applyReplace(m, convertedOld, convertedNew, replaceAll)
+		if countOccurrences(norm, convertedOld, hasLeadingWhitespace(convertedOld)) > 0 {
+			return applySpans(m, convertedOld, convertedNew, hasLeadingWhitespace(convertedOld), replaceAll)
 		}
 	}
 
@@ -89,9 +89,9 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 			if convertedOld == normalizedOld {
 				continue // no change, skip
 			}
-			if strings.Count(norm, convertedOld) > 0 {
+			if countOccurrences(norm, convertedOld, hasLeadingWhitespace(convertedOld)) > 0 {
 				convertedNew := SpacesToTabs(normalizedNew, trySize)
-				return applyReplace(m, convertedOld, convertedNew, replaceAll)
+				return applySpans(m, convertedOld, convertedNew, hasLeadingWhitespace(convertedOld), replaceAll)
 			}
 		}
 	}
@@ -100,9 +100,9 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 	if !fileStyle.UseTabs && hasLeadingTabs(normalizedOld) {
 		for _, trySize := range []int{2, 3, 4, 5, 6, 7, 8} {
 			convertedOld := TabsToSpaces(normalizedOld, trySize)
-			if strings.Count(norm, convertedOld) > 0 {
+			if countOccurrences(norm, convertedOld, hasLeadingWhitespace(convertedOld)) > 0 {
 				convertedNew := TabsToSpaces(normalizedNew, trySize)
-				return applyReplace(m, convertedOld, convertedNew, replaceAll)
+				return applySpans(m, convertedOld, convertedNew, hasLeadingWhitespace(convertedOld), replaceAll)
 			}
 		}
 	}
@@ -110,9 +110,15 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 	// 6th pass: tab depth normalization.
 	// Handles the case where both file and old_string use tabs but have different
 	// base indentation depth (e.g. old_string has 2 tabs, file has 3 tabs).
-	// Passes 2-4 only handle tabs<->spaces conversion, not depth differences.
+	// Space-indented anchors are converted first so depth correction preserves
+	// their relative nesting too.
 	// Tries shifting old_string by 0-10 tabs, preserving relative indentation.
-	if fileStyle.UseTabs && hasLeadingTabs(normalizedOld) {
+	depthOld, depthNew := normalizedOld, normalizedNew
+	if fileStyle.UseTabs && !srcStyle.UseTabs && HasLeadingSpaces(normalizedOld) {
+		depthOld = ConvertIndent(normalizedOld, srcStyle, fileStyle)
+		depthNew = ConvertIndent(normalizedNew, srcStyle, fileStyle)
+	}
+	if fileStyle.UseTabs && hasLeadingTabs(depthOld) {
 		// minTabsNew is computed independently from minTabsOld so that tabDelta
 		// captures the relative indent change between old and new. For example,
 		// if old has min 2 tabs and new has min 3 tabs, new is always 1 level
@@ -123,11 +129,11 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 		// among equal ambiguity preferring depth closest to original minTabsOld.
 		// This avoids incorrectly matching outer-scope code when the same snippet
 		// appears at multiple indentation levels.
-		minTabsOld := findMinLeadingTabs(normalizedOld)
-		minTabsNew := findMinLeadingTabs(normalizedNew)
+		minTabsOld := findMinLeadingTabs(depthOld)
+		minTabsNew := findMinLeadingTabs(depthNew)
 		tabDelta := minTabsNew - minTabsOld
-		strippedOld := shiftTabs(normalizedOld, -minTabsOld)
-		strippedNew := shiftTabs(normalizedNew, -minTabsNew)
+		strippedOld := shiftTabs(depthOld, -minTabsOld)
+		strippedNew := shiftTabs(depthNew, -minTabsNew)
 
 		type candidate struct{ baseTabs, count int }
 		var candidates []candidate
@@ -136,7 +142,7 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 				continue // already tried this exact depth in pass 1
 			}
 			shiftedOld := shiftTabs(strippedOld, baseTabs)
-			cnt := strings.Count(norm, shiftedOld)
+			cnt := countOccurrences(norm, shiftedOld, true)
 			if cnt > 0 {
 				candidates = append(candidates, candidate{baseTabs, cnt})
 			}
@@ -161,6 +167,12 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 					}
 				}
 			}
+			for _, c := range candidates {
+				if c.baseTabs != best.baseTabs && (c.count == 1) == (best.count == 1) &&
+					absDist(c.baseTabs, minTabsOld) == absDist(best.baseTabs, minTabsOld) {
+					return ReplaceResult{Message: "old_string matches equally plausible indentation depths; provide more context"}
+				}
+			}
 			shiftedOld := shiftTabs(strippedOld, best.baseTabs)
 			// Clamp newDepth to 0: when new_string is shallower than old_string
 			// (negative tabDelta), the computed depth can go below zero if the
@@ -171,7 +183,7 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 				newDepth = 0
 			}
 			shiftedNew := shiftTabs(strippedNew, newDepth)
-			return applyReplace(m, shiftedOld, shiftedNew, replaceAll)
+			return applyLineStartReplace(m, shiftedOld, shiftedNew, replaceAll)
 		}
 	}
 

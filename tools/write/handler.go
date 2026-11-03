@@ -57,8 +57,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WriteInput) (*m
 		hintCharset := edit.FindEditorConfigCharset(input.FilePath)
 		_, encInfo, err = common.ReadFileWithEncoding(input.FilePath, hintCharset)
 		if err != nil {
-			// Can still write even if read fails (default UTF-8)
-			encInfo = common.EncodingInfo{Charset: "UTF-8"}
+			return errorResult(fmt.Sprintf("cannot preserve existing file encoding: %v", err))
 		}
 	} else {
 		// New file: check .editorconfig charset hint, default to UTF-8
