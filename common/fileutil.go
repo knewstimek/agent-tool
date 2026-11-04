@@ -556,6 +556,10 @@ func normalizeCharsetName(name string) string {
 		return "EUC-KR"
 	case "shift_jis", "shift-jis", "shiftjis", "sjis":
 		return "Shift_JIS"
+	// chardet uses GB-18030; ianaindex requires GB18030. Keep GBK distinct
+	// because this normalization also selects the encoder when writing.
+	case "gb-18030", "gb18030":
+		return "GB18030"
 	case "latin1", "iso-8859-1":
 		return "ISO-8859-1"
 	case "utf-16be":
