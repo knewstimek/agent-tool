@@ -43,6 +43,14 @@ func replaceUniqueIndentedLine(m *common.LineEndingMap, oldText, newText string,
 	if !useTabs && len(actualPrefix) > 0 && len(actualPrefix) < targetWidth {
 		targetWidth = len(actualPrefix)
 	}
+	if !strings.Contains(oldPrefix, "\t") {
+		if width, ok := structuralIndentWidth(newText, -1); ok {
+			sourceWidth = width
+		}
+	}
+	if !useTabs {
+		targetWidth = localIndentWidth(m.Norm, start, targetWidth)
+	}
 	sourceBase := indentColumns(oldPrefix, sourceWidth)
 	targetBase := indentColumns(actualPrefix, targetWidth)
 	// Explicit mixed-prefix alignment is meaningful. Do not reinterpret a
@@ -153,6 +161,9 @@ func replaceUniqueIndentedBlock(m *common.LineEndingMap, oldText, newText string
 		}
 		actualStyle := DetectIndentOfString(m.Norm[start:end])
 		targetWidth := actualStyle.IndentSize
+		if !actualStyle.UseTabs {
+			targetWidth = localIndentWidth(m.Norm, start, targetWidth)
+		}
 		for _, prefix := range prefixes {
 			if strings.Contains(prefix, "\t") {
 				targetWidth = 4

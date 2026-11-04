@@ -206,7 +206,8 @@ remove them.
 LLMs typically output spaces, but many projects use tabs. AgentTool auto-converts indentation to match the file's existing style.
 
 - Inherits `indent_style`, `indent_size`, and `tab_width` per property from parent `.editorconfig` files, respecting `root = true`, `unset`, `indent_size=tab`, and common `**` path patterns
-- Falls back to a content sample of up to 8 MiB, without a fixed line-count cap. Long lines and LF, CRLF, or CR endings are supported; both indent and dedent transitions inform width detection, with deterministic ties
+- Falls back to a content sample of up to 8 MiB, without a fixed line-count cap. Long lines and LF, CRLF, or CR endings are supported. Lexical block-opening evidence takes priority over raw indent/dedent frequencies, reducing confusion with continuation alignment; inconclusive evidence retains the deterministic frequency fallback
+- When recovering unique anchors, new space-indented levels use the nearest block-width evidence within 32 lines and 16 KiB. Lexical state is scanned from the file start within the 8 MiB sample; anchors beyond it retain the previous fallback. Common comments, quoted/raw/triple-quoted literals, and parenthesized/bracketed continuations are excluded from structural evidence. This is a heuristic, not a language parser or semantic formatter
 - Preserves the detected space width when existing space indentation conflicts with a tab setting
 - Converts tabs/spaces and space widths such as 2 ↔ 4; converted matches stay at line boundaries, and tab-depth correction preserves relative nesting
 - Unique line and multiline block anchors use actual local indentation and prefix mappings, preserving minority styles, alignment, and indented blank lines. Block nesting must agree

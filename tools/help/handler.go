@@ -201,8 +201,15 @@ LLMs typically output spaces. agent-tool auto-converts to match the file's style
 - Unique line and block matches use actual local indentation and prefix mappings,
   preserving minority styles, alignment and indented blank lines. Block nesting
   must agree; a different nesting shape is not silently reinterpreted
-- Both indent and dedent transitions inform width detection; equal votes prefer the
-  smaller observed unit. Equally plausible depth matches need more context
+- Lexical block-opening evidence takes priority over raw indent/dedent frequencies.
+  Common comments, strings/raw/triple-quoted literals and bracketed continuations
+  do not supply structural width votes. Inconclusive scans retain the old fallback
+- Unique-anchor recovery uses nearest block-width evidence within 32 lines/16 KiB
+  for new space-indented levels. Lexical state is scanned from the file start within
+  the 8 MiB sample; anchors beyond it keep the fallback. This is a heuristic, not a
+  language parser. Direct exact matches and explicit styles keep their behavior
+- Frequency ties prefer the smaller observed unit. Equally plausible depth matches
+  need more context
 
 ## Explicit override
 The edit tool supports an 'indent_style' parameter:

@@ -217,6 +217,11 @@ func detectIndentFromContent(content string) IndentStyle {
 		return IndentStyle{UseTabs: true, IndentSize: 4}
 	}
 
+	// Prefer lexical block evidence over continuation/alignment deltas.
+	if width, ok := structuralIndentWidth(content, -1); ok {
+		return IndentStyle{IndentSize: width}
+	}
+
 	// Estimate space indentation size
 	indentSize := 4
 	maxCount := 0
