@@ -10,7 +10,7 @@ import (
 // replaceUniqueIndentedLine recovers a single-line anchor whose body occurs
 // exactly once. The actual line supplies its base indentation; a file-wide
 // majority must not rewrite a minority space/tab region.
-func replaceUniqueIndentedLine(m *common.LineEndingMap, oldText, newText string, fileStyle IndentStyle) (ReplaceResult, bool) {
+func replaceUniqueIndentedLine(m *common.LineEndingMap, oldText, newText string, fileStyle IndentStyle, analysis *indentAnalysis) (ReplaceResult, bool) {
 	if !hasLeadingWhitespace(oldText) || strings.Contains(oldText, "\n") {
 		return ReplaceResult{}, false
 	}
@@ -49,7 +49,7 @@ func replaceUniqueIndentedLine(m *common.LineEndingMap, oldText, newText string,
 		}
 	}
 	if !useTabs {
-		targetWidth = localIndentWidth(m.Norm, start, targetWidth)
+		targetWidth = analysis.width(m.Norm, start, targetWidth)
 	}
 	sourceBase := indentColumns(oldPrefix, sourceWidth)
 	targetBase := indentColumns(actualPrefix, targetWidth)
@@ -60,7 +60,7 @@ func replaceUniqueIndentedLine(m *common.LineEndingMap, oldText, newText string,
 		return ReplaceResult{}, false
 	}
 	actualOld := m.Norm[start:end]
-	return applyLineStartReplace(m, actualOld, rebaseIndent(newText, oldPrefix, actualPrefix, sourceWidth, targetWidth, useTabs), false), true
+	return applyLineStartReplace(m, actualOld, analysis.rebase(newText, oldPrefix, actualPrefix, sourceWidth, targetWidth, useTabs), false), true
 }
 
 func rebaseIndent(newText, oldPrefix, actualPrefix string, sourceWidth, targetWidth int, useTabs bool) string {
@@ -96,7 +96,7 @@ func rebaseIndent(newText, oldPrefix, actualPrefix string, sourceWidth, targetWi
 // replaceUniqueIndentedBlock compares complete line bodies and their relative
 // nesting. A different indentation style alone must not make a unique block
 // uneditable; a different nesting shape must not be silently corrected.
-func replaceUniqueIndentedBlock(m *common.LineEndingMap, oldText, newText string, replaceAll bool, fileStyle IndentStyle) (ReplaceResult, bool) {
+func replaceUniqueIndentedBlock(m *common.LineEndingMap, oldText, newText string, replaceAll bool, fileStyle IndentStyle, analysis *indentAnalysis) (ReplaceResult, bool) {
 	if !strings.Contains(oldText, "\n") {
 		return ReplaceResult{}, false
 	}
@@ -162,7 +162,7 @@ func replaceUniqueIndentedBlock(m *common.LineEndingMap, oldText, newText string
 		actualStyle := DetectIndentOfString(m.Norm[start:end])
 		targetWidth := actualStyle.IndentSize
 		if !actualStyle.UseTabs {
-			targetWidth = localIndentWidth(m.Norm, start, targetWidth)
+			targetWidth = analysis.width(m.Norm, start, targetWidth)
 		}
 		for _, prefix := range prefixes {
 			if strings.Contains(prefix, "\t") {
@@ -211,6 +211,7 @@ func replaceUniqueIndentedBlock(m *common.LineEndingMap, oldText, newText string
 			corrected = rebaseIndent(newText, oldBasePrefix, prefixes[0], sourceWidth, targetWidth, actualStyle.UseTabs)
 			corrected, _ = mapBlockIndent(oldLines, prefixes, newText, corrected, sourceWidth, targetWidth)
 		}
+		corrected = analysis.preserveSyntax(newText, corrected, sourceWidth, targetWidth, actualStyle.UseTabs)
 	}
 	if foundStart < 0 {
 		return ReplaceResult{}, false

@@ -208,6 +208,14 @@ LLMs typically output spaces. agent-tool auto-converts to match the file's style
   for new space-indented levels. Lexical state is scanned from the file start within
   the 8 MiB sample; anchors beyond it keep the fallback. This is a heuristic, not a
   language parser. Direct exact matches and explicit styles keep their behavior
+- C++/header and Python recovery lazily reuse embedded Tree-sitter WASM: direct
+  statements in the actual enclosing block supply space-width evidence. No CGO,
+  external compiler/Python installation or index is needed
+- Successfully parsed replacement snippets preserve inline-token alignment and
+  multiline literal/comment interiors; hanging indentation keeps level rescaling
+- Syntax assistance falls back on errors/inconclusive blocks/timeouts or sources
+  over 8 MiB. Each parse has a 2-second budget; snippets are limited to 64 KiB/512
+  lines. A syntax tree is not a semantic-equivalence guarantee
 - Frequency ties prefer the smaller observed unit. Equally plausible depth matches
   need more context
 

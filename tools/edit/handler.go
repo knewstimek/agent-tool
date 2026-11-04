@@ -98,7 +98,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 
 	// Execute replacement (when indent_style is explicitly specified, new_string is also force-converted to fileStyle)
 	forceStyle := input.IndentStyle != ""
-	result := Replace(content, input.OldString, input.NewString, common.FlexBool(input.ReplaceAll), fileStyle, forceStyle)
+	result := ReplaceFile(ctx, input.FilePath, content, input.OldString, input.NewString, common.FlexBool(input.ReplaceAll), fileStyle, forceStyle)
 	if !result.Applied {
 		return errorResult(result.Message)
 	}

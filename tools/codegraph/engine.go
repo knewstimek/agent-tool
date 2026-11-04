@@ -135,7 +135,7 @@ func newEngine(lang string) (*engine, error) {
 	}
 
 	ctx := context.Background()
-	r := wazero.NewRuntime(ctx)
+	r := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
 	wasi_snapshot_preview1.MustInstantiate(ctx, r)
 
 	mod, err := r.Instantiate(ctx, wasmBytes)

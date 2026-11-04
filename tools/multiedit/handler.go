@@ -98,7 +98,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MultiEditInput)
 		if i > 0 && !forceStyle {
 			fileStyle = edit.DetectIndent(input.FilePath, current)
 		}
-		result := edit.Replace(current, op.OldString, op.NewString, common.FlexBool(op.ReplaceAll), fileStyle, forceStyle)
+		result := edit.ReplaceFile(ctx, input.FilePath, current, op.OldString, op.NewString, common.FlexBool(op.ReplaceAll), fileStyle, forceStyle)
 		if !result.Applied {
 			return errorResult(fmt.Sprintf("edits[%d]: %s", i, result.Message))
 		}

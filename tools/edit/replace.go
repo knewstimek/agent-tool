@@ -19,6 +19,10 @@ type ReplaceResult struct {
 // Attempts automatic conversion to match the file's indentation style.
 // If forceStyle is true, newStr's indentation is force-converted to fileStyle even on direct match.
 func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentStyle, forceStyle bool) ReplaceResult {
+	return replaceAnalyzed(content, oldStr, newStr, replaceAll, fileStyle, forceStyle, nil)
+}
+
+func replaceAnalyzed(content, oldStr, newStr string, replaceAll bool, fileStyle IndentStyle, forceStyle bool, analysis *indentAnalysis) ReplaceResult {
 	// Search runs on an LF-normalized view of the file, never on raw bytes.
 	// old_string arrives from JSON with LF newlines, while a file can hold CRLF
 	// in one region and LF in another (a CRLF-era file with later LF-only
@@ -82,10 +86,10 @@ func Replace(content, oldStr, newStr string, replaceAll bool, fileStyle IndentSt
 	// A unique line body gives stronger local evidence than a guessed global
 	// indent unit, especially in files mixing legacy space and tab regions.
 	if !forceStyle {
-		if result, ok := replaceUniqueIndentedLine(m, normalizedOld, normalizedNew, fileStyle); ok {
+		if result, ok := replaceUniqueIndentedLine(m, normalizedOld, normalizedNew, fileStyle, analysis); ok {
 			return result
 		}
-		if result, ok := replaceUniqueIndentedBlock(m, normalizedOld, normalizedNew, replaceAll, fileStyle); ok {
+		if result, ok := replaceUniqueIndentedBlock(m, normalizedOld, normalizedNew, replaceAll, fileStyle, analysis); ok {
 			return result
 		}
 	}

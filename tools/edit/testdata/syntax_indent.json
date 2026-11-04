@@ -1,0 +1,262 @@
+[
+  {
+    "name": "cpp enclosing block beats nearer nested sibling",
+    "path": "sample.cpp",
+    "content": "void f() {\n    if (ready) {\n      inner();\n    }\n    target();\n}\n",
+    "old": "\ttarget();",
+    "replacement": "\tif (fresh) {\n\t\tadded();\n\t}",
+    "want": "void f() {\n    if (ready) {\n      inner();\n    }\n    if (fresh) {\n        added();\n    }\n}\n"
+  },
+  {
+    "name": "python enclosing block beats nearer nested sibling",
+    "path": "sample.py",
+    "content": "def f():\n    if ready:\n      inner()\n    target()\n",
+    "old": "\ttarget()",
+    "replacement": "\tif fresh:\n\t\tadded()",
+    "want": "def f():\n    if ready:\n      inner()\n    if fresh:\n        added()\n"
+  },
+  {
+    "name": "cpp aligned arguments preserve columns",
+    "path": "sample.cpp",
+    "content": "void f() {\n    target();\n}\n",
+    "old": "  target();",
+    "replacement": "  call(first,\n       second);",
+    "want": "void f() {\n    call(first,\n         second);\n}\n"
+  },
+  {
+    "name": "python aligned arguments preserve columns",
+    "path": "sample.py",
+    "content": "def f():\n    target()\n",
+    "old": "  target()",
+    "replacement": "  call(first,\n       second)",
+    "want": "def f():\n    call(first,\n         second)\n"
+  },
+  {
+    "name": "cpp hanging arguments rescale levels",
+    "path": "sample.cpp",
+    "content": "void f() {\n    target();\n}\n",
+    "old": "  target();",
+    "replacement": "  call(\n    first,\n    second);",
+    "want": "void f() {\n    call(\n        first,\n        second);\n}\n"
+  },
+  {
+    "name": "python hanging arguments rescale levels",
+    "path": "sample.py",
+    "content": "def f():\n    target()\n",
+    "old": "  target()",
+    "replacement": "  call(\n    first,\n    second)",
+    "want": "def f():\n    call(\n        first,\n        second)\n"
+  },
+  {
+    "name": "cpp raw string body is content",
+    "path": "sample.cpp",
+    "content": "void f() {\n    target();\n}\n",
+    "old": "  target();",
+    "replacement": "  auto text = R\"tag(\n  keep { this\n)tag\";",
+    "want": "void f() {\n    auto text = R\"tag(\n  keep { this\n)tag\";\n}\n"
+  },
+  {
+    "name": "python triple string body is content",
+    "path": "sample.py",
+    "content": "def f():\n    target()\n",
+    "old": "\ttarget()",
+    "replacement": "\ttext = \"\"\"start\n  keep: this\n\"\"\"",
+    "want": "def f():\n    text = \"\"\"start\n  keep: this\n\"\"\"\n"
+  },
+  {
+    "name": "cpp comments do not supply blocks",
+    "path": "sample.hpp",
+    "content": "void f() {\n    /* if (fake) {\n      fake();\n    } */\n    target();\n}\n",
+    "old": "\ttarget();",
+    "replacement": "\tif (fresh) {\n\t\tadded();\n\t}",
+    "want": "void f() {\n    /* if (fake) {\n      fake();\n    } */\n    if (fresh) {\n        added();\n    }\n}\n"
+  },
+  {
+    "name": "cpp error in different function is isolated",
+    "path": "sample.cpp",
+    "content": "void f() {\n    if (ready) {\n      inner();\n    }\n    target();\n}\nvoid broken( ??? );\n",
+    "old": "\ttarget();",
+    "replacement": "\tif (fresh) {\n\t\tadded();\n\t}",
+    "want": "void f() {\n    if (ready) {\n      inner();\n    }\n    if (fresh) {\n        added();\n    }\n}\nvoid broken( ??? );\n",
+    "allowErrors": true
+  },
+  {
+    "name": "cpp empty inner block uses enclosing level",
+    "path": "sample.cpp",
+    "content": "void f() {\n  if (ready) {\n    target();\n  }\n}\n",
+    "old": "\ttarget();",
+    "replacement": "\tif (fresh) {\n\t\tadded();\n\t}",
+    "want": "void f() {\n  if (ready) {\n    if (fresh) {\n      added();\n    }\n  }\n}\n"
+  },
+  {
+    "name": "python async block and bracketed header",
+    "path": "sample.py",
+    "content": "async def f():\n  if (ready\n      and active):\n    target()\n",
+    "old": "\ttarget()",
+    "replacement": "\tif fresh:\n\t\tadded()",
+    "want": "async def f():\n  if (ready\n      and active):\n    if fresh:\n      added()\n"
+  },
+  {
+    "name": "cpp exact match preserves deliberate spacing",
+    "path": "sample.cpp",
+    "content": "void f() {\n    target();\n}\n",
+    "old": "    target();",
+    "replacement": "    call(first,\n      second);",
+    "want": "void f() {\n    call(first,\n      second);\n}\n"
+  },
+  {
+    "name": "python exact match preserves deliberate spacing",
+    "path": "sample.py",
+    "content": "def f():\n    target()\n",
+    "old": "    target()",
+    "replacement": "    call(first,\n      second)",
+    "want": "def f():\n    call(first,\n      second)\n"
+  },
+  {
+    "name": "unsupported extension retains heuristic",
+    "path": "sample.txt",
+    "content": "void f() {\n    if (ready) {\n      inner();\n    }\n    target();\n}\n",
+    "old": "\ttarget();",
+    "replacement": "\tif (fresh) {\n\t\tadded();\n\t}",
+    "want": "void f() {\n    if (ready) {\n      inner();\n    }\n    if (fresh) {\n      added();\n    }\n}\n",
+    "baselineOnly": true
+  },
+  {
+    "name": "cpp malformed target keeps fallback",
+    "path": "sample.cpp",
+    "content": "void f( {\n    target();\n}\n",
+    "old": "\ttarget();",
+    "replacement": "\tchanged();",
+    "want": "void f( {\n    changed();\n}\n",
+    "baselineOnly": true,
+    "allowErrors": true
+  },
+  {
+    "name": "cpp lambda block has its own width",
+    "path": "sample.cpp",
+    "content": "void f() {\n    auto run = []() {\n      target();\n    };\n}\n",
+    "old": "\ttarget();",
+    "replacement": "\tif (fresh) {\n\t\tadded();\n\t}",
+    "want": "void f() {\n    auto run = []() {\n      if (fresh) {\n        added();\n      }\n    };\n}\n"
+  },
+  {
+    "name": "cpp class method block",
+    "path": "sample.hpp",
+    "content": "class Example {\n  void f() {\n    target();\n  }\n};\n",
+    "old": "\ttarget();",
+    "replacement": "\tif (fresh) {\n\t\tadded();\n\t}",
+    "want": "class Example {\n  void f() {\n    if (fresh) {\n      added();\n    }\n  }\n};\n"
+  },
+  {
+    "name": "cpp multiline raw literal survives prefix mapping",
+    "path": "sample.cpp",
+    "content": "void f() {\n    begin();\n    target();\n}\n",
+    "old": "  begin();\n  target();",
+    "replacement": "  auto text = R\"tag(\n  keep\n)tag\";\n  target();",
+    "want": "void f() {\n    auto text = R\"tag(\n  keep\n)tag\";\n    target();\n}\n"
+  },
+  {
+    "name": "python multiline string survives prefix mapping",
+    "path": "sample.py",
+    "content": "def f():\n    begin()\n    target()\n",
+    "old": "  begin()\n  target()",
+    "replacement": "  text = \"\"\"start\n  keep\n\"\"\"\n  target()",
+    "want": "def f():\n    text = \"\"\"start\n  keep\n\"\"\"\n    target()\n"
+  },
+  {
+    "name": "python f string multiline content",
+    "path": "sample.py",
+    "content": "def f():\n    target()\n",
+    "old": "\ttarget()",
+    "replacement": "\ttext = f\"\"\"start {value}\n  keep {other}\n\"\"\"",
+    "want": "def f():\n    text = f\"\"\"start {value}\n  keep {other}\n\"\"\"\n"
+  },
+  {
+    "name": "python except block",
+    "path": "sample.py",
+    "content": "def f():\n    try:\n        work()\n    except Exception:\n        target()\n",
+    "old": "\ttarget()",
+    "replacement": "\tif fresh:\n\t\tadded()",
+    "want": "def f():\n    try:\n        work()\n    except Exception:\n        if fresh:\n            added()\n"
+  },
+  {
+    "name": "python decorated function",
+    "path": "sample.py",
+    "content": "@decorate\ndef f():\n  target()\n",
+    "old": "\ttarget()",
+    "replacement": "\tif fresh:\n\t\tadded()",
+    "want": "@decorate\ndef f():\n  if fresh:\n    added()\n"
+  },
+  {
+    "name": "cpp call includes literal fake braces",
+    "path": "sample.cpp",
+    "content": "void f() {\n    target();\n}\n",
+    "old": "  target();",
+    "replacement": "  call(\"{( fake\",\n       second);",
+    "want": "void f() {\n    call(\"{( fake\",\n         second);\n}\n"
+  },
+  {
+    "name": "cpp tabs keep inline argument alignment",
+    "path": "sample.cpp",
+    "content": "void f() {\n\ttarget();\n}\n",
+    "old": "  target();",
+    "replacement": "  call(first,\n       second);",
+    "want": "void f() {\n\tcall(first,\n\t\t second);\n}\n"
+  },
+  {
+    "name": "python comment fake colons",
+    "path": "sample.py",
+    "content": "def f():\n    # if fake:\n    #   other:\n    target()\n",
+    "old": "\ttarget()",
+    "replacement": "\tif fresh:\n\t\tadded()",
+    "want": "def f():\n    # if fake:\n    #   other:\n    if fresh:\n        added()\n"
+  },
+  {
+    "name": "cpp macro body remains opaque",
+    "path": "sample.cpp",
+    "content": "#define M() do { \\\n  fake(); \\\n} while (0)\nvoid f() {\n    target();\n}\n",
+    "old": "\ttarget();",
+    "replacement": "\tif (fresh) {\n\t\tadded();\n\t}",
+    "want": "#define M() do { \\\n  fake(); \\\n} while (0)\nvoid f() {\n    if (fresh) {\n        added();\n    }\n}\n"
+  },
+  {
+    "name": "cpp member initializer and function body differ",
+    "path": "sample.cpp",
+    "content": "struct S {\n  S() : first(1),\n        second(2) {\n    target();\n  }\n  int first, second;\n};\n",
+    "old": "\ttarget();",
+    "replacement": "\tif (fresh) {\n\t\tadded();\n\t}",
+    "want": "struct S {\n  S() : first(1),\n        second(2) {\n    if (fresh) {\n      added();\n    }\n  }\n  int first, second;\n};\n"
+  },
+  {
+    "name": "python enclosing block excludes nearby alignment",
+    "path": "sample.py",
+    "content": "def f():\n    call(first,\n         second)\n    target()\n",
+    "old": "\ttarget()",
+    "replacement": "\tif fresh:\n\t\tadded()",
+    "want": "def f():\n    call(first,\n         second)\n    if fresh:\n        added()\n"
+  },
+  {
+    "name": "cpp multiline header",
+    "path": "sample.cpp",
+    "content": "void f(\n    int first,\n    int second)\n{\n  target();\n}\n",
+    "old": "\ttarget();",
+    "replacement": "\tif (fresh) {\n\t\tadded();\n\t}",
+    "want": "void f(\n    int first,\n    int second)\n{\n  if (fresh) {\n    added();\n  }\n}\n"
+  },
+  {
+    "name": "python dictionary inline alignment",
+    "path": "sample.py",
+    "content": "def f():\n    target()\n",
+    "old": "  target()",
+    "replacement": "  value = {\"first\": first,\n           \"second\": second}",
+    "want": "def f():\n    value = {\"first\": first,\n             \"second\": second}\n"
+  },
+  {
+    "name": "cpp UTF8 identifiers keep byte offsets",
+    "path": "sample.cpp",
+    "content": "// 문자열\nvoid f() {\n    const char* 설명 = \"한글\";\n    target();\n}\n",
+    "old": "  target();",
+    "replacement": "  call(first,\n       second);",
+    "want": "// 문자열\nvoid f() {\n    const char* 설명 = \"한글\";\n    call(first,\n         second);\n}\n"
+  }
+]
