@@ -106,7 +106,7 @@ func Register(server *mcp.Server) {
 		Description: `Converts a file's encoding to a different character set.
 Reads the file with auto-detected encoding, then rewrites it in the target encoding.
 from_encoding overrides source detection hints; an existing BOM takes priority.
-Supports: UTF-8, UTF-8-BOM, EUC-KR/CP949, Shift_JIS, ISO-8859-1, UTF-16LE/BE, ASCII, Windows-1252, Big5, GBK, GB18030. GB2312 is accepted as a GBK compatibility alias.
+Supports: UTF-8, UTF-8-BOM, EUC-KR/CP949, Shift_JIS, ISO-8859-1, UTF-16LE/BE, ASCII, Windows-1252, Big5, GBK, GB18030. GB-18030 is an alias for GB18030. GB2312 is accepted as a GBK compatibility alias for both source and target encoding; it does not enforce the smaller GB2312 character repertoire.
 Example: convert EUC-KR file to UTF-8, or add/remove UTF-8 BOM.`,
 	}, Handle)
 }
@@ -137,7 +137,7 @@ func parseTargetEncoding(s string) (string, bool) {
 		return "Big5", false
 	case "gb2312", "gbk":
 		return "GBK", false
-	case "gb18030":
+	case "gb18030", "gb-18030":
 		return "GB18030", false
 	default:
 		return "", false

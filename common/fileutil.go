@@ -207,8 +207,9 @@ func readFileWithEncoding(path string, hintCharset string, includeHash bool) (st
 		return decodeUTF16(raw[len(bomUTF16BE):], false, info)
 	}
 
-	// Empty file
-	if len(raw) == 0 {
+	// An empty file has no encoding evidence. Honor explicit/editorconfig hints
+	// through the normal validation path, including rejection of unknown codecs.
+	if len(raw) == 0 && strings.TrimSpace(hintCharset) == "" {
 		info.UsedSource = "fallback"
 		return "", info, nil
 	}
@@ -560,6 +561,10 @@ func normalizeCharsetName(name string) string {
 	// because this normalization also selects the encoder when writing.
 	case "gb-18030", "gb18030":
 		return "GB18030"
+	// Match convert_encoding: GB2312 is a GBK compatibility alias, not a
+	// promise to restrict output to the smaller GB2312 character repertoire.
+	case "gb2312", "gbk":
+		return "GBK"
 	case "latin1", "iso-8859-1":
 		return "ISO-8859-1"
 	case "utf-16be":

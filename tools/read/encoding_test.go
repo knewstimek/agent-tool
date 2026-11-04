@@ -21,6 +21,8 @@ func TestEncodingOverrideRecovery(t *testing.T) {
 		{"Korean", " EUC-KR ", "\uac00", []byte{0xb0, 0xa1}},
 		{"CP949 extended Korean", "CP949", "\uac02", []byte{0x81, 0x41}},
 		{"Japanese", "Shift_JIS", "\u3042", []byte{0x82, 0xa0}},
+		{"Chinese GB2312 compatibility", " GB2312 ", "\u4e2d\u6587", []byte{0xd6, 0xd0, 0xce, 0xc4}},
+		{"Chinese GB18030 alias", "GB-18030", "\u4e2d\u6587", []byte{0xd6, 0xd0, 0xce, 0xc4}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := t.TempDir()
