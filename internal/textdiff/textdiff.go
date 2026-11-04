@@ -8,13 +8,14 @@ import (
 	"github.com/pmezard/go-difflib/difflib"
 )
 
-// SplitLines splits text into lines after normalizing CRLF terminators. A
+// SplitLines splits text into lines after normalizing CRLF and CR terminators. A
 // trailing terminator does not create a synthetic empty line.
 func SplitLines(s string) []string {
 	if s == "" {
 		return nil
 	}
 	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
 	lines := strings.Split(s, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]

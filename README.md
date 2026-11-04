@@ -228,10 +228,17 @@ Edits preserve the original file encoding instead of forcing UTF-8.
 ### Consistent reads and edit batches
 
 - `read`, `multiread`, `file_info`, `grep`, and `patch` agree on LF, CRLF, and CR line boundaries. A final terminator adds no phantom line; reading past EOF returns no lines.
-- Read hashes come from the same raw bytes as the text. `edit`, `multiedit`, `write`, and `patch` check their captured source hash before saving. `expected_hash` is available on `edit`, `multiedit`, and `patch`.
+- Read hashes come from the same raw bytes as the text. `edit`, `multiedit`, `write`, `patch`, `regexreplace`, and `convert_encoding` check their captured source hash before saving. `expected_hash` is available on `edit`, `multiedit`, and `patch`.
 - `multiedit` supports the same `encoding` and `indent_style` options as `edit`; each replacement sees the previous result, and a failed replacement leaves the whole file unchanged.
 - `multiread` accepts global or per-file `encoding`. Resume the original input list with `start_file_index=next_file_index` and `resume_offset=next_offset` (omit the offset when zero); the current file keeps its original window end, and later files keep their original ranges.
 - Read output budgets are 256–131072 characters. An oversized first line is visibly shortened so paging can advance; raise `max_output_chars` or `max_line_chars` to inspect it in full.
+
+### Conversion and bulk-operation results
+
+- Directory `regexreplace` reports `files_scanned`, `error_count`, `limit_reached`, and `truncated`. The matching-file cap is explicit. Successful files stay changed if another file fails; inspect the partial result and retry only failed files.
+- `diff` accepts `encoding_a`/`encoding_b` and `context_lines=0`. It distinguishes identical decoded text from identical bytes, reports CR/LF placement changes, and separates a missing final newline from other ending changes.
+- `convert_encoding` accepts `from_encoding` for source hints. GBK and GB18030 remain distinct targets; GB2312 is a GBK compatibility alias. Characters unsupported by the chosen target leave the original unchanged.
+- File writes stage a replacement beside the target. If staging or replacement fails, they return an error and do not fall back to truncating the original in place. Close programs locking the target or correct directory permissions before retrying.
 
 ### Token-safe directory listings
 `listdir` defaults to 500 entries per page and returns `next_cursor` when more

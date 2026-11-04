@@ -13,9 +13,10 @@ import (
 )
 
 type ConvertInput struct {
-	FilePath   string `json:"file_path,omitempty" jsonschema:"File to convert. Relative paths use workspace/MCP root"`
-	Path       string `json:"path,omitempty" jsonschema:"Alias for file_path"`
-	ToEncoding string `json:"to_encoding" jsonschema:"Target encoding. Examples: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1"`
+	FromEncoding string `json:"from_encoding,omitempty" jsonschema:"Source charset override, e.g. CP949; overrides .editorconfig, existing BOM takes priority"`
+	FilePath     string `json:"file_path,omitempty" jsonschema:"File to convert. Relative paths use workspace/MCP root"`
+	Path         string `json:"path,omitempty" jsonschema:"Alias for file_path"`
+	ToEncoding   string `json:"to_encoding" jsonschema:"Target encoding. Examples: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1"`
 }
 
 type ConvertOutput struct {
@@ -42,7 +43,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConvertInput) (
 	// Parse target encoding
 	targetCharset, targetBOM := parseTargetEncoding(input.ToEncoding)
 	if targetCharset == "" {
-		return errorResult(fmt.Sprintf("unsupported encoding: %s\nSupported: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1, UTF-16BE, UTF-16LE, ASCII, Windows-1252, Big5, GB18030", input.ToEncoding))
+		return errorResult(fmt.Sprintf("unsupported encoding: %s\nSupported: UTF-8, UTF-8-BOM, EUC-KR/CP949, Shift_JIS, ISO-8859-1, UTF-16BE, UTF-16LE, ASCII, Windows-1252, Big5, GBK, GB18030", input.ToEncoding))
 	}
 
 	// Check file existence
@@ -59,7 +60,10 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConvertInput) (
 
 	// Read source file (auto-detect current encoding)
 	hintCharset := edit.FindEditorConfigCharset(input.FilePath)
-	content, srcInfo, err := common.ReadFileWithEncoding(input.FilePath, hintCharset)
+	if from := strings.TrimSpace(input.FromEncoding); from != "" {
+		hintCharset = from
+	}
+	content, srcInfo, err := common.ReadFileWithEncodingHash(input.FilePath, hintCharset)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err))
 	}
@@ -74,8 +78,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConvertInput) (
 
 	// Write with target encoding
 	dstInfo := common.EncodingInfo{
-		Charset: targetCharset,
-		HasBOM:  targetBOM,
+		Charset:   targetCharset,
+		HasBOM:    targetBOM,
+		RawSHA256: srcInfo.RawSHA256,
 	}
 
 	srcName := formatEncName(srcInfo.Charset, srcInfo.HasBOM)
@@ -84,7 +89,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ConvertInput) (
 	if err := common.WriteFileWithEncoding(input.FilePath, content, dstInfo); err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "rune not supported") {
-			return errorResult(fmt.Sprintf("conversion failed: file contains characters that cannot be represented in %s (e.g. special Unicode symbols like em-dash, emoji). Remove or replace unsupported characters first.", dstName))
+			return errorResult(fmt.Sprintf("conversion failed: file contains characters that cannot be represented in %s (e.g. emoji). Choose a charset that supports them, such as UTF-8 or GB18030, or replace those characters. The original file was not changed.", dstName))
 		}
 		return errorResult(fmt.Sprintf("failed to write file: %v", err))
 	}
@@ -100,7 +105,8 @@ func Register(server *mcp.Server) {
 		Name: "convert_encoding",
 		Description: `Converts a file's encoding to a different character set.
 Reads the file with auto-detected encoding, then rewrites it in the target encoding.
-Supports: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1, UTF-16, ASCII, Windows-1252, Big5, GB18030.
+from_encoding overrides source detection hints; an existing BOM takes priority.
+Supports: UTF-8, UTF-8-BOM, EUC-KR/CP949, Shift_JIS, ISO-8859-1, UTF-16LE/BE, ASCII, Windows-1252, Big5, GBK, GB18030. GB2312 is accepted as a GBK compatibility alias.
 Example: convert EUC-KR file to UTF-8, or add/remove UTF-8 BOM.`,
 	}, Handle)
 }
@@ -113,7 +119,7 @@ func parseTargetEncoding(s string) (string, bool) {
 		return "UTF-8", false
 	case "utf-8-bom", "utf8-bom", "utf-8 bom":
 		return "UTF-8", true
-	case "euc-kr", "euckr":
+	case "euc-kr", "euckr", "cp949", "windows-949", "uhc":
 		return "EUC-KR", false
 	case "shift_jis", "shift-jis", "shiftjis", "sjis":
 		return "Shift_JIS", false
@@ -129,7 +135,9 @@ func parseTargetEncoding(s string) (string, bool) {
 		return "Windows-1252", false
 	case "big5":
 		return "Big5", false
-	case "gb2312", "gbk", "gb18030":
+	case "gb2312", "gbk":
+		return "GBK", false
+	case "gb18030":
 		return "GB18030", false
 	default:
 		return "", false

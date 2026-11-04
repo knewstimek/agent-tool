@@ -89,7 +89,7 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - grep: Encoding-aware regex content search
 - glob: File pattern matching with ** recursive support
 - listdir: Bounded/pageable directory listing with type, name, and counts-only filters
-- convert_encoding: Convert file encoding (EUC-KR ↔ UTF-8, BOM, etc.)
+- convert_encoding: Convert file encoding (EUC-KR/CP949 ↔ UTF-8, BOM, GBK/GB18030, etc.)
 - checksum: Compute file hash (md5, sha1, sha256)
 - file_info: File metadata (size, encoding, mixed line-ending counts, indentation, line count)
 - diff: Compare two files (unified diff output)
@@ -317,7 +317,9 @@ truncated, has_more, next_cursor
 ## convert_encoding
 Convert a file's encoding to a different character set.
 Supports: UTF-8, UTF-8-BOM, EUC-KR, Shift_JIS, ISO-8859-1, UTF-16, ASCII, Windows-1252, Big5, GB18030.
-Parameters: file_path, to_encoding
+Parameters: file_path, to_encoding, from_encoding (optional source charset override).
+GBK is distinct from GB18030; GB2312 is a compatibility alias for GBK.
+Unsupported target characters return an error and leave original bytes unchanged.
 
 ## checksum
 Compute file hash checksum. Reads raw bytes (no encoding conversion).
@@ -326,20 +328,22 @@ Parameters: file_path, algorithm (md5, sha1, sha256; default sha256)
 ## file_info
 Returns detailed file metadata: size, encoding, line ending, indentation, line count.
 Mixed newlines are reported with separate CRLF, LF, and CR counts.
-Parameters: file_path
+Parameters: file_path, encoding
 
 ## diff
 Compare two files and output unified diff. Encoding-aware.
 Lines are compared with their endings normalized, so files differing only in
 line endings report that explicitly instead of an empty diff.
-Parameters: file_a, file_b, context_lines (default 3)
+Parameters: file_a, file_b, encoding_a, encoding_b, context_lines (default 3; 0 for none).
+Identical decoded text with different encoding/BOM bytes is reported separately.
+CR/LF placement and missing-final-newline differences are distinct.
 
 ## patch
 Apply unified diff patch to a file. Verifies context lines before applying.
 Each line keeps its own ending, so a file mixing CRLF and LF is not rewritten,
 and a file without a trailing newline does not gain one. Lines the patch adds
 take the ending of the line they replace.
-Parameters: file_path, patch, dry_run
+Parameters: file_path, patch, dry_run, encoding, expected_hash
 
 ## delete
 Delete one file/directory, or up to 100 targets with file_paths. Do not combine
@@ -480,6 +484,10 @@ encoding, start_file_index, resume_offset
 
 ## regexreplace
 Regex find-and-replace in files or across directories.
+Directory work is per-file, not an all-or-nothing transaction. Partial failures
+report error_count and bounded ERROR samples; successful changes are retained.
+max_files caps matching files, with limit_reached=true when that cap is reached.
+Use encoding to override the source charset; retry only failed files after a partial result.
 Supports capture groups ($1, $2, ${name}) in replacement strings.
 Encoding-aware: preserves original file encoding.
 Replacement newlines follow the newline style of the region each match sits in,
@@ -492,7 +500,9 @@ not match. When nothing matches, the result says how many scanned files use CRLF
 Skips binary files by extension and NUL-byte content sniff, so an on-disk
 index or compiled artifact is never rewritten.
 Atomic write for each modified file.
-Parameters: pattern, replacement, path (file or directory), glob, ignore_case, dry_run, max_files (default 100)
+Parameters: pattern, replacement, path (file or directory), glob, ignore_case, dry_run,
+encoding, max_files (default 100 matching files). Reports files_scanned,
+error_count, limit_reached and truncated. ERROR samples are bounded.
 
 ## query
 Read one value from a JSON, YAML or TOML file by a dot-notation path, without loading the file into context.

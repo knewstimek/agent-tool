@@ -425,8 +425,7 @@ func WriteFileWithEncoding(path string, content string, info EncodingInfo) error
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".agent-tool-*.tmp")
 	if err != nil {
-		// Fall back to direct write if temp file creation fails
-		return os.WriteFile(path, data, perm)
+		return fmt.Errorf("cannot stage atomic write; original left unchanged: %w", err)
 	}
 	tmpName := tmp.Name()
 
@@ -441,13 +440,15 @@ func WriteFileWithEncoding(path string, content string, info EncodingInfo) error
 	}
 
 	// Set permissions
-	os.Chmod(tmpName, perm)
+	if err := os.Chmod(tmpName, perm); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("cannot preserve file mode; original left unchanged: %w", err)
+	}
 
 	// Atomic rename (atomic if on the same filesystem)
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
-		// Fall back to direct write if rename fails (e.g. cross-drive)
-		return os.WriteFile(path, data, perm)
+		return fmt.Errorf("cannot atomically replace file; original left unchanged (close programs locking the file or check directory permissions): %w", err)
 	}
 	return nil
 }

@@ -22,6 +22,7 @@ import (
 var errMaxFiles = errors.New("max files reached")
 
 type RegexReplaceInput struct {
+	Encoding    string      `json:"encoding,omitempty" jsonschema:"Source charset override; overrides .editorconfig, BOM takes priority"`
 	Pattern     string      `json:"pattern" jsonschema:"Regular expression pattern to search for"`
 	Replacement string      `json:"replacement" jsonschema:"Replacement string. Supports $1, $2 capture groups"`
 	Path        string      `json:"path,omitempty" jsonschema:"Absolute or workspace-relative file or directory to process"`
@@ -29,12 +30,16 @@ type RegexReplaceInput struct {
 	Glob        string      `json:"glob,omitempty" jsonschema:"Glob pattern to filter files when path is a directory (e.g. *.go). Only used when path is a directory"`
 	IgnoreCase  interface{} `json:"ignore_case,omitempty" jsonschema:"Case insensitive search: true or false. Default: false"`
 	DryRun      interface{} `json:"dry_run,omitempty" jsonschema:"Preview changes without modifying files: true or false. Default: false"`
-	MaxFiles    interface{} `json:"max_files,omitempty" jsonschema:"Maximum number of files to process in directory mode. Default: 100"`
+	MaxFiles    interface{} `json:"max_files,omitempty" jsonschema:"Maximum matching files to change or preview in directory mode; reaching it is reported. Default: 100"`
 }
 
 type RegexReplaceOutput struct {
-	FilesChanged      int `json:"files_changed"`
-	TotalReplacements int `json:"total_replacements"`
+	FilesScanned      int  `json:"files_scanned"`
+	ErrorCount        int  `json:"error_count"`
+	LimitReached      bool `json:"limit_reached"`
+	Truncated         bool `json:"truncated"`
+	FilesChanged      int  `json:"files_changed"`
+	TotalReplacements int  `json:"total_replacements"`
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input RegexReplaceInput) (*mcp.CallToolResult, RegexReplaceOutput, error) {
@@ -77,6 +82,11 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RegexReplaceInp
 		}
 		return errorResult(fmt.Sprintf("cannot access path: %v", err))
 	}
+	if fi.IsDir() && input.Glob != "" {
+		if _, err := filepath.Match(input.Glob, "probe"); err != nil {
+			return errorResult(fmt.Sprintf("invalid glob pattern: %v", err))
+		}
+	}
 
 	var results []fileResult
 	// Counted while scanning so a "no matches" answer can point at the real
@@ -84,9 +94,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RegexReplaceInp
 	stats := &scanStats{}
 
 	if fi.IsDir() {
-		results, err = processDir(input.Path, input.Glob, re, input.Replacement, dryRun, maxFiles, stats)
+		results, err = processDir(input.Path, input.Glob, re, input.Replacement, dryRun, maxFiles, stats, input.Encoding)
 	} else {
-		result, singleErr := processFile(input.Path, re, input.Replacement, dryRun, stats)
+		result, singleErr := processFile(input.Path, re, input.Replacement, dryRun, stats, input.Encoding)
 		if singleErr != nil {
 			return errorResult(fmt.Sprintf("failed to process file: %v", singleErr))
 		}
@@ -101,6 +111,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RegexReplaceInp
 
 	// Build summary
 	var sb strings.Builder
+	usedChars := 0
+	reportTruncated := stats.errorCount > len(stats.errors) || stats.detailsTruncated
+	appendReport := func(text string) {
+		if !common.AppendWithinRuneBudget(&sb, &usedChars, text, common.DefaultOutputChars-2048) {
+			reportTruncated = true
+		}
+	}
 	totalReplacements := 0
 	filesChanged := 0
 
@@ -108,21 +125,24 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RegexReplaceInp
 		filesChanged++
 		totalReplacements += r.count
 		if dryRun {
-			sb.WriteString(fmt.Sprintf("[DRY RUN] %s: %d replacement(s)\n", r.path, r.count))
+			appendReport(fmt.Sprintf("[DRY RUN] %s: %d replacement(s)\n", r.path, r.count))
 			// Show up to 3 preview lines
 			for i, preview := range r.previews {
 				if i >= 3 {
-					sb.WriteString(fmt.Sprintf("  ... and %d more\n", len(r.previews)-3))
+					appendReport(fmt.Sprintf("  ... and %d more\n", len(r.previews)-3))
 					break
 				}
-				sb.WriteString(fmt.Sprintf("  %s\n", preview))
+				appendReport(fmt.Sprintf("  %s\n", preview))
 			}
 		} else {
-			sb.WriteString(fmt.Sprintf("%s: %d replacement(s)\n", r.path, r.count))
+			appendReport(fmt.Sprintf("%s: %d replacement(s)\n", r.path, r.count))
 		}
 	}
 
-	if filesChanged == 0 {
+	for _, message := range stats.errors {
+		appendReport(message + "\n")
+	}
+	if filesChanged == 0 && stats.errorCount == 0 {
 		sb.WriteString("No matches found")
 		sb.WriteString(crlfHint(input.Pattern, stats))
 	} else {
@@ -130,7 +150,14 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RegexReplaceInp
 		if dryRun {
 			action = "Would change"
 		}
+		if stats.errorCount > 0 {
+			sb.WriteString("\nPARTIAL: ")
+		}
 		sb.WriteString(fmt.Sprintf("\n%s %d file(s), %d total replacement(s)", action, filesChanged, totalReplacements))
+	}
+	sb.WriteString(fmt.Sprintf("\n[regexreplace: files_scanned=%d; errors=%d; limit_reached=%t; truncated=%t]", stats.filesScanned, stats.errorCount, stats.limitReached, reportTruncated))
+	if stats.errorCount > len(stats.errors) {
+		sb.WriteString(fmt.Sprintf("\n%d additional file error(s) omitted", stats.errorCount-len(stats.errors)))
 	}
 
 	// The replacement is agent-authored text heading for disk, same as an edit's
@@ -138,9 +165,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input RegexReplaceInp
 	// here it is written across many files at once.
 	sb.WriteString(common.TextGuardNotice(input.Replacement))
 
+	message, finalTruncated := common.TruncateRunes(sb.String(), common.DefaultOutputChars, "\n[truncated=true; narrow the path or glob for full file reports]")
 	return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+			Content: []mcp.Content{&mcp.TextContent{Text: message}},
+			IsError: filesChanged == 0 && stats.errorCount > 0,
 		}, RegexReplaceOutput{
+			FilesScanned: stats.filesScanned, ErrorCount: stats.errorCount, LimitReached: stats.limitReached, Truncated: reportTruncated || finalTruncated,
 			FilesChanged:      filesChanged,
 			TotalReplacements: totalReplacements,
 		}, nil
@@ -203,8 +233,21 @@ func requiresCR(re *syntax.Regexp) bool {
 // scanStats records what the scan saw, so a "no matches" answer can be
 // explained with evidence instead of a guess.
 type scanStats struct {
-	filesScanned int
-	crlfFiles    int
+	filesScanned     int
+	crlfFiles        int
+	errorCount       int
+	errors           []string
+	limitReached     bool
+	detailsTruncated bool
+}
+
+func (s *scanStats) fileError(path string, err error) {
+	s.errorCount++
+	if len(s.errors) < 8 {
+		message, cut := common.TruncateRunes(fmt.Sprintf("ERROR: %s: %v", path, err), 1024, "…")
+		s.detailsTruncated = s.detailsTruncated || cut
+		s.errors = append(s.errors, message)
+	}
 }
 
 // crlfHint explains a miss that is really a line-ending mismatch. The pattern
@@ -237,9 +280,12 @@ type fileResult struct {
 
 // processFile applies regex replacement on a single file.
 // Returns nil result if no matches found.
-func processFile(path string, re *regexp.Regexp, replacement string, dryRun bool, stats *scanStats) (*fileResult, error) {
+func processFile(path string, re *regexp.Regexp, replacement string, dryRun bool, stats *scanStats, encoding string) (*fileResult, error) {
 	hintCharset := edit.FindEditorConfigCharset(path)
-	content, encInfo, err := common.ReadFileWithEncoding(path, hintCharset)
+	if override := strings.TrimSpace(encoding); override != "" {
+		hintCharset = override
+	}
+	content, encInfo, err := common.ReadFileWithEncodingHash(path, hintCharset)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +295,28 @@ func processFile(path string, re *regexp.Regexp, replacement string, dryRun bool
 			stats.crlfFiles++
 		}
 	}
-
+	// Standard replacement handles captures and zero-width matches without
+	// collecting one index slice per match. No literal replacement newline means
+	// there is no per-region normalization to perform.
+	if !strings.ContainsAny(replacement, "\r\n") {
+		if re.FindStringIndex(content) == nil {
+			return nil, nil
+		}
+		count := 0
+		re.ReplaceAllStringFunc(content, func(string) string { count++; return "" })
+		result := &fileResult{path: path, count: count}
+		if dryRun {
+			for _, mi := range re.FindAllStringSubmatchIndex(content, 5) {
+				expanded := string(re.ExpandString(nil, replacement, content, mi))
+				result.previews = append(result.previews, replacementPreview(content[mi[0]:mi[1]], expanded))
+			}
+			return result, nil
+		}
+		if err := common.WriteFileWithEncoding(path, re.ReplaceAllString(content, replacement), encInfo); err != nil {
+			return nil, fmt.Errorf("failed to write %s: %w", path, err)
+		}
+		return result, nil
+	}
 	// Submatch indices, not just match text: the replacement's line endings are
 	// decided per match position, and $1 expansion needs the capture offsets.
 	matches := re.FindAllStringSubmatchIndex(content, -1)
@@ -297,7 +364,7 @@ func processFile(path string, re *regexp.Regexp, replacement string, dryRun bool
 		if dryRun {
 			// Preview the first few matches exactly as they would be written.
 			if i < 5 {
-				result.previews = append(result.previews, fmt.Sprintf("%q -> %q", content[mi[0]:mi[1]], expanded))
+				result.previews = append(result.previews, replacementPreview(content[mi[0]:mi[1]], expanded))
 			}
 			continue
 		}
@@ -318,8 +385,14 @@ func processFile(path string, re *regexp.Regexp, replacement string, dryRun bool
 	return result, nil
 }
 
+func replacementPreview(before, after string) string {
+	before, _ = common.TruncateRunes(before, 200, "…")
+	after, _ = common.TruncateRunes(after, 200, "…")
+	return fmt.Sprintf("%q -> %q", before, after)
+}
+
 // processDir walks a directory and applies regex replacement to matching files.
-func processDir(dir, globPattern string, re *regexp.Regexp, replacement string, dryRun bool, maxFiles int, stats *scanStats) ([]fileResult, error) {
+func processDir(dir, globPattern string, re *regexp.Regexp, replacement string, dryRun bool, maxFiles int, stats *scanStats, encoding string) ([]fileResult, error) {
 	var results []fileResult
 	filesProcessed := 0
 
@@ -327,7 +400,8 @@ func processDir(dir, globPattern string, re *regexp.Regexp, replacement string, 
 	// (unlike filepath.Walk which follows symlinks and hides them).
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip inaccessible files
+			stats.fileError(path, err)
+			return nil
 		}
 
 		// Skip symlinks to prevent symlink-based traversal attacks
@@ -340,7 +414,7 @@ func processDir(dir, globPattern string, re *regexp.Regexp, replacement string, 
 
 		if d.IsDir() {
 			// Skip hidden directories (.git, etc.)
-			if strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
+			if path != dir && strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
 				return filepath.SkipDir
 			}
 			return nil
@@ -361,14 +435,16 @@ func processDir(dir, globPattern string, re *regexp.Regexp, replacement string, 
 			return nil
 		}
 
-		result, err := processFile(path, re, replacement, dryRun, stats)
+		result, err := processFile(path, re, replacement, dryRun, stats, encoding)
 		if err != nil {
-			return nil // skip files that fail
+			stats.fileError(path, err)
+			return nil
 		}
 		if result != nil {
 			results = append(results, *result)
 			filesProcessed++
 			if filesProcessed >= maxFiles {
+				stats.limitReached = true
 				return errMaxFiles
 			}
 		}
@@ -386,10 +462,12 @@ func Register(server *mcp.Server) {
 		Name: "regexreplace",
 		Description: `Performs regex find-and-replace across files.
 Encoding-aware: preserves original file encoding.
+encoding overrides source charset hints; existing BOMs take priority.
 Replacement newlines follow the newline style of the region each match sits in, so mixed CRLF/LF files stay intact.
 Exception: converting line endings on purpose (pattern "\r\n" -> "\n", or a replacement containing \r) writes the replacement verbatim.
 The pattern is matched against decoded text WITHOUT newline normalization: use \r?\n for a line break and \r?$ with (?m) for end-of-line, or a CRLF file will not match.
 Supports single file or recursive directory mode with glob filtering.
+Directory work is per-file: reports partial failures, scan counts and limit_reached. Successful changes remain when another file fails; retry only failed files.
 Supports capture group replacement ($1, $2, ${name}).
 Skips binary files. Use dry_run=true to preview changes.`,
 	}, Handle)

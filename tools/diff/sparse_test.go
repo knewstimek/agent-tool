@@ -37,7 +37,7 @@ func TestHandleLargeSparseInsertionsAreNotExpanded(t *testing.T) {
 	}
 
 	result, output, err := Handle(context.Background(), nil, DiffInput{
-		FileA: pathA, FileB: pathB, ContextLines: 1, MaxOutputChars: 131072,
+		FileA: pathA, FileB: pathB, ContextLines: contextPtr(1), MaxOutputChars: 131072,
 	})
 	if err != nil || result.IsError {
 		t.Fatalf("diff failed: err=%v result=%+v", err, result)

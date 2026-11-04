@@ -227,10 +227,17 @@ UTF-8로 강제 변환하지 않고, 원본 파일 인코딩을 유지합니다.
 ### 일관된 읽기와 묶음 편집
 
 - `read`, `multiread`, `file_info`, `grep`, `patch`가 LF·CRLF·CR 줄 경계를 동일하게 처리. 끝 개행은 가짜 줄을 만들지 않으며, EOF 뒤를 읽으면 0줄 반환.
-- 읽기 해시는 표시한 텍스트와 같은 원본 바이트에서 계산. `edit`, `multiedit`, `write`, `patch`는 저장 전에 읽었던 원본의 해시를 다시 확인. `expected_hash`는 `edit`, `multiedit`, `patch`에서 지정 가능.
+- 읽기 해시는 표시한 텍스트와 같은 원본 바이트에서 계산. `edit`, `multiedit`, `write`, `patch`, `regexreplace`, `convert_encoding`은 저장 전에 읽었던 원본의 해시를 다시 확인. `expected_hash`는 `edit`, `multiedit`, `patch`에서 지정 가능.
 - `multiedit`도 `edit`과 같은 `encoding`·`indent_style` 옵션 지원. 각 치환은 앞선 결과를 대상으로 하며, 중간 치환 실패 시 파일 전체를 그대로 유지.
 - `multiread`는 전역·파일별 `encoding` 지원. 원래 입력 목록에 `start_file_index=next_file_index`, `resume_offset=next_offset`을 지정해 이어 읽기(오프셋이 0이면 생략). 현재 파일의 최초 요청 끝과 뒤쪽 파일의 원래 요청 범위 유지.
 - 읽기 출력 예산은 256~131072자. 첫 줄이 예산보다 길면 잘렸음을 표시하고 다음 줄로 진행하며, 전체 줄을 보려면 `max_output_chars` 또는 `max_line_chars` 확대.
+
+### 변환과 대량 처리 결과
+
+- 디렉토리 `regexreplace`는 `files_scanned`, `error_count`, `limit_reached`, `truncated`로 결과와 일치 파일 한도를 명시. 다른 파일이 실패해도 성공한 변경은 유지되므로 부분 결과를 확인하고 실패한 파일만 재시도.
+- `diff`는 `encoding_a`·`encoding_b`와 `context_lines=0` 지원. 해석된 텍스트가 같은 경우와 원본 바이트가 같은 경우를 구분하며, CR·LF 배치 차이와 마지막 개행 누락도 따로 표시.
+- `convert_encoding`의 `from_encoding`으로 원본 인코딩 지정 가능. GBK와 GB18030은 서로 다른 대상이며 GB2312는 GBK 호환 별칭. 대상 인코딩이 표현하지 못하는 문자가 있으면 원본 유지.
+- 파일 쓰기는 대상 옆에 교체 파일을 준비. 준비·교체 실패 시 원본을 직접 잘라 쓰는 방식으로 우회하지 않고 오류 반환. 대상을 잠근 프로그램을 닫거나 디렉토리 권한을 확인한 후 재시도.
 
 ### 토큰을 보호하는 디렉토리 목록
 `listdir`는 기본적으로 페이지당 500개까지만 반환하고, 항목이 더 있으면
