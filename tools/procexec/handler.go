@@ -152,11 +152,15 @@ func execForeground(ctx context.Context, input ProcExecInput, timeoutSec int) (*
 	err := cmd.Run()
 
 	exitCode := 0
+	if execCtx.Err() == context.DeadlineExceeded {
+		return errorResult(fmt.Sprintf("process timed out after %d seconds", timeoutSec))
+	}
+	if execCtx.Err() != nil {
+		return errorResult(fmt.Sprintf("process canceled: %v", execCtx.Err()))
+	}
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
-		} else if execCtx.Err() == context.DeadlineExceeded {
-			return errorResult(fmt.Sprintf("process timed out after %d seconds", timeoutSec))
 		} else {
 			return errorResult(fmt.Sprintf("failed to execute: %v", err))
 		}

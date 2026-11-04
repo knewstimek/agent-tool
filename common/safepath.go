@@ -36,7 +36,7 @@ func CheckDangerousPath(cleaned string) error {
 	}
 
 	for _, prefix := range blocked {
-		if strings.HasPrefix(normalized, prefix) {
+		if normalized == strings.TrimSuffix(prefix, "/") || strings.HasPrefix(normalized, prefix) {
 			return fmt.Errorf("operation on system path is not allowed: %s", cleaned)
 		}
 	}

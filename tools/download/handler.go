@@ -175,13 +175,27 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DownloadInput) 
 		return errorResult(fmt.Sprintf("download exceeds maximum size (%d MB)", input.MaxSizeMB))
 	}
 
-	tmpFile.Close()
-
-	// Atomic rename
-	if err := os.Rename(tmpPath, input.OutputPath); err != nil {
-		return errorResult(fmt.Sprintf("save file: %v", err))
+	if err := tmpFile.Close(); err != nil {
+		return errorResult(fmt.Sprintf("close downloaded file: %v", err))
 	}
-	renamed = true
+
+	if common.FlexBool(input.Overwrite) {
+		if err := os.Rename(tmpPath, input.OutputPath); err != nil {
+			return errorResult(fmt.Sprintf("save file: %v", err))
+		}
+		renamed = true
+	} else {
+		// Publish the completed file without replacing a destination created
+		// while the HTTP request was in flight. Link is atomic and fails if
+		// any destination entry already exists; the deferred cleanup unlinks
+		// only our staging name after success. Never fall back to overwrite.
+		if err := os.Link(tmpPath, input.OutputPath); err != nil {
+			if os.IsExist(err) {
+				return errorResult("destination appeared during download; original file was preserved (use overwrite=true to replace)")
+			}
+			return errorResult(fmt.Sprintf("save file without overwriting (requires hard-link support): %v", err))
+		}
+	}
 
 	// Format result
 	ct := resp.Header.Get("Content-Type")

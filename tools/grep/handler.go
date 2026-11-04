@@ -657,7 +657,11 @@ func searchDir(dir, globPattern string, re *regexp.Regexp, maxResults int, opts 
 			probeOpts.before, probeOpts.after = 0, 0
 			probeOpts.maxOutputChars = common.HardOutputChars
 			probe, probeErr := searchFile(path, re, 1, probeOpts)
-			if probeErr == nil && probe.matchCount > 0 {
+			if probeErr != nil {
+				result.skippedUnreadable++
+				return nil
+			}
+			if probe.matchCount > 0 {
 				result.hasMore = true
 				return errMaxResults
 			}

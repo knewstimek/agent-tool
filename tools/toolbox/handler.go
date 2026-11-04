@@ -46,6 +46,25 @@ type Input struct {
 	SchemaHandle   string         `json:"schema_handle,omitempty" jsonschema:"Prior handle; short acknowledgement if unchanged"`
 }
 
+// UnmarshalJSON preserves nested integer arguments when the gateway itself is
+// decoded by SafeAddTool, before it forwards them to the target's validation.
+func (input *Input) UnmarshalJSON(data []byte) error {
+	type plain Input
+	envelope := struct {
+		*plain
+		Arguments json.RawMessage `json:"arguments"`
+	}{plain: (*plain)(input)}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	if len(envelope.Arguments) > 0 {
+		var err error
+		input.Arguments, err = common.DecodeToolArguments(envelope.Arguments)
+		return err
+	}
+	return nil
+}
+
 type Output struct {
 	Result       string   `json:"result"`
 	Active       []string `json:"active"`

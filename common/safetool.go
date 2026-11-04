@@ -136,7 +136,9 @@ func SafeAddTool[In, Out any](s *mcp.Server, t *mcp.Tool, h mcp.ToolHandlerFor[I
 		// Apply defaults and validate against schema.
 		var v map[string]any
 		if len(args) > 0 {
-			if err := json.Unmarshal(args, &v); err != nil {
+			var err error
+			v, err = DecodeToolArguments(args)
+			if err != nil {
 				return toolError(fmt.Sprintf("invalid arguments: %v", err)), nil
 			}
 		} else {
@@ -361,6 +363,11 @@ func coerceIntProperties(data json.RawMessage, intProps map[string]bool) json.Ra
 		}
 		// Try parsing as integer (base 0 = auto-detect: decimal, hex, octal)
 		if n, err := strconv.ParseInt(s, 0, 64); err == nil {
+			if b, err := json.Marshal(n); err == nil {
+				m[key] = b
+				changed = true
+			}
+		} else if n, err := strconv.ParseUint(s, 0, 64); err == nil {
 			if b, err := json.Marshal(n); err == nil {
 				m[key] = b
 				changed = true
