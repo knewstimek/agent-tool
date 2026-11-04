@@ -40,7 +40,7 @@ func ParseSyntaxTree(ctx context.Context, language, source string) (tree *Syntax
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	e, err := getEngine(language)
+	e, err := getEngineContext(ctx, language)
 	if err != nil {
 		return nil, err
 	}

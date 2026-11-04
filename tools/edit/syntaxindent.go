@@ -27,10 +27,10 @@ func ReplaceFile(ctx context.Context, path, content, oldText, newText string, al
 }
 
 type indentAnalysis struct {
-	ctx          context.Context
-	lang, source string
-	parsed       bool
-	tree         *codegraph.SyntaxTree
+	ctx    context.Context
+	lang   string
+	parsed bool
+	tree   *codegraph.SyntaxTree
 }
 
 func (a *indentAnalysis) parse(source string) *codegraph.SyntaxTree {
@@ -60,7 +60,6 @@ func (a *indentAnalysis) width(source string, anchor, fallback int) int {
 		return localIndentWidth(source, anchor, fallback)
 	}
 	if !a.parsed {
-		a.source = source
 		a.tree = a.parse(source)
 		a.parsed = true
 	}
@@ -198,8 +197,13 @@ func (a *indentAnalysis) preserveSyntax(newText, fallback string, sourceWidth, t
 					for c := n.FirstChild; c >= 0; c = tree.Nodes[c].NextSibling {
 						child := tree.Nodes[c]
 						if child.Named && child.Type != "comment" && child.StartByte > n.StartByte && child.StartByte < lineStarts[openLine]+len(input[openLine]) {
-							hasInlineChild = true
-							break
+							// An inline argument alone does not prove alignment:
+							// subsequent arguments may use one hanging level.
+							column := indentColumns(source[openStart:child.StartByte], sourceWidth)
+							if indentColumns(prefix, sourceWidth) == column {
+								hasInlineChild = true
+								break
+							}
 						}
 					}
 					if hasInlineChild {

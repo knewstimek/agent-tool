@@ -76,6 +76,23 @@ func TestSyntaxCancellationDiscardsEngine(t *testing.T) {
 	}
 }
 
+func TestColdSyntaxEngineHonorsDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	e, err := newEngineContext(ctx, "cpp")
+	if e != nil {
+		defer e.runtime.Close(context.Background())
+	}
+	if err == nil || ctx.Err() == nil {
+		t.Fatalf("cold initialization ignored deadline: %v", err)
+	}
+	ctx, cancelNow := context.WithCancel(context.Background())
+	cancelNow()
+	if _, err := getEngineContext(ctx, "cpp"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled pool acquisition: %v", err)
+	}
+}
+
 func TestSyntaxErrorsAndBounds(t *testing.T) {
 	for _, tt := range []struct{ lang, source string }{
 		{"cpp", "void f() { work();"},

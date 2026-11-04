@@ -258,5 +258,21 @@
     "old": "  target();",
     "replacement": "  call(first,\n       second);",
     "want": "// 문자열\nvoid f() {\n    const char* 설명 = \"한글\";\n    call(first,\n         second);\n}\n"
+  },
+  {
+    "name": "cpp inline first argument with hanging continuation",
+    "path": "sample.cpp",
+    "content": "void f() {\n    target();\n}\n",
+    "old": "  target();",
+    "replacement": "  call(first,\n    second);",
+    "want": "void f() {\n    call(first,\n        second);\n}\n"
+  },
+  {
+    "name": "python inline first argument with hanging continuation",
+    "path": "sample.py",
+    "content": "def f():\n    target()\n",
+    "old": "  target()",
+    "replacement": "  call(first,\n    second)",
+    "want": "def f():\n    call(first,\n        second)\n"
   }
 ]

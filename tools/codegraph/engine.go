@@ -78,6 +78,13 @@ var pools = struct {
 
 // getEngine borrows an engine from the pool. Caller must call putEngine when done.
 func getEngine(lang string) (*engine, error) {
+	return getEngineContext(context.Background(), lang)
+}
+
+func getEngineContext(ctx context.Context, lang string) (*engine, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	pools.mu.Lock()
 	pool, ok := pools.byLang[lang]
 	if !ok {
@@ -95,7 +102,7 @@ func getEngine(lang string) (*engine, error) {
 
 	// Pool empty, create a new one. More than poolSize engines may exist
 	// temporarily under high concurrency. Excess are closed by putEngine.
-	return newEngine(lang)
+	return newEngineContext(ctx, lang)
 }
 
 // putEngine returns an engine to the pool for reuse.
@@ -125,6 +132,13 @@ func putEngine(e *engine) {
 }
 
 func newEngine(lang string) (*engine, error) {
+	return newEngineContext(context.Background(), lang)
+}
+
+func newEngineContext(ctx context.Context, lang string) (*engine, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	compressedWASM, queries, err := langConfig(lang)
 	if err != nil {
 		return nil, err
@@ -134,9 +148,11 @@ func newEngine(lang string) (*engine, error) {
 		return nil, err
 	}
 
-	ctx := context.Background()
 	r := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
-	wasi_snapshot_preview1.MustInstantiate(ctx, r)
+	if _, err := wasi_snapshot_preview1.Instantiate(ctx, r); err != nil {
+		r.Close(context.Background())
+		return nil, fmt.Errorf("WASI initialization (%s): %w", lang, err)
+	}
 
 	mod, err := r.Instantiate(ctx, wasmBytes)
 	if err != nil {
@@ -169,7 +185,7 @@ func newEngine(lang string) (*engine, error) {
 	}
 
 	// Pre-allocate parser and output buffer for reuse
-	ctx2 := context.Background()
+	ctx2 := ctx
 	parserRes, err := mod.ExportedFunction("ts_parser_new").Call(ctx2)
 	if err != nil {
 		r.Close(ctx)
