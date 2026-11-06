@@ -46,20 +46,11 @@ func startSuspended(command string, args []string, cwd string, env []string) (in
 	return pid, nil
 }
 
-// prepareJobCmd puts the child in its own process group so killProcessTree can
-// signal the whole group, and so a terminal Ctrl+C aimed at agent-tool does not
-// also hit a job the agent deliberately left running.
+// prepareJobCmd puts the child in its own process group so
+// common.ProcessGuard.Kill can signal the whole group, and so a terminal
+// Ctrl+C aimed at agent-tool does not also hit a job the agent left running.
 func prepareJobCmd(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-}
-
-func killProcessTree(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
-	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-		_ = cmd.Process.Kill()
-	}
 }
 
 // resolvePath attempts to find the command in PATH if it's not an absolute path.

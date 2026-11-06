@@ -182,7 +182,9 @@ func safeAddTool[In, Out any](s *mcp.Server, t *mcp.Tool, h mcp.ToolHandlerFor[I
 			}
 			return res
 		}
-		if yield {
+		// An explicit operation=wait is already a bounded, deliberate block
+		// (wait_sec <= 300); yielding it would wrap a job in another job.
+		if yield && !strings.EqualFold(fmt.Sprint(v["operation"]), "wait") {
 			return runYielding(ctx, toolName, yieldLabel(toolName, v), call), nil
 		}
 		res := call(ctx)

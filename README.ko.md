@@ -63,7 +63,7 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
 | **ProcList** | 프로세스 목록 — PID, 이름, 커맨드라인, 메모리. 민감 인자 자동 마스킹. 이름/포트 필터 | ✅ |
 | **ProcKill** | PID/포트로 프로세스 종료/일시정지/재개. 트리 킬, 시그널 선택(kill/term/hup/int/stop/cont), 좀비 처리(Linux), dry_run | ✅ |
 | **ProcExec** | 에이전트를 붙잡지 않는 프로세스 실행. `yield_after_sec` 안에 안 끝나면 `job_id` 반환(wait/status/tail/cancel/list, 프로세스 트리 종료), 출력을 계속 수집하는 백그라운드 job, 일시정지 상태 시작, 수명 타임아웃·환경변수, 안전한 반복 진단 압축과 만료형 raw 출력 조회 | ✅ |
-| **SSH** | 기본 32K head+tail 캡처, 원본 바이트 수, 비정상 종료 오류 의미론, 백그라운드 작업(start/status/tail/cancel). 인증 인식 풀링, 호스트 키 검증, ProxyJump, IPv6 | ✅ |
+| **SSH** | 기본 32K head+tail 캡처, 원본 바이트 수, 비정상 종료 오류 의미론, 백그라운드 작업(start/wait/status/tail/cancel, `toolbox operation=job`에서도 조회), 비영어 Windows에서도 UTF-8 `powershell_script` 출력. 인증 인식 풀링, 호스트 키 검증, ProxyJump, IPv6 | ✅ |
 | **SSHKey** | 로컬 개인키를 PuTTY PPK v3, 전통 PEM, 최신 OpenSSH, PKCS#8 사이에서 변환. 입력 자동 감지, 암호화 PPK/OpenSSH 출력, 0600 저장을 지원하며 키 본문은 반환하지 않음 | ✅ |
 | **SFTP** | SSH 경유 파일 전송 및 원격 파일시스템 관리. 업로드, 다운로드, ls, stat, mkdir, rm, chmod, rename. 비동기 전송(upload_async/download_async + status/cancel). SSH 세션 풀 재사용. 최대 2GB | ✅ |
 | **Bash** | 영속 셸 세션 — 작업 디렉토리·환경변수 상태 유지, 안전한 반복 진단 압축과 만료형 raw 출력 조회. 세션 풀링 (최대 5개, 유휴 타임아웃 30분). Unix: bash/sh, Windows: PowerShell/git-bash/cmd | ✅ |

@@ -28,7 +28,7 @@ func ok(text string) *mcp.CallToolResult {
 }
 
 func TestYieldFastCallReturnsResultDirectly(t *testing.T) {
-	withYield(t, time.Second)
+	withYield(t, 10*time.Second) // generous: these assert the non-yield path, which must not lose a race to a loaded scheduler
 	r := runYielding(context.Background(), "t", "t", func(context.Context) *mcp.CallToolResult { return ok("fast") })
 	if textOf(r) != "fast" {
 		t.Fatalf("fast call was wrapped: %q", textOf(r))
@@ -80,7 +80,7 @@ func TestYieldCancelStopsWorkThroughContext(t *testing.T) {
 }
 
 func TestYieldWorkSurvivesRequestEndButNotEarlyCancel(t *testing.T) {
-	withYield(t, time.Second)
+	withYield(t, 10*time.Second) // generous: these assert the non-yield path, which must not lose a race to a loaded scheduler
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
 	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
@@ -100,7 +100,7 @@ func TestYieldWorkSurvivesRequestEndButNotEarlyCancel(t *testing.T) {
 }
 
 func TestYieldRecoversPanicInWorker(t *testing.T) {
-	withYield(t, time.Second)
+	withYield(t, 10*time.Second) // generous: these assert the non-yield path, which must not lose a race to a loaded scheduler
 	r := runYielding(context.Background(), "p", "p", func(context.Context) *mcp.CallToolResult { panic("boom") })
 	if !r.IsError || !strings.Contains(textOf(r), "panic in p") {
 		t.Fatalf("panic not converted: %q", textOf(r))

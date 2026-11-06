@@ -41,9 +41,10 @@ type SSHInput struct {
 	UseAgent         interface{} `json:"use_agent,omitempty" jsonschema:"Use SSH agent for authentication: true or false. Default: true if no other auth method specified"`
 	Command          string      `json:"command,omitempty" jsonschema:"Command to execute on the remote server"`
 	PowerShellScript string      `json:"powershell_script,omitempty" jsonschema:"Windows PowerShell script text (UTF-8, max 4 MiB), mutually exclusive with command. Uploaded through SSH stdin and deleted after execution; avoids Windows command-line length limits"`
-	Operation        string      `json:"operation,omitempty" jsonschema:"Operation: execute (default), start, status, tail, cancel"`
+	Operation        string      `json:"operation,omitempty" jsonschema:"Operation: execute (default), start, status, wait, tail, cancel"`
 	Background       bool        `json:"background,omitempty" jsonschema:"Start a background SSH job and return job_id immediately. Alias for operation=start"`
-	JobID            string      `json:"job_id,omitempty" jsonschema:"Background SSH job ID for status, tail, or cancel"`
+	JobID            string      `json:"job_id,omitempty" jsonschema:"Background SSH job ID for status, wait, tail, or cancel"`
+	WaitSec          int         `json:"wait_sec,omitempty" jsonschema:"For operation=wait: seconds to block (default 30, max 300)"`
 	TailLines        int         `json:"tail_lines,omitempty" jsonschema:"Lines returned by operation=tail. Default: 50, Max: 1000"`
 	Disconnect       interface{} `json:"disconnect,omitempty" jsonschema:"Close the SSH session for this host (no command needed): true or false. Default: false"`
 	HostKeyCheck     string      `json:"host_key_check,omitempty" jsonschema:"Host key verification: strict (requires known_hosts), tofu (trust on first use, default), none (insecure)"`
@@ -94,11 +95,11 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 			op = "execute"
 		}
 	}
-	if op == "status" || op == "tail" || op == "cancel" {
-		return handleJobOperation(op, input)
+	if op == "status" || op == "tail" || op == "cancel" || op == "wait" {
+		return handleJobOperation(ctx, op, input)
 	}
 	if op != "execute" && op != "start" {
-		return errorResult("operation must be execute, start, status, tail, or cancel")
+		return errorResult("operation must be execute, start, status, wait, tail, or cancel")
 	}
 	// 1. Resolve a local profile or reusable session-local connection handle.
 	connectionID, err := ResolveConnection(&input)
@@ -194,14 +195,14 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 			}
 			return errorResult(fmt.Sprintf("failed to start SSH job: %s%s", sanitizeError(err, input), warningSuffix(warning)))
 		}
-		msg := fmt.Sprintf("SSH background job started.\njob_id: %s\nstatus: running\nUse operation=status or operation=tail with this job_id; use operation=cancel to stop it.", job.id)
+		msg := fmt.Sprintf("SSH background job started.\njob_id: %s\nstatus: running\nNext: operation=wait|status|tail|cancel with this job_id.", job.ID())
 		if !input.Quiet && !input.ResultOnly {
 			msg = fmt.Sprintf("connection_id: %s\n%s", connectionID, msg)
 		}
 		if warning := PrivateWarningForConnection(input, ssrfWarning); warning != "" {
 			msg = warning + "\n\n" + msg
 		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, SSHOutput{Result: msg, JobID: job.id, Status: "running", ConnectionID: connectionID}, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}}, SSHOutput{Result: msg, JobID: job.ID(), Status: "running", ConnectionID: connectionID}, nil
 	}
 
 	// 5. Execute command with the remaining preparation/execution timeout.
@@ -294,65 +295,39 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	}, SSHOutput{Result: output, Stdout: result.Stdout, Stderr: result.Stderr, ExitCode: result.ExitCode, Truncated: truncated, StdoutBytes: result.StdoutBytes, StderrBytes: result.StderrBytes, ConnectionID: connectionID, CleanupWarning: cleanupWarning}, nil
 }
 
-func handleJobOperation(op string, input SSHInput) (*mcp.CallToolResult, SSHOutput, error) {
-	if strings.TrimSpace(input.JobID) == "" {
-		return errorResult("job_id is required for status, tail, or cancel")
+func handleJobOperation(ctx context.Context, op string, input SSHInput) (*mcp.CallToolResult, SSHOutput, error) {
+	if input.TailLines == 0 {
+		input.TailLines = 50
 	}
-	job, ok := getSSHJob(strings.TrimSpace(input.JobID))
-	if !ok {
-		return errorResult("SSH job not found or expired")
+	if input.TailLines < 1 || input.TailLines > 1000 {
+		return errorResult("tail_lines must be between 1 and 1000")
 	}
-	if op == "cancel" {
-		if err := job.cancel(); err != nil {
-			return errorResult(err.Error())
-		}
+	// Shared with toolbox operation=job; ssh jobs render via renderSSHJob.
+	res := common.HandleJobOperation(ctx, op, input.JobID, input.WaitSec, common.JobRenderOptions{TailLines: input.TailLines})
+	out := SSHOutput{Result: textOf(res)}
+	if job, ok := common.GetJob(input.JobID); ok {
+		s := job.Snapshot()
+		out.JobID, out.Status, out.ExitCode, out.CleanupWarning = s.ID, s.Status, s.ExitCode, s.Note
+		out.Truncated = s.StdoutTruncated || s.StderrTruncated
+		out.StdoutBytes, out.StderrBytes = s.StdoutBytes, s.StderrBytes
 	}
-	snap := job.snapshot()
+	return res, out, nil
+}
+
+func textOf(r *mcp.CallToolResult) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("job_id: %s\nstatus: %s\n", snap.ID, snap.Status))
-	if !snap.FinishedAt.IsZero() {
-		sb.WriteString(fmt.Sprintf("exit_code: %d\n", snap.ExitCode))
-	}
-	sb.WriteString(fmt.Sprintf("stdout_bytes: %d\nstderr_bytes: %d\n", snap.StdoutBytes, snap.StderrBytes))
-	if snap.StdoutTruncated || snap.StderrTruncated {
-		sb.WriteString("truncated: true (head and tail retained)\n")
-	}
-	if snap.CleanupWarning != "" {
-		sb.WriteString("cleanup_warning: " + snap.CleanupWarning + "\n")
-	}
-	if snap.Error != "" {
-		sb.WriteString("error: " + snap.Error + "\n")
-	}
-	if op == "tail" {
-		lines := input.TailLines
-		if lines == 0 {
-			lines = 50
-		}
-		if lines < 1 || lines > 1000 {
-			return errorResult("tail_lines must be between 1 and 1000")
-		}
-		if snap.Stdout != "" {
-			sb.WriteString("\n--- stdout tail ---\n" + lastLines(snap.Stdout, lines) + "\n")
-		}
-		if snap.Stderr != "" {
-			sb.WriteString("\n--- stderr tail ---\n" + lastLines(snap.Stderr, lines) + "\n")
+	for _, c := range r.Content {
+		if t, ok := c.(*mcp.TextContent); ok {
+			sb.WriteString(t.Text)
 		}
 	}
-	result := sb.String()
-	return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: result}},
-			IsError: snap.Status == "failed",
-		}, SSHOutput{
-			Result: result, JobID: snap.ID, Status: snap.Status, ExitCode: snap.ExitCode, CleanupWarning: snap.CleanupWarning,
-			Truncated:   snap.StdoutTruncated || snap.StderrTruncated,
-			StdoutBytes: snap.StdoutBytes, StderrBytes: snap.StderrBytes,
-		}, nil
+	return sb.String()
 }
 
 func Register(server *mcp.Server) {
 	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name:        "ssh",
-		Description: `Execute SSH commands with password, key, agent, IPv6, and ProxyJump support. Prefer a local connection_profile or reuse connection_id; matching sessions pool for 30 minutes. Output is bounded. For long-running commands use start/background, then status/tail/cancel with job_id. On Windows use powershell_script to upload, execute, and clean up a temporary script via SSH stdin. Long standalone EncodedCommand invocations are staged automatically.`,
+		Description: `Execute SSH commands with password, key, agent, IPv6, and ProxyJump support. Prefer a local connection_profile or reuse connection_id; matching sessions pool for 30 minutes. Output is bounded. For long-running commands use start/background, then wait/status/tail/cancel with job_id. On Windows use powershell_script to upload, execute, and clean up a temporary script via SSH stdin. Long standalone EncodedCommand invocations are staged automatically.`,
 	}, Handle)
 }
 

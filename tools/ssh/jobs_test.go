@@ -5,39 +5,48 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"agent-tool/common"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestSSHJobStatusAndTailDoNotRequireConnectionFields(t *testing.T) {
-	job := &sshJob{
-		id: "test-job", createdAt: time.Now(), status: "completed", exitCode: 0,
-		finishedAt: time.Now(), stdout: common.NewBoundedCapture(1024), stderr: common.NewBoundedCapture(1024),
-	}
-	_, _ = job.stdout.Write([]byte("one\ntwo\nthree\n"))
-	sshJobs.Lock()
-	sshJobs.items[job.id] = job
-	sshJobs.Unlock()
-	t.Cleanup(func() {
-		sshJobs.Lock()
-		delete(sshJobs.items, job.id)
-		sshJobs.Unlock()
-	})
+func finishedTestJob(t *testing.T, output string) *common.Job {
+	t.Helper()
+	stdout := common.NewBoundedCapture(1024)
+	_, _ = stdout.Write([]byte(output))
+	job := common.NewJob("ssh", "ssh operation=start", 0, stdout, common.NewBoundedCapture(1024), func() {})
+	job.SetRenderer(renderSSHJob)
+	job.SetNote("remote cleanup pending")
+	job.Finish(0, nil)
+	common.RegisterJob(job)
+	return job
+}
 
-	result, out, err := Handle(context.Background(), nil, SSHInput{Operation: "tail", JobID: job.id, TailLines: 2})
+func TestSSHJobStatusAndTailDoNotRequireConnectionFields(t *testing.T) {
+	job := finishedTestJob(t, "one\ntwo\nthree\n")
+	result, out, err := Handle(context.Background(), nil, SSHInput{Operation: "tail", JobID: job.ID(), TailLines: 2})
 	if err != nil || result.IsError {
 		t.Fatalf("Handle() error = %v, result = %#v", err, result)
 	}
 	if out.Status != "completed" || !strings.Contains(out.Result, "two\nthree") || strings.Contains(out.Result, "one\n") {
 		t.Fatalf("unexpected tail result: %q", out.Result)
 	}
+	if out.CleanupWarning != "remote cleanup pending" || !strings.Contains(out.Result, "cleanup_warning: remote cleanup pending") {
+		t.Fatalf("cleanup warning lost: %+v", out)
+	}
 }
 
-func TestLastLines(t *testing.T) {
-	if got := lastLines("a\nb\nc\n", 2); got != "b\nc" {
-		t.Fatalf("lastLines() = %q", got)
+// SSH jobs are in the shared registry, so toolbox operation=job sees them with
+// the ssh format, and a finished job's wait/status returns the full output.
+func TestSSHJobVisibleThroughSharedJobOperation(t *testing.T) {
+	job := finishedTestJob(t, "alpha\nbeta\n")
+	res := common.HandleJobOperation(context.Background(), "wait", job.ID(), 1, common.JobRenderOptions{TailLines: 1})
+	text := textOf(res)
+	if res.IsError || !strings.Contains(text, "alpha\nbeta") || !strings.Contains(text, "exit_code: 0") {
+		t.Fatalf("shared wait did not render ssh job output: %q", text)
+	}
+	if list := textOf(common.HandleJobOperation(context.Background(), "list", "", 0, common.JobRenderOptions{})); !strings.Contains(list, job.ID()) {
+		t.Fatalf("ssh job missing from shared list: %q", list)
 	}
 }
 
@@ -61,7 +70,7 @@ func TestRegisteredStatusDoesNotRequireConnectionFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := result.Content[0].(*mcp.TextContent).Text
-	if !result.IsError || text != "SSH job not found or expired" {
+	if !result.IsError || !strings.Contains(text, `job "missing-test-job" not found`) {
 		t.Fatalf("status was blocked before job lookup: isError=%v text=%q", result.IsError, text)
 	}
 }

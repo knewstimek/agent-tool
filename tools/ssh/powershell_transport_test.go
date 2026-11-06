@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"agent-tool/common"
 	"github.com/pkg/sftp"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -81,7 +82,7 @@ func newScriptSSHFixture(t *testing.T, exit uint32, hold bool) *scriptSSHFixture
 						f.mu.Unlock()
 						_ = request.Reply(true, nil)
 						tokens := strings.Fields(payload.Command)
-						probe := tokens[len(tokens)-1] == encodePowerShell("[Console]::Out.Write([IO.Path]::GetTempPath())")
+						probe := tokens[len(tokens)-1] == encodePowerShell(psPrelude+"[Console]::Out.Write([IO.Path]::GetTempPath())")
 						if probe {
 							_, _ = io.WriteString(channel, "C:\\agent tool's temp\\")
 							_, _ = channel.SendRequest("exit-status", false, gossh.Marshal(struct{ Status uint32 }{0}))
@@ -222,11 +223,6 @@ func TestPowerShellBackgroundCleanupAndCancel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() {
-			sshJobs.Lock()
-			delete(sshJobs.items, job.id)
-			sshJobs.Unlock()
-		})
 		if hold {
 			// Wait until the exec request is active before cancelling.
 			deadline := time.Now().Add(3 * time.Second)
@@ -242,14 +238,14 @@ func TestPowerShellBackgroundCleanupAndCancel(t *testing.T) {
 				}
 				time.Sleep(5 * time.Millisecond)
 			}
-			if err := job.cancel(); err != nil {
+			if err := job.Cancel(); err != nil {
 				t.Fatal(err)
 			}
 		}
 		deadline := time.Now().Add(3 * time.Second)
-		var snap sshJobSnapshot
+		var snap common.JobSnapshot
 		for {
-			snap = job.snapshot()
+			snap = job.Snapshot()
 			if !snap.FinishedAt.IsZero() {
 				break
 			}
@@ -260,10 +256,10 @@ func TestPowerShellBackgroundCleanupAndCancel(t *testing.T) {
 		}
 		_, statErr := f.files.Stat(staged.remotePath)
 		if hold {
-			if snap.Status != "cancelled" || snap.CleanupWarning == "" || statErr != nil {
+			if snap.Status != "cancelled" || snap.Note == "" || statErr != nil {
 				t.Fatalf("cancel must report unconfirmed completion and retain file: %+v stat=%v", snap, statErr)
 			}
-		} else if snap.Status != "completed" || snap.CleanupWarning != "" || !os.IsNotExist(statErr) {
+		} else if snap.Status != "completed" || snap.Note != "" || !os.IsNotExist(statErr) {
 			t.Fatalf("background completion did not clean up: %+v stat=%v", snap, statErr)
 		}
 	}

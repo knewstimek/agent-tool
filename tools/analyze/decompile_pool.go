@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"agent-tool/common"
 )
 
 const (
@@ -26,7 +28,7 @@ var decompileIdle = 2 * time.Minute
 type decompWorker struct {
 	key      string // binary identity: path, pdb_path, size, mtime
 	cmd      *exec.Cmd
-	guard    *workerGuard
+	guard    *common.ProcessGuard
 	guardErr error
 	stdin    io.WriteCloser
 	lines    chan decompileLine // closed when the worker's stdout ends
@@ -113,7 +115,7 @@ func startWorker(key string) (*decompWorker, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("cannot start decompile worker: %w", err)
 	}
-	w.guard, w.guardErr = guardWorker(cmd.Process, uint64(decompileMemLimitMB+decompileJobHeadroomMB)<<20)
+	w.guard, w.guardErr = common.GuardProcess(cmd.Process, common.GuardOptions{KillOnClose: true, MemoryLimit: uint64(decompileMemLimitMB+decompileJobHeadroomMB) << 20})
 	w.idle = time.AfterFunc(time.Hour, func() {})
 	w.idle.Stop()
 	go func() {
@@ -174,11 +176,11 @@ func (w *decompWorker) retire() {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		w.guard.kill()
+		w.guard.Kill()
 		<-done
 	}
 	_ = w.cmd.Wait()
-	w.guard.close()
+	w.guard.Close()
 }
 
 // kill ends a worker now and removes it from the pool.
@@ -186,11 +188,11 @@ func (w *decompWorker) kill() {
 	decompPool.mu.Lock()
 	decompPool.remove(w)
 	decompPool.mu.Unlock()
-	w.guard.kill()
+	w.guard.Kill()
 	for range w.lines {
 	}
 	_ = w.cmd.Wait()
-	w.guard.close()
+	w.guard.Close()
 }
 
 // runDecompileWorker sends one request to a pooled worker (starting it if
@@ -217,7 +219,7 @@ func runDecompileWorker(ctx context.Context, req decompileRequest, timeout time.
 		case l, ok := <-w.lines:
 			if !ok { // the worker exited before finishing the request
 				waitErr := w.cmd.Wait()
-				w.guard.close()
+				w.guard.Close()
 				decompPool.mu.Lock()
 				decompPool.remove(w)
 				decompPool.mu.Unlock()

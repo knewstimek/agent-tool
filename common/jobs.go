@@ -56,6 +56,7 @@ type Job struct {
 	done       chan struct{}
 	limit      time.Duration
 	result     *mcp.CallToolResult // final result of a yielded tool call
+	note       string              // tool-specific caveat shown with the job (e.g. remote cleanup)
 	render     JobRenderer
 }
 
@@ -88,6 +89,7 @@ type JobSnapshot struct {
 	StderrTruncated bool
 	Logs            []string
 	Result          *mcp.CallToolResult
+	Note            string
 }
 
 // OutputSource is a bounded view of a stream (BoundedCapture or FileCapture).
@@ -216,6 +218,12 @@ func dropJobLocked(id string, j *Job) {
 	}
 }
 
+func (j *Job) SetNote(note string) {
+	j.mu.Lock()
+	j.note = note
+	j.mu.Unlock()
+}
+
 func (j *Job) SetRenderer(r JobRenderer) {
 	j.mu.Lock()
 	j.render = r
@@ -331,7 +339,7 @@ func (j *Job) Snapshot() JobSnapshot {
 	s := JobSnapshot{
 		ID: j.id, Tool: j.tool, Label: j.label, PID: j.pid, Status: j.status,
 		ExitCode: j.exitCode, Error: j.errMsg, CreatedAt: j.createdAt, FinishedAt: j.finishedAt,
-		Logs: append([]string(nil), j.logs...), Result: j.result,
+		Logs: append([]string(nil), j.logs...), Result: j.result, Note: j.note,
 	}
 	if s.Status == JobTimedOut && s.Error == "" && j.limit > 0 {
 		s.Error = fmt.Sprintf("killed after timeout_sec=%d", int(j.limit/time.Second))

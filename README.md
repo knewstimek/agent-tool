@@ -65,7 +65,7 @@ Local relative paths resolve against an explicit workspace, then the MCP client 
 | **ProcList** | List running processes — PID, name, command line, memory. Sensitive args auto-masked. Filter by name or port | ✅ |
 | **ProcKill** | Kill, suspend, or resume processes by PID or port. Tree kill, signal selection (kill/term/hup/int/stop/cont), zombie handling (Linux), dry_run | ✅ |
 | **ProcExec** | Execute commands as new processes without blocking the agent: runs still going after `yield_after_sec` return a `job_id` (wait/status/tail/cancel/list, process-tree kill), background jobs keep capturing output, suspended start, lifetime timeout/env vars, and safe repeated-diagnostic compaction with expiring raw-output retrieval | ✅ |
-| **SSH** | SSH execution with 32K head+tail capture, original byte counts, proper non-zero-exit errors, and background jobs (`start/status/tail/cancel`). Auth-aware pooling, host-key verification, ProxyJump, IPv6 | ✅ |
+| **SSH** | SSH execution with 32K head+tail capture, original byte counts, proper non-zero-exit errors, and background jobs (`start/wait/status/tail/cancel`, also visible via `toolbox operation=job`), UTF-8 `powershell_script` output on non-English Windows. Auth-aware pooling, host-key verification, ProxyJump, IPv6 | ✅ |
 | **SSHKey** | Convert local private keys between PuTTY PPK v3, traditional PEM, modern OpenSSH, and PKCS#8. Auto-detects input, supports encrypted PPK/OpenSSH output, writes mode 0600, and never returns key material | ✅ |
 | **SFTP** | Transfer files and manage remote filesystems over SSH. Upload, download, ls, stat, mkdir, rm, chmod, rename. Reuses SSH session pool. Max 2 GB per transfer | ✅ |
 | **Bash** | Persistent shell sessions with working directory/environment retention, safe repeated-diagnostic compaction, and expiring raw-output retrieval. Session pooling (max 5, idle timeout 30 min). Unix: bash/sh, Windows: PowerShell/git-bash/cmd | ✅ |
@@ -496,7 +496,7 @@ SFTP is not required, including on legacy Windows SSH servers.
 ```
 
 Preparation and foreground execution share `timeout_sec`. Background scripts use
-the same upload and cleanup path, then expose `job_id` for status/tail/cancel.
+the same upload and cleanup path, then expose `job_id` for wait/status/tail/cancel.
 The remote launcher attempts cleanup in `finally`; confirmed completion also triggers
 bounded SSH cleanup. Cancellation or connection loss does not prove remote termination,
 so the tool leaves deletion to the remote launcher and reports `cleanup_warning` if

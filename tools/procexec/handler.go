@@ -237,11 +237,15 @@ func execJob(ctx context.Context, input ProcExecInput, opts runOptions) (*mcp.Ca
 		return errorResult(fmt.Sprintf("failed to execute: %v", err))
 	}
 	displayCommand, _ := common.TruncateRunes(formatCommand(input.Command, input.Args), 500, "... [command abbreviated]")
-	job := common.NewJob("procexec", displayCommand, cmd.Process.Pid, stdout, stderr, func() { killProcessTree(cmd) })
+	// No KillOnClose: background servers must outlive an agent-tool restart.
+	// The job object only makes cancel/timeout reach orphaned grandchildren.
+	guard, _ := common.GuardProcess(cmd.Process, common.GuardOptions{})
+	job := common.NewJob("procexec", displayCommand, cmd.Process.Pid, stdout, stderr, guard.Kill)
 	job.SetLogs(logs...)
 	job.SetRenderer(renderForJob)
 	go func() {
 		err := cmd.Wait()
+		guard.Close()
 		exitCode := 0
 		if cmd.ProcessState != nil {
 			exitCode = cmd.ProcessState.ExitCode()

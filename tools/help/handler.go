@@ -405,7 +405,7 @@ Job operations (job_id required except list):
           Cancelling the wait call does not stop the job.
   status  non-blocking snapshot (final result if finished, recent output if running)
   tail    last tail_lines lines per stream (default 20, max 1000)
-  cancel  kill the process tree (taskkill /T on Windows, process group on Unix)
+  cancel  kill the whole tree via a job object on Windows (also orphaned grandchildren), process group on Unix
   list    all jobs; finished jobs are kept for 1 hour, at most 32 running at once
 timeout_sec is the hard lifetime limit (default 600, max 7200), not how long the call blocks;
 a killed job reports status=timed_out with the output captured so far.
@@ -433,7 +433,9 @@ success/failure. Long standalone EncodedCommand invocations are staged automatic
 Preparation shares timeout_sec with execution. Unconfirmed remote completion or
 deletion is reported separately as cleanup_warning, including for background jobs.
 Non-zero remote exits return IsError=true. For long-running commands, use background=true or
-	operation=start, then operation=status/tail/cancel with job_id (tail_lines defaults to 50).
+	operation=start, then operation=wait/status/tail/cancel with job_id (tail_lines defaults to 50; wait_sec 30, max 300).
+	SSH jobs share the job registry, so toolbox operation=job also lists and waits on them.
+	powershell_script forces UTF-8 output and silences progress records, so non-English hosts return readable text.
 	connection_profile reads a named local ignored profile; connection_id reuses its
 	connection fields for 30 minutes. quiet suppresses banners, echo_command controls
 	command echoing, and result_only returns stdout/stderr/exit_code JSON.

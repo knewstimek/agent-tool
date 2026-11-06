@@ -111,6 +111,16 @@ func encodePowerShell(script string) string {
 	return base64.StdEncoding.EncodeToString(data)
 }
 
+// psPrelude runs before any agent-tool PowerShell. Windows PowerShell writes
+// redirected stdout in the system code page (CP949, CP932, ...), so on a
+// non-English host non-ASCII output -- including a temp path under a
+// non-ASCII user name -- arrived as mojibake. Progress records (e.g. module
+// first-use preparation) are serialized to stderr as CLIXML noise that only
+// costs the agent tokens. New-Object keeps PowerShell 2-4 compatibility.
+// The encoding assignment can throw "handle is invalid" when the session has
+// no console (some sshd setups); that must not add error noise or fail runs.
+const psPrelude = "$ProgressPreference='SilentlyContinue';try{[Console]::OutputEncoding=New-Object Text.UTF8Encoding $false}catch{};"
+
 func powerShellBootstrap(remotePath string) string {
 	literal := "'" + strings.ReplaceAll(remotePath, "'", "''") + "'"
 	// Execute script text in the EncodedCommand scope, preserving exit and error
@@ -118,7 +128,7 @@ func powerShellBootstrap(remotePath string) string {
 	// finally runs on normal completion, script errors, and explicit exit.
 	// PowerShell 5 resets $? after a parenthesized expression. Capture the last
 	// command's status inside the script block rather than after invoking it.
-	return "try { . ([scriptblock]::Create([IO.File]::ReadAllText(" + literal + ",[Text.Encoding]::UTF8) + \"`n`nif (`$?) { exit 0 } else { exit 1 }\")) } finally { try { Remove-Item -LiteralPath " + literal + " -Force -ErrorAction Stop } catch { [Console]::Error.WriteLine('[agent-tool cleanup] temporary script deletion failed') } }"
+	return psPrelude + "try { . ([scriptblock]::Create([IO.File]::ReadAllText(" + literal + ",[Text.Encoding]::UTF8) + \"`n`nif (`$?) { exit 0 } else { exit 1 }\")) } finally { try { Remove-Item -LiteralPath " + literal + " -Force -ErrorAction Stop } catch { [Console]::Error.WriteLine('[agent-tool cleanup] temporary script deletion failed') } }"
 }
 
 type stagedPowerShell struct {
@@ -128,7 +138,7 @@ type stagedPowerShell struct {
 }
 
 func stagePowerShell(ctx context.Context, client *gossh.Client, plan *powerShellPlan) (*stagedPowerShell, error) {
-	probe := plan.executable + " -NoProfile -NonInteractive -EncodedCommand " + encodePowerShell("[Console]::Out.Write([IO.Path]::GetTempPath())")
+	probe := plan.executable + " -NoProfile -NonInteractive -EncodedCommand " + encodePowerShell(psPrelude + "[Console]::Out.Write([IO.Path]::GetTempPath())")
 	result, err := executeCommand(ctx, client, probe, 8192, "head")
 	if err != nil {
 		return nil, fmt.Errorf("cannot locate remote PowerShell temporary directory: %w", err)

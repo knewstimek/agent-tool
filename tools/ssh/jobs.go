@@ -1,179 +1,110 @@
 package ssh
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"strings"
-	"sync"
-	"time"
 
 	"agent-tool/common"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	gossh "golang.org/x/crypto/ssh"
 )
 
-const sshJobRetention = time.Hour
+// SSH background jobs live in the shared registry so toolbox operation=job
+// lists and waits on them alongside procexec and yielded calls.
 
-type sshJob struct {
-	mu             sync.Mutex
-	id             string
-	command        string
-	createdAt      time.Time
-	finishedAt     time.Time
-	status         string
-	exitCode       int
-	err            string
-	stdout         *common.BoundedCapture
-	stderr         *common.BoundedCapture
-	session        *gossh.Session
-	staged         bool
-	cleanupWarning string
-}
+const runningPreviewLines = 10
 
-type sshJobSnapshot struct {
-	ID              string
-	Status          string
-	ExitCode        int
-	Error           string
-	CreatedAt       time.Time
-	FinishedAt      time.Time
-	Stdout          string
-	Stderr          string
-	StdoutBytes     int64
-	StderrBytes     int64
-	StdoutTruncated bool
-	StderrTruncated bool
-	CleanupWarning  string
-}
+const stagedCancelWarning = "remote completion was not confirmed; the temporary PowerShell script may remain until remote cleanup runs"
 
-var sshJobs = struct {
-	sync.Mutex
-	items map[string]*sshJob
-}{items: make(map[string]*sshJob)}
-
-func startSSHJob(client *gossh.Client, command string, maxOutputBytes int, outputMode string) (*sshJob, error) {
+func startSSHJob(client *gossh.Client, command string, maxOutputBytes int, outputMode string) (*common.Job, error) {
 	return startSSHJobPrepared(client, command, maxOutputBytes, outputMode, nil)
 }
 
-func startSSHJobPrepared(client *gossh.Client, command string, maxOutputBytes int, outputMode string, staged *stagedPowerShell) (*sshJob, error) {
+func startSSHJobPrepared(client *gossh.Client, command string, maxOutputBytes int, outputMode string, staged *stagedPowerShell) (*common.Job, error) {
+	if err := common.CheckJobCapacity(); err != nil {
+		return nil, err
+	}
 	session, err := client.NewSession()
 	if err != nil {
 		return nil, err
 	}
-	idBytes := make([]byte, 12)
-	if _, err := rand.Read(idBytes); err != nil {
-		_ = session.Close()
-		return nil, err
-	}
-	job := &sshJob{
-		id:        hex.EncodeToString(idBytes),
-		command:   command,
-		createdAt: time.Now(),
-		status:    "running",
-		stdout:    common.NewBoundedCaptureMode((maxOutputBytes+1)/2, outputMode),
-		stderr:    common.NewBoundedCaptureMode(maxOutputBytes/2, outputMode),
-		session:   session,
-		staged:    staged != nil,
-	}
-	session.Stdout = job.stdout
-	session.Stderr = job.stderr
+	stdout := common.NewBoundedCaptureMode((maxOutputBytes+1)/2, outputMode)
+	stderr := common.NewBoundedCaptureMode(maxOutputBytes/2, outputMode)
+	session.Stdout = stdout
+	session.Stderr = stderr
 
-	sshJobs.Lock()
-	pruneSSHJobsLocked(time.Now())
-	sshJobs.items[job.id] = job
-	sshJobs.Unlock()
+	var job *common.Job
+	stop := func() {
+		if staged != nil {
+			job.SetNote(stagedCancelWarning)
+		}
+		_ = session.Signal(gossh.SIGKILL)
+		_ = session.Close()
+	}
+	job = common.NewJob("ssh", "ssh operation=start", 0, stdout, stderr, stop)
+	job.SetRenderer(renderSSHJob)
+	common.RegisterJob(job)
 
 	go func() {
 		err := session.Run(command)
+		exitCode := 0
 		completionErr := err
-		if _, ok := err.(*gossh.ExitError); ok {
+		if exitErr, ok := err.(*gossh.ExitError); ok {
+			exitCode = exitErr.ExitStatus()
 			completionErr = nil // Non-zero exit still confirms remote completion.
+			err = nil           // exit status is carried by exitCode
 		}
-		cleanupWarning := finishStagedPowerShell(client, staged, completionErr)
-		job.mu.Lock()
-		defer job.mu.Unlock()
-		job.finishedAt = time.Now()
-		job.session = nil
-		job.exitCode = 0
-		job.cleanupWarning = cleanupWarning
-		if job.status == "cancelled" {
-			if exitErr, ok := err.(*gossh.ExitError); ok {
-				job.exitCode = exitErr.ExitStatus()
-			}
-		} else if exitErr, ok := err.(*gossh.ExitError); ok {
-			job.exitCode = exitErr.ExitStatus()
-			job.status = "failed"
-			job.err = exitErr.Error()
-		} else if err != nil {
-			job.status = "failed"
-			job.err = err.Error()
-		} else {
-			job.status = "completed"
+		if warning := finishStagedPowerShell(client, staged, completionErr); warning != "" || staged != nil {
+			job.SetNote(warning)
 		}
 		_ = session.Close()
+		job.Finish(exitCode, err)
 	}()
 	return job, nil
 }
 
-func getSSHJob(id string) (*sshJob, bool) {
-	sshJobs.Lock()
-	defer sshJobs.Unlock()
-	pruneSSHJobsLocked(time.Now())
-	job, ok := sshJobs.items[id]
-	return job, ok
-}
-
-func pruneSSHJobsLocked(now time.Time) {
-	for id, job := range sshJobs.items {
-		job.mu.Lock()
-		finished := job.finishedAt
-		job.mu.Unlock()
-		if !finished.IsZero() && now.Sub(finished) > sshJobRetention {
-			delete(sshJobs.items, id)
+// renderSSHJob keeps the ssh job format for both ssh operation=... and
+// toolbox operation=job. A finished job shows its retained output so wait
+// returns the result in one call; a running one shows only recent lines.
+func renderSSHJob(s common.JobSnapshot, o common.JobRenderOptions) *mcp.CallToolResult {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("job_id: %s\nstatus: %s\nelapsed: %s\n", s.ID, s.Status, s.Elapsed()))
+	if !s.Running() {
+		sb.WriteString(fmt.Sprintf("exit_code: %d\n", s.ExitCode))
+	}
+	sb.WriteString(fmt.Sprintf("stdout_bytes: %d\nstderr_bytes: %d\n", s.StdoutBytes, s.StderrBytes))
+	if s.StdoutTruncated || s.StderrTruncated {
+		sb.WriteString("truncated: true (head and tail retained)\n")
+	}
+	if s.Note != "" {
+		sb.WriteString("cleanup_warning: " + s.Note + "\n")
+	}
+	if s.Error != "" {
+		sb.WriteString("error: " + s.Error + "\n")
+	}
+	full := !s.Running() && o.Op != "tail"
+	// Running status/wait is polled repeatedly, so it shows only a short
+	// preview; operation=tail returns the requested tail_lines.
+	lines := o.TailLines
+	if o.Op != "tail" && lines > runningPreviewLines {
+		lines = runningPreviewLines
+	}
+	for _, stream := range []struct{ name, text string }{{"stdout", s.Stdout}, {"stderr", s.Stderr}} {
+		if stream.text == "" {
+			continue
+		}
+		if full {
+			sb.WriteString("\n--- " + stream.name + " ---\n" + strings.TrimRight(stream.text, "\n") + "\n")
+		} else {
+			sb.WriteString("\n--- " + stream.name + " tail ---\n" + common.LastLines(stream.text, lines) + "\n")
 		}
 	}
-}
-
-func (j *sshJob) snapshot() sshJobSnapshot {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	stdout, stdoutBytes, stdoutTruncated := j.stdout.Result()
-	stderr, stderrBytes, stderrTruncated := j.stderr.Result()
-	return sshJobSnapshot{
-		ID: j.id, Status: j.status, ExitCode: j.exitCode, Error: j.err,
-		CreatedAt: j.createdAt, FinishedAt: j.finishedAt,
-		Stdout: stdout, Stderr: stderr, StdoutBytes: stdoutBytes,
-		StderrBytes: stderrBytes, StdoutTruncated: stdoutTruncated,
-		StderrTruncated: stderrTruncated,
-		CleanupWarning:  j.cleanupWarning,
+	if s.Running() && o.Op != "tail" {
+		sb.WriteString(fmt.Sprintf("\n[running; do other work meanwhile. Result: operation=wait job_id=%s]\n", s.ID))
 	}
-}
-
-func (j *sshJob) cancel() error {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.status != "running" {
-		return fmt.Errorf("job is already %s", j.status)
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+		IsError: s.Status == common.JobFailed,
 	}
-	j.status = "cancelled"
-	if j.staged {
-		j.cleanupWarning = "remote completion was not confirmed; the temporary PowerShell script may remain until remote cleanup runs"
-	}
-	if j.session != nil {
-		_ = j.session.Signal(gossh.SIGKILL)
-		return j.session.Close()
-	}
-	return nil
-}
-
-func lastLines(s string, count int) string {
-	if count <= 0 {
-		return ""
-	}
-	lines := strings.Split(strings.TrimRight(s, "\r\n"), "\n")
-	if len(lines) > count {
-		lines = lines[len(lines)-count:]
-	}
-	return strings.Join(lines, "\n")
 }
