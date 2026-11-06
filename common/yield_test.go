@@ -99,6 +99,39 @@ func TestYieldWorkSurvivesRequestEndButNotEarlyCancel(t *testing.T) {
 	}
 }
 
+func TestCancelSemanticsForResultJobs(t *testing.T) {
+	withYield(t, 20*time.Millisecond)
+	oldGrace := cancelGrace
+	cancelGrace = 50 * time.Millisecond
+	t.Cleanup(func() { cancelGrace = oldGrace })
+
+	// Work that honors ctx: a requested cancel succeeds and is not an error.
+	r := runYielding(context.Background(), "a", "a", func(ctx context.Context) *mcp.CallToolResult {
+		<-ctx.Done()
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "stopped"}}, IsError: true}
+	})
+	id := jobIDFrom(t, textOf(r))
+	if res := HandleJobOperation(context.Background(), "cancel", id, 0, JobRenderOptions{}); res.IsError || !strings.Contains(textOf(res), "cancelled") {
+		t.Fatalf("requested cancel reported as error: %v %q", res.IsError, textOf(res))
+	}
+	if res := HandleJobOperation(context.Background(), "cancel", id, 0, JobRenderOptions{}); res.IsError || !strings.Contains(textOf(res), "already finished") {
+		t.Fatalf("cancel of finished job: %v %q", res.IsError, textOf(res))
+	}
+
+	// Work that needs a moment to stop: say so instead of a bare "still running".
+	release := make(chan struct{})
+	r = runYielding(context.Background(), "b", "b", func(ctx context.Context) *mcp.CallToolResult {
+		<-release
+		return ok("late")
+	})
+	id = jobIDFrom(t, textOf(r))
+	res := HandleJobOperation(context.Background(), "cancel", id, 0, JobRenderOptions{})
+	close(release)
+	if res.IsError || !strings.Contains(textOf(res), "still stopping") {
+		t.Fatalf("slow-stopping cancel: %v %q", res.IsError, textOf(res))
+	}
+}
+
 func TestYieldRecoversPanicInWorker(t *testing.T) {
 	withYield(t, 10*time.Second) // generous: these assert the non-yield path, which must not lose a race to a loaded scheduler
 	r := runYielding(context.Background(), "p", "p", func(context.Context) *mcp.CallToolResult { panic("boom") })

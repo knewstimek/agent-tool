@@ -83,11 +83,11 @@ func renderSSHJob(s common.JobSnapshot, o common.JobRenderOptions) *mcp.CallTool
 	if s.Error != "" {
 		sb.WriteString("error: " + s.Error + "\n")
 	}
-	full := !s.Running() && o.Op != "tail"
+	full := !s.Running() && o.Op != "tail" && !o.TailOnly
 	// Running status/wait is polled repeatedly, so it shows only a short
 	// preview; operation=tail returns the requested tail_lines.
 	lines := o.TailLines
-	if o.Op != "tail" && lines > runningPreviewLines {
+	if s.Running() && o.Op != "tail" && lines > runningPreviewLines {
 		lines = runningPreviewLines
 	}
 	for _, stream := range []struct{ name, text string }{{"stdout", s.Stdout}, {"stderr", s.Stderr}} {
@@ -105,6 +105,6 @@ func renderSSHJob(s common.JobSnapshot, o common.JobRenderOptions) *mcp.CallTool
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
-		IsError: s.Status == common.JobFailed,
+		IsError: s.Failed(),
 	}
 }

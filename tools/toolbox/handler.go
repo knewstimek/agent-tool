@@ -44,7 +44,7 @@ type Input struct {
 	JobAction      string         `json:"job_action,omitempty" jsonschema:"For job: status (default), wait, tail, cancel, list"`
 	JobID          string         `json:"job_id,omitempty" jsonschema:"For job: id from a yielded call"`
 	WaitSec        int            `json:"wait_sec,omitempty" jsonschema:"For job wait: seconds (default 30, max 300)"`
-	TailLines      int            `json:"tail_lines,omitempty" jsonschema:"For job tail: lines (default 20)"`
+	TailLines      int            `json:"tail_lines,omitempty" jsonschema:"For job: tail lines (default 20); set on wait/status to get only the tail of a finished job"`
 	Compact        bool           `json:"compact,omitempty" jsonschema:"Return a reduced describe schema"`
 	ToolOperation  string         `json:"tool_operation,omitempty" jsonschema:"Operation-specific compact schema, e.g. execute"`
 	SchemaHandle   string         `json:"schema_handle,omitempty" jsonschema:"Prior handle; short acknowledgement if unchanged"`
@@ -119,7 +119,7 @@ func (m *Manager) Handle(ctx context.Context, req *mcp.CallToolRequest, input In
 	case "output":
 		return m.output(input.OutputID, input.OutputOffset, input.OutputMaxChars)
 	case "job":
-		res := common.HandleJobOperation(ctx, input.JobAction, input.JobID, input.WaitSec, common.JobRenderOptions{TailLines: input.TailLines})
+		res := common.HandleJobOperation(ctx, input.JobAction, input.JobID, input.WaitSec, common.JobRenderOptions{TailLines: input.TailLines, TailOnly: input.TailLines > 0})
 		return res, Output{}, nil
 	case "enable":
 		changed, err = m.change(true, input.Tools, input.Groups)

@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"runtime/debug"
@@ -14,6 +15,10 @@ import (
 // YieldAfter is how long a yielding tool call may block before it returns a
 // job_id. A var so tests can shorten it.
 var YieldAfter = 15 * time.Second
+
+// cancelGrace is how long a cancel waits for the work to stop before
+// reporting that it is still stopping. A var so tests can shorten it.
+var cancelGrace = 5 * time.Second
 
 // runYielding runs work and returns its result if it finishes within
 // YieldAfter. Otherwise the call returns a job_id and work keeps running on a
@@ -86,12 +91,19 @@ func HandleJobOperation(ctx context.Context, op, id string, waitSec int, opts Jo
 	if !ok {
 		return toolError(fmt.Sprintf("job %q not found: finished jobs expire after 1 hour and jobs do not survive an agent-tool restart. List known jobs with toolbox operation=job job_action=list", strings.TrimSpace(id)))
 	}
+	notice := ""
 	switch op {
 	case "cancel":
-		if err := job.Cancel(); err != nil {
-			return toolError(err.Error())
+		// Cancelling a finished job is not an error: what the agent wanted
+		// (the work stopped) already holds, so return the final result.
+		if err := job.Cancel(); errors.Is(err, ErrJobFinished) {
+			notice = "[job had already finished; nothing to cancel]\n"
+		} else if !job.Wait(ctx, cancelGrace) {
+			// Some work finishes a consistent step before stopping (codegraph
+			// still resolves files it stored). Without this note the generic
+			// "still running" text reads as if the cancel were ignored.
+			notice = "[cancel requested; the job is still stopping. Check job_action=status again]\n"
 		}
-		job.Wait(ctx, 5*time.Second)
 	case "wait":
 		if waitSec < 0 {
 			return toolError("wait_sec must be non-negative")
@@ -114,7 +126,11 @@ func HandleJobOperation(ctx context.Context, op, id string, waitSec int, opts Jo
 	if render == nil {
 		render = renderJobDefault
 	}
-	return render(job.Snapshot(), opts)
+	res := render(job.Snapshot(), opts)
+	if notice != "" {
+		res.Content = append([]mcp.Content{&mcp.TextContent{Text: notice}}, res.Content...)
+	}
+	return res
 }
 
 // renderJobDefault shows a yielded tool call: a progress note while running,
@@ -131,7 +147,7 @@ func renderJobDefault(s JobSnapshot, _ JobRenderOptions) *mcp.CallToolResult {
 	if s.Status == JobCancelled {
 		header += "[result below is what the tool returned when it stopped]\n"
 	}
-	out := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: header}}, IsError: s.Status != JobCompleted}
+	out := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: header}}, IsError: s.Failed()}
 	if s.Result != nil {
 		out.Content = append(out.Content, s.Result.Content...)
 	}

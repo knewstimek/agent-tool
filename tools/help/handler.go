@@ -404,8 +404,10 @@ Job operations (job_id required except list):
   wait    block up to wait_sec (default 30, max 300); returns the final result once finished.
           Cancelling the wait call does not stop the job.
   status  non-blocking snapshot (final result if finished, recent output if running)
-  tail    last tail_lines lines per stream (default 20, max 1000)
-  cancel  kill the whole tree via a job object on Windows (also orphaned grandchildren), process group on Unix
+  tail    last tail_lines lines per stream (default 20, max 1000). Passing tail_lines to wait/status
+          also limits a finished job to its tail (use for progress-refresh output such as watch loops)
+  cancel  kill the whole tree via a job object on Windows (also orphaned grandchildren), process group on Unix.
+          A requested cancel is not an error; cancelling a finished job returns its result
   list    all jobs; finished jobs are kept for 1 hour, at most 32 running at once
 timeout_sec is the hard lifetime limit (default 600, max 7200), not how long the call blocks;
 a killed job reports status=timed_out with the output captured so far.

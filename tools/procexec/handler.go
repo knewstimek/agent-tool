@@ -57,9 +57,11 @@ type ProcExecInput struct {
 	Suspended      interface{} `json:"suspended,omitempty" jsonschema:"Start process in suspended state, detached and without output capture. Windows: CREATE_SUSPENDED, Linux: SIGSTOP: true or false. Default: false"`
 	JobID          string      `json:"job_id,omitempty" jsonschema:"Job ID returned by a yielded or background run"`
 	WaitSec        interface{} `json:"wait_sec,omitempty" jsonschema:"For operation=wait: seconds to block for completion (default 30, max 300)"`
-	TailLines      int         `json:"tail_lines,omitempty" jsonschema:"Lines per stream shown for a running job or by operation=tail (default 20, max 1000)"`
+	TailLines      int         `json:"tail_lines,omitempty" jsonschema:"Lines per stream for a running job or operation=tail (default 20, max 1000). Set on wait/status to get only the tail of a finished job (e.g. progress-refresh commands)"`
 	MaxOutputChars int         `json:"max_output_chars,omitempty" jsonschema:"Maximum combined stdout/stderr bytes retained. Default: 32768, Max: 131072. Head and tail are preserved"`
 	OutputView     string      `json:"output_view,omitempty" jsonschema:"Command output display: compact (default, folds repeated diagnostics) or raw"`
+
+	tailExplicit bool // tail_lines was given; a finished job then shows only the tail
 }
 
 type ProcExecOutput struct {
@@ -95,6 +97,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ProcExecInput) 
 		return errorResult(err.Error())
 	}
 	input.OutputView = outputView
+	input.tailExplicit = input.TailLines != 0
 	if input.TailLines == 0 {
 		input.TailLines = defaultTailLines
 	}
@@ -260,14 +263,14 @@ func execJob(ctx context.Context, input ProcExecInput, opts runOptions) (*mcp.Ca
 
 	if opts.yieldAfter == 0 {
 		common.RegisterJob(job)
-		return renderJob(job.Snapshot(), input.OutputView, input.TailLines, true)
+		return renderJob(job.Snapshot(), renderOpts{view: input.OutputView, tail: input.TailLines, tracked: true, showLogs: true})
 	}
 
 	yield := time.NewTimer(opts.yieldAfter)
 	defer yield.Stop()
 	select {
 	case <-job.Done():
-		return renderJob(job.Snapshot(), input.OutputView, input.TailLines, false)
+		return renderJob(job.Snapshot(), renderOpts{view: input.OutputView, tail: input.TailLines})
 	case <-ctx.Done():
 		// The client abandoned the call, so nobody will learn the job_id;
 		// keeping the process would leave an untracked orphan.
@@ -276,7 +279,7 @@ func execJob(ctx context.Context, input ProcExecInput, opts runOptions) (*mcp.Ca
 		return errorResult(fmt.Sprintf("process canceled: %v", ctx.Err()))
 	case <-yield.C:
 		common.RegisterJob(job)
-		return renderJob(job.Snapshot(), input.OutputView, input.TailLines, true)
+		return renderJob(job.Snapshot(), renderOpts{view: input.OutputView, tail: input.TailLines, tracked: true})
 	}
 }
 
@@ -288,7 +291,7 @@ func handleJobOperation(ctx context.Context, op string, input ProcExecInput) (*m
 	// Shared with toolbox operation=job, so jobs from any tool can be
 	// inspected here too; process jobs keep this tool's format via renderForJob.
 	res := common.HandleJobOperation(ctx, op, input.JobID, waitSec,
-		common.JobRenderOptions{TailLines: input.TailLines, OutputView: input.OutputView})
+		common.JobRenderOptions{TailLines: input.TailLines, TailOnly: input.tailExplicit, OutputView: input.OutputView})
 	out := ProcExecOutput{}
 	if job, found := common.GetJob(input.JobID); found {
 		s := job.Snapshot()
@@ -306,14 +309,23 @@ func renderForJob(s common.JobSnapshot, o common.JobRenderOptions) *mcp.CallTool
 		r, _, _ := renderTail(s, o.TailLines)
 		return r
 	}
-	r, _, _ := renderJob(s, o.OutputView, o.TailLines, true)
+	// Log paths are long and fixed; repeat them only once the job ends.
+	r, _, _ := renderJob(s, renderOpts{view: o.OutputView, tail: o.TailLines, tracked: true, tailOnly: o.TailOnly, showLogs: !s.Running()})
 	return r
+}
+
+type renderOpts struct {
+	view     string
+	tail     int
+	tracked  bool // job is in the registry, so job_id is usable
+	tailOnly bool // caller set tail_lines: show only the tail even when finished
+	showLogs bool
 }
 
 // renderJob formats a finished job like a classic foreground result, or a
 // running one as a short progress report with the next actions spelled out.
-// tracked reports whether the job is in the registry (so job_id is usable).
-func renderJob(snap common.JobSnapshot, view string, tailLines int, tracked bool) (*mcp.CallToolResult, ProcExecOutput, error) {
+func renderJob(snap common.JobSnapshot, o renderOpts) (*mcp.CallToolResult, ProcExecOutput, error) {
+	view, tailLines, tracked := o.view, o.tail, o.tracked
 	out := ProcExecOutput{
 		PID: snap.PID, ExitCode: snap.ExitCode, Status: snap.Status, ElapsedMs: snap.Elapsed().Milliseconds(),
 		StdoutBytes: snap.StdoutBytes, StderrBytes: snap.StderrBytes,
@@ -329,7 +341,7 @@ func renderJob(snap common.JobSnapshot, view string, tailLines int, tracked bool
 	if tracked {
 		sb.WriteString(fmt.Sprintf("  Job ID: %s\n", snap.ID))
 	}
-	if len(snap.Logs) > 0 {
+	if len(snap.Logs) > 0 && o.showLogs {
 		sb.WriteString(fmt.Sprintf("  Logs: %s (kept 1 hour after exit)\n", strings.Join(snap.Logs, ", ")))
 	}
 
@@ -342,7 +354,7 @@ func renderJob(snap common.JobSnapshot, view string, tailLines int, tracked bool
 
 	out.Stdout = proclist.SanitizeOutput(snap.Stdout)
 	out.Stderr = proclist.SanitizeOutput(snap.Stderr)
-	if view == "compact" {
+	if view == "compact" && !o.tailOnly {
 		stdoutCompaction := common.CompactDiagnosticOutput(out.Stdout)
 		stderrCompaction := common.CompactDiagnosticOutput(out.Stderr)
 		if stdoutCompaction.Compacted || stderrCompaction.Compacted {
@@ -367,6 +379,17 @@ func renderJob(snap common.JobSnapshot, view string, tailLines int, tracked bool
 		if snap.Error != "" {
 			sb.WriteString(fmt.Sprintf("  Error: %s\n", snap.Error))
 		}
+	}
+	// A cancel the agent asked for succeeded; only failures are errors, so
+	// clients do not report a successful cancel as a failed call.
+	isError := snap.Failed()
+	if o.tailOnly {
+		// Refresh-style commands (gh run watch, progress bars) repeat their
+		// screen in the log; tail_lines lets the agent take just the end.
+		writeTails(&sb, snap, tailLines)
+		sb.WriteString("\n[tail_lines set: last lines only; omit tail_lines for the full output]\n")
+		out.Stdout, out.Stderr = "", ""
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}}, IsError: isError}, out, nil
 	}
 	if out.Stdout != "" {
 		sb.WriteString(fmt.Sprintf("\n--- stdout ---\n%s", out.Stdout))
@@ -394,7 +417,7 @@ func renderJob(snap common.JobSnapshot, view string, tailLines int, tracked bool
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
-		IsError: snap.Status != common.JobCompleted,
+		IsError: isError,
 	}, out, nil
 }
 

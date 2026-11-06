@@ -296,6 +296,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 }
 
 func handleJobOperation(ctx context.Context, op string, input SSHInput) (*mcp.CallToolResult, SSHOutput, error) {
+	tailOnly := input.TailLines != 0
 	if input.TailLines == 0 {
 		input.TailLines = 50
 	}
@@ -303,7 +304,7 @@ func handleJobOperation(ctx context.Context, op string, input SSHInput) (*mcp.Ca
 		return errorResult("tail_lines must be between 1 and 1000")
 	}
 	// Shared with toolbox operation=job; ssh jobs render via renderSSHJob.
-	res := common.HandleJobOperation(ctx, op, input.JobID, input.WaitSec, common.JobRenderOptions{TailLines: input.TailLines})
+	res := common.HandleJobOperation(ctx, op, input.JobID, input.WaitSec, common.JobRenderOptions{TailLines: input.TailLines, TailOnly: tailOnly && op != "tail"})
 	out := SSHOutput{Result: textOf(res)}
 	if job, ok := common.GetJob(input.JobID); ok {
 		s := job.Snapshot()

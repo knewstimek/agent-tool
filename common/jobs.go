@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -64,6 +65,7 @@ type Job struct {
 type JobRenderOptions struct {
 	Op         string // status, wait, tail, or cancel
 	TailLines  int
+	TailOnly   bool // caller set tail_lines explicitly: finished jobs show only the tail
 	OutputView string
 }
 
@@ -292,10 +294,13 @@ func (j *Job) Finish(exitCode int, err error) {
 	close(j.done)
 }
 
+// ErrJobFinished is returned by Cancel when there was nothing left to stop.
+var ErrJobFinished = errors.New("job already finished")
+
 func (j *Job) Cancel() error {
 	select {
 	case <-j.done:
-		return fmt.Errorf("job %s already finished with status %s; nothing to cancel", j.id, j.Snapshot().Status)
+		return ErrJobFinished
 	default:
 	}
 	j.terminate(JobCancelled)
@@ -354,6 +359,11 @@ func (j *Job) Snapshot() JobSnapshot {
 }
 
 func (s JobSnapshot) Running() bool { return s.Status == JobRunning }
+
+// Failed reports outcomes that are errors for the agent. A cancel the agent
+// requested is a success: flagging it IsError makes clients report the call
+// as failed (and append error boilerplate) although it did what was asked.
+func (s JobSnapshot) Failed() bool { return s.Status == JobFailed || s.Status == JobTimedOut }
 
 func (s JobSnapshot) Elapsed() time.Duration {
 	end := s.FinishedAt
