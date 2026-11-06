@@ -1,6 +1,7 @@
 package codegraph
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -95,7 +96,7 @@ void Base::Paint() {
 	if err := os.WriteFile(filepath.Join(root, "paint.cpp"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := opIndex(CodeGraphInput{Path: root, Workers: 1}); err != nil {
+	if _, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1}); err != nil {
 		t.Fatal(err)
 	}
 	db, err := openDB(root)
@@ -182,7 +183,7 @@ class Use {
 			t.Fatal(err)
 		}
 	}
-	if result, err := opIndex(CodeGraphInput{Path: root, Workers: 1}); err != nil || !strings.Contains(result, "0 errors") {
+	if result, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1}); err != nil || !strings.Contains(result, "0 errors") {
 		t.Fatalf("index = %q, err=%v", result, err)
 	}
 	db, err := openDB(root)
@@ -213,7 +214,7 @@ void use() { choose(1); choose("text"); choose(1, 2); }
 	if err := os.WriteFile(filepath.Join(root, "overload.cpp"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := opIndex(CodeGraphInput{Path: root, Workers: 1}); err != nil {
+	if _, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1}); err != nil {
 		t.Fatal(err)
 	}
 	db, err := openDB(root)
@@ -290,7 +291,7 @@ func TestParallelIndexProducesDeterministicSemanticResolution(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, "caller.cpp"), []byte(caller), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := opIndex(CodeGraphInput{Path: root, Workers: workers}); err != nil {
+		if _, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: workers}); err != nil {
 			t.Fatal(err)
 		}
 		db, err := openDB(root)
@@ -344,7 +345,7 @@ func callbacks() {
 	if err := os.WriteFile(filepath.Join(root, "semantic.go"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := opIndex(CodeGraphInput{Path: root, Workers: 1}); err != nil {
+	if _, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1}); err != nil {
 		t.Fatal(err)
 	}
 	db, err := openDB(root)
@@ -388,7 +389,7 @@ void use() {
 	if err := os.WriteFile(filepath.Join(root, "flow.cpp"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := opIndex(CodeGraphInput{Path: root, Workers: 1}); err != nil {
+	if _, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1}); err != nil {
 		t.Fatal(err)
 	}
 	db, err := openDB(root)
@@ -438,7 +439,7 @@ func TestProjectResolverUsesIncludeAndDirectoryProximity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := opIndex(CodeGraphInput{Path: root, Workers: 1}); err != nil {
+	if _, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1}); err != nil {
 		t.Fatal(err)
 	}
 	db, err := openDB(root)
@@ -536,7 +537,7 @@ void Use(Factory* factory, Base* base) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := opIndex(CodeGraphInput{Path: root, Workers: 1}); err != nil {
+	if _, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1}); err != nil {
 		t.Fatal(err)
 	}
 	db, err := openDB(root)
@@ -622,7 +623,7 @@ func TestMultiRootWorkspaceResolvesAcrossProjects(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(second, "main.cpp"), []byte("#include \"../library/service.h\"\nvoid Use(Service* service) { service->Run(); }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := opIndex(CodeGraphInput{Path: workspace, Roots: []string{first, second}, Workers: 1}); err != nil {
+	if _, err := opIndex(context.Background(), CodeGraphInput{Path: workspace, Roots: []string{first, second}, Workers: 1}); err != nil {
 		t.Fatal(err)
 	}
 	db, err := openDB(workspace)
@@ -689,7 +690,7 @@ class Reference {
 			t.Fatal(err)
 		}
 	}
-	if _, err := opIndex(CodeGraphInput{Path: root, Workers: 1}); err != nil {
+	if _, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1}); err != nil {
 		t.Fatal(err)
 	}
 	db, err := openDB(root)
@@ -846,7 +847,7 @@ func use() { b := Box{}; b.Run() }
 	if err := os.WriteFile(filepath.Join(root, "sample.go"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	indexed, err := opIndex(CodeGraphInput{Path: root, Workers: 1})
+	indexed, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1})
 	if err != nil || !strings.Contains(indexed, "1 files indexed") || !strings.Contains(indexed, "0 errors") {
 		t.Fatalf("index failed: %q, err=%v", indexed, err)
 	}
@@ -883,7 +884,7 @@ func TestIndexReplacesChangedFileAtomicallyAndPurgesDeletedFile(t *testing.T) {
 	}
 
 	write("package sample\nfunc Old() { TargetA() }\nfunc TargetA() {}\n")
-	first, err := opIndex(CodeGraphInput{Path: root, Workers: 1})
+	first, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -892,7 +893,7 @@ func TestIndexReplacesChangedFileAtomicallyAndPurgesDeletedFile(t *testing.T) {
 	}
 
 	write("package sample\nfunc New() { TargetB() }\nfunc TargetB() {}\n// size changed\n")
-	second, err := opIndex(CodeGraphInput{Path: root, Workers: 1})
+	second, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -924,7 +925,7 @@ func TestIndexReplacesChangedFileAtomicallyAndPurgesDeletedFile(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	third, err := opIndex(CodeGraphInput{Path: root, Workers: 1})
+	third, err := opIndex(context.Background(), CodeGraphInput{Path: root, Workers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

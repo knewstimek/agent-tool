@@ -1,6 +1,8 @@
 package common
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -19,6 +21,26 @@ func TestBoundedCaptureKeepsHeadTailAndCountsOriginal(t *testing.T) {
 	}
 	if !strings.Contains(got, "abcde") || !strings.Contains(got, "vwxyz") || !strings.Contains(got, "original_bytes=30") {
 		t.Fatalf("unexpected capture: %q", got)
+	}
+}
+
+func TestFileCaptureMatchesBoundedCapture(t *testing.T) {
+	input := "abcde" + strings.Repeat("x", 20) + "vwxyz"
+	path := filepath.Join(t.TempDir(), "log")
+	for _, content := range []string{input, "short"} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		mem := NewBoundedCapture(10)
+		_, _ = mem.Write([]byte(content))
+		wantText, wantTotal, wantTrunc := mem.Result()
+		gotText, gotTotal, gotTrunc := NewFileCapture(path, 10).Result()
+		if gotText != wantText || gotTotal != wantTotal || gotTrunc != wantTrunc {
+			t.Fatalf("file %q/%d/%v != memory %q/%d/%v", gotText, gotTotal, gotTrunc, wantText, wantTotal, wantTrunc)
+		}
+	}
+	if text, total, _ := NewFileCapture(filepath.Join(t.TempDir(), "missing"), 10).Result(); text != "" || total != 0 {
+		t.Fatalf("missing file should read as empty, got %q/%d", text, total)
 	}
 }
 

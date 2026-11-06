@@ -83,7 +83,7 @@ func searchMemory(reader ProcessReader, pattern []byte, vt ValueType, vSize int,
 				overlap = overlap[:0]
 
 				for offset := uint64(0); offset < region.Size; offset += scanChunkSize {
-					if limitReached() {
+					if limitReached() || cancelled(reader) != nil {
 						break
 					}
 
@@ -132,6 +132,9 @@ func searchMemory(reader ProcessReader, pattern []byte, vt ValueType, vSize int,
 		}(w)
 	}
 	wg.Wait()
+	if err := cancelled(reader); err != nil {
+		return nil, err
+	}
 
 	// Collect all worker results into sorted slice
 	totalLen := 0
@@ -270,6 +273,9 @@ func filterMatches(reader ProcessReader, session *scanSession, filterType string
 
 	// Iterate store in batches
 	err := store.ForEachBatch(iterBatch, func(batch []scanMatch, _ int) error {
+		if err := cancelled(reader); err != nil {
+			return err
+		}
 		pending = append(pending, batch...)
 		return flushPending()
 	})
@@ -308,6 +314,10 @@ func filterFromSnapshot(reader ProcessReader, snap *memorySnapshot, vt ValueType
 
 	for _, reg := range regions {
 		for offset := uint64(0); offset < reg.Size; offset += uint64(chunkSize) {
+			if err := cancelled(reader); err != nil {
+				result.Close()
+				return nil, err
+			}
 			readLen := reg.Size - offset
 			if readLen > uint64(chunkSize) {
 				readLen = uint64(chunkSize)
@@ -391,6 +401,9 @@ func structSearch(reader ProcessReader, fields []structField, structSize int, pr
 		}
 
 		for offset := uint64(0); offset < region.Size; offset += scanChunkSize {
+			if err := cancelled(reader); err != nil {
+				return nil, err
+			}
 			readSize := region.Size - offset
 			if readSize > uint64(scanChunkSize) {
 				readSize = uint64(scanChunkSize)

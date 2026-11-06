@@ -1,6 +1,7 @@
 package codegraph
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ func TestRealWorldCodeGraph(t *testing.T) {
 			continue
 		}
 		t.Run(filepath.Base(root), func(t *testing.T) {
-			result, err := opIndex(CodeGraphInput{Path: root})
+			result, err := opIndex(context.Background(), CodeGraphInput{Path: root})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -145,7 +146,7 @@ func TestRealWorldWorkspaceCodeGraph(t *testing.T) {
 			roots = append(roots, root)
 		}
 	}
-	result, err := opIndex(CodeGraphInput{Path: dbRoot, Roots: roots})
+	result, err := opIndex(context.Background(), CodeGraphInput{Path: dbRoot, Roots: roots})
 	if err != nil {
 		t.Fatal(err)
 	}

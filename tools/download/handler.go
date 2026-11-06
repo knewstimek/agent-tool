@@ -213,7 +213,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input DownloadInput) 
 }
 
 func Register(server *mcp.Server) {
-	common.SafeAddTool(server, &mcp.Tool{
+	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name: "download",
 		Description: `Download a file from a URL and save it to disk.
 Supports binary and text files. For an API call or a page body inline, use httpreq.

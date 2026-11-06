@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,6 +18,8 @@ const (
 	sentinelPrefix = "___SENTINEL_"
 	sentinelSuffix = "___"
 )
+
+var errSessionBusy = errors.New("session busy")
 
 // execResult holds the result of a command execution.
 type execResult struct {
@@ -34,7 +37,12 @@ type readResult struct {
 
 // executeCommand runs a command on an existing shell session using sentinel markers.
 func executeCommand(ctx context.Context, sess *shellSession, command string, timeoutSec int) (*execResult, error) {
-	sess.mu.Lock()
+	// Fail fast instead of queueing: since bash calls can yield a job_id, the
+	// previous command may legitimately still be running, and queueing behind
+	// it would block the agent for exactly as long as yielding was meant to avoid.
+	if !sess.mu.TryLock() {
+		return nil, errSessionBusy
+	}
 	defer sess.mu.Unlock()
 
 	if !sess.alive() {

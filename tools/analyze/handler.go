@@ -296,7 +296,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 
 // Register adds the analyze tool to the MCP server.
 func Register(server *mcp.Server) {
-	common.SafeAddTool(server, &mcp.Tool{
+	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name:        "analyze",
 		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several; a matching PDB or embedded DWARF is applied automatically, and the structs/enums the C names are printed after it), type_info for any other debug type (members with offsets, enum values). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Durable SQLite user labels/comments with revision-checked partial edits and bounded success receipts: annotation_set, annotation_list (query searches), annotation_delete; optional annotations_path selects the database for writes and rendered reads. disassemble/decompile show user notes separately from engine facts; decompile line_numbers=true supplies C-line/code_hash anchors (changed snapshots need review). PE annotations also accept rva. annotation_batch writes up to 32 notes with per-item receipts. evidence/provenance record user-supplied grounds. Decompile collects instruction notes from verified function ranges. annotation_suggest proposes C-line reattachment using stored anchor_text; never moves notes automatically. Annotation load errors are reported as warnings alongside analysis results. Prefer va for PE addresses. Use debug for runtime inspection.`,
 	}, Handle)

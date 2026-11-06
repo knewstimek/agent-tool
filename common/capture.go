@@ -3,7 +3,10 @@ package common
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"sync"
+	"unicode/utf8"
 )
 
 // BoundedCapture consumes an unlimited byte stream while retaining a bounded,
@@ -69,17 +72,56 @@ func (c *BoundedCapture) Write(p []byte) (int, error) {
 func (c *BoundedCapture) Result() (text string, totalBytes int64, truncated bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return joinHeadTail(c.head, c.tail, c.total, c.limit)
+}
 
-	totalBytes = c.total
-	truncated = totalBytes > int64(c.limit)
-	if !truncated {
-		combined := append(append([]byte(nil), c.head...), c.tail...)
-		return string(bytes.ToValidUTF8(combined, []byte("\uFFFD"))), totalBytes, false
+func joinHeadTail(head, tail []byte, totalBytes int64, limit int) (string, int64, bool) {
+	replacement := []byte(string(utf8.RuneError))
+	if totalBytes <= int64(limit) {
+		combined := append(append([]byte(nil), head...), tail...)
+		return string(bytes.ToValidUTF8(combined, replacement)), totalBytes, false
 	}
-	marker := []byte(fmt.Sprintf("\n...[truncated; original_bytes=%d; retained_bytes=%d]...\n", totalBytes, c.limit))
-	combined := make([]byte, 0, len(c.head)+len(marker)+len(c.tail))
-	combined = append(combined, bytes.ToValidUTF8(c.head, []byte("\uFFFD"))...)
+	marker := []byte(fmt.Sprintf("\n...[truncated; original_bytes=%d; retained_bytes=%d]...\n", totalBytes, limit))
+	combined := make([]byte, 0, len(head)+len(marker)+len(tail))
+	combined = append(combined, bytes.ToValidUTF8(head, replacement)...)
 	combined = append(combined, marker...)
-	combined = append(combined, bytes.ToValidUTF8(c.tail, []byte("\uFFFD"))...)
-	return string(bytes.ToValidUTF8(combined, []byte("\uFFFD"))), totalBytes, true
+	combined = append(combined, bytes.ToValidUTF8(tail, replacement)...)
+	return string(bytes.ToValidUTF8(combined, replacement)), totalBytes, true
+}
+
+// FileCapture presents a log file that a detached process writes directly as
+// a bounded head+tail view. Background jobs log to files instead of pipes so
+// the child does not die of a broken pipe when agent-tool exits or restarts.
+type FileCapture struct {
+	Path  string
+	limit int
+}
+
+func NewFileCapture(path string, limit int) *FileCapture {
+	if limit < 0 {
+		limit = 0
+	}
+	return &FileCapture{Path: path, limit: limit}
+}
+
+func (c *FileCapture) Result() (string, int64, bool) {
+	f, err := os.Open(c.Path)
+	if err != nil {
+		return "", 0, false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return "", 0, false
+	}
+	size := fi.Size()
+	if size <= int64(c.limit) {
+		data, _ := io.ReadAll(io.LimitReader(f, int64(c.limit)))
+		return joinHeadTail(data, nil, int64(len(data)), c.limit)
+	}
+	head := make([]byte, (c.limit+1)/2)
+	n, _ := f.ReadAt(head, 0)
+	tail := make([]byte, c.limit/2)
+	m, _ := f.ReadAt(tail, size-int64(len(tail)))
+	return joinHeadTail(head[:n], tail[:m], size, c.limit)
 }

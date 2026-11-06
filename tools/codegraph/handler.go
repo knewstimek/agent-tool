@@ -84,7 +84,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input CodeGraphInput)
 
 	switch op {
 	case "index":
-		result, err = opIndex(input)
+		result, err = opIndex(ctx, input)
 	case "find":
 		result, err = opFind(input)
 	case "callers":
@@ -137,7 +137,7 @@ func normalizeCodeGraphLimits(input *CodeGraphInput) error {
 
 // Register adds the codegraph tool to the MCP server.
 func Register(server *mcp.Server) {
-	common.SafeAddTool(server, &mcp.Tool{
+	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name: "codegraph",
 		Description: `Fully embedded semantic code graph and symbol lookup tool.
 Parses Go with the standard library AST and other languages with lazy compressed

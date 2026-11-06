@@ -98,7 +98,7 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - rename: Rename or move a file/directory (atomic, supports dry_run)
 - proclist: List running processes with PID, name, command line, memory (sensitive args masked)
 - prockill: Kill, suspend, or resume processes by PID or port (tree kill, signal selection, zombie handling, dry_run)
-- procexec: Execute commands as new processes (background, suspended start, timeout, diagnostic compaction)
+- procexec: Execute commands as new processes; slow runs yield a job_id (wait/status/tail/cancel/list), background, suspended start
 - ssh: Execute commands on remote servers via SSH (IPv4/IPv6, ProxyJump, session pooling)
 - ssh_key: Convert local SSH private keys between PPK, PEM, OpenSSH, and PKCS#8
 - sftp: Transfer files and manage remote filesystems over SSH (upload, download, ls, stat, mkdir, rm, chmod, rename, async transfers)
@@ -118,11 +118,13 @@ Relative local paths resolve against an explicit workspace, then the client's MC
 - analyze: Static binary analysis (29 operations: SQLite user annotations (annotation_set/list/delete/batch/suggest), decompile to C (x86/x64 PE/ELF), type_info (PDB/DWARF types), disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
 - set_config: Change runtime settings (encoding, file size, SSRF policy, DoH/ECH toggle)
 - agent_tool_help: This help tool
-- toolbox: Describe/call any tool through one stable gateway; optionally manage direct bindings
+- toolbox: Describe/call any tool through one stable gateway; collect yielded jobs (operation=job); optionally manage direct bindings
 
 ## Quick Tips
 - Use 'agent_tool_help' with topic='encoding' for encoding setup guide
 - Use toolbox(operation='describe', tool='ssh'), then toolbox(operation='call', tool='ssh', arguments={...}) for an SSH task
+- Long calls do not block: bash, ssh, sftp, download, analyze, codegraph, and memtool return a job_id after ~15s
+  (procexec after yield_after_sec). Keep working, then toolbox(operation='job', job_action='wait', job_id=...)
 - Use 'agent_tool_help' with topic='troubleshooting' for common issues`
 }
 
@@ -393,13 +395,28 @@ Use dry_run=true to preview. Safety: refuses PID 0/1 and self.
 Parameters: pid, port, signal, tree, include_zombies, dry_run
 
 ## procexec
-Execute a command as a new process. Supports foreground, background, and suspended execution.
+Execute a command as a new process without blocking the agent for long.
 WARNING: Executes arbitrary commands on the host system.
-Use suspended=true to start in suspended state (Windows: CREATE_SUSPENDED, Linux: SIGSTOP).
-Use prockill with signal=cont to resume a suspended process.
-Foreground output compacts repeated diagnostics by default. output_view=raw disables it.
+Yielding: a run waits up to yield_after_sec (default 15, max 300). If the process finishes in time
+the full result is returned as usual. Otherwise the call returns job_id plus the last output lines
+while the process keeps running, so the agent can answer the user or do other work meanwhile.
+Job operations (job_id required except list):
+  wait    block up to wait_sec (default 30, max 300); returns the final result once finished.
+          Cancelling the wait call does not stop the job.
+  status  non-blocking snapshot (final result if finished, recent output if running)
+  tail    last tail_lines lines per stream (default 20, max 1000)
+  cancel  kill the process tree (taskkill /T on Windows, process group on Unix)
+  list    all jobs; finished jobs are kept for 1 hour, at most 32 running at once
+timeout_sec is the hard lifetime limit (default 600, max 7200), not how long the call blocks;
+a killed job reports status=timed_out with the output captured so far.
+background=true returns job_id immediately, still captures output, and has no implicit time limit
+(use it for servers). Jobs do not survive an agent-tool restart.
+Use suspended=true to start in suspended state (Windows: CREATE_SUSPENDED, Linux: SIGSTOP),
+detached and without output capture. Use prockill with signal=cont to resume it.
+Final output compacts repeated diagnostics by default. output_view=raw disables it.
 When compacted, retrieve the bounded original for 30 minutes with toolbox operation=output and raw_output_id.
-Parameters: command, args, cwd, env, timeout_sec, background, suspended, max_output_chars, output_view
+Parameters: operation, command, args, cwd, env, timeout_sec, yield_after_sec, background, suspended,
+job_id, wait_sec, tail_lines, max_output_chars, output_view
 
 ## ssh
 Execute commands on a remote server via SSH. Supports IPv4 and IPv6.
@@ -455,6 +472,10 @@ Use disconnect=true to close a session.
 Output defaults to 32768 bytes and preserves head+tail with explicit truncation metadata.
 Repeated diagnostics are compacted by default; output_view=raw disables it. When compacted,
 retrieve the bounded original for 30 minutes with toolbox operation=output and raw_output_id.
+A command still running after ~15s returns a job_id while it keeps running; collect the result with
+toolbox operation=job job_action=wait job_id=<id>. timeout_sec stays the kill limit. A session runs one
+command at a time: while its yielded command runs, a new call on that session fails fast with guidance;
+use another session_id. For servers or live output, prefer procexec (background=true, operation=tail).
 Parameters: command, cwd (initial directory for new sessions), session_id (default: "default"), timeout_sec (default 120, max 600), output_view, disconnect
 
 ## download
@@ -1662,6 +1683,12 @@ func helpMemtool() string {
 
 Process memory tool for reverse engineering and game hacking.
 CheatEngine-style: search, filter, write, read_chain, pointer scan, struct search, diff.
+
+## Long scans
+A call still running after ~15s (large search/snapshot/filter/pointer_scan/diff) returns a job_id;
+collect it with toolbox operation=job job_action=wait. job_action=cancel stops the scan within one
+chunk; a cancelled filter is rolled back, so the session keeps its previous matches. While a session
+is busy, other calls on it fail fast instead of queueing.
 
 ## Platform Support
 - Windows: OpenProcess + ReadProcessMemory/WriteProcessMemory + VirtualQueryEx

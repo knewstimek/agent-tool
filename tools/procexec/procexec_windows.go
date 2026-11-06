@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"unicode/utf16"
@@ -114,27 +115,21 @@ func createEnvBlock(env []string) []uint16 {
 	return buf
 }
 
-// startBackground starts a process in the background.
-func startBackground(command string, args []string, cwd string, env []string) (int, error) {
-	cmd := exec.Command(command, args...)
-	if cwd != "" {
-		cmd.Dir = cwd
-	}
-	if len(env) > 0 {
-		cmd.Env = mergeEnv(env)
-	}
+func prepareJobCmd(cmd *exec.Cmd) {}
 
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-
-	if err := cmd.Start(); err != nil {
-		return 0, err
+// killProcessTree kills pid and its descendants. Process.Kill alone leaves
+// grandchildren (cmd /c wrappers, npm, build drivers) running and holding the
+// output pipes, so a cancelled job would keep consuming CPU invisibly.
+func killProcessTree(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
 	}
-
 	pid := cmd.Process.Pid
-	cmd.Process.Release()
-
-	return pid, nil
+	tk := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+	tk.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := tk.Run(); err != nil {
+		_ = cmd.Process.Kill()
+	}
 }
 
 // resolvePath attempts to find the command in PATH.

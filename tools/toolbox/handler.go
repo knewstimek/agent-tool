@@ -32,7 +32,7 @@ type Manager struct {
 }
 
 type Input struct {
-	Operation      string         `json:"operation,omitempty" jsonschema:"list (default), describe, call, output, enable, disable, or profile"`
+	Operation      string         `json:"operation,omitempty" jsonschema:"list (default), describe, call, output, job, enable, disable, or profile"`
 	Tools          []string       `json:"tools,omitempty" jsonschema:"Tool names for enable/disable"`
 	Groups         []string       `json:"groups,omitempty" jsonschema:"Groups for enable/disable: core, file, coding, system, remote, data, analysis, windows"`
 	Profile        string         `json:"profile,omitempty" jsonschema:"Profile to add: core-lite, core, coding, remote, analysis, or full; append +tool names for extra tools"`
@@ -41,6 +41,10 @@ type Input struct {
 	OutputID       string         `json:"output_id,omitempty" jsonschema:"Raw output ID for output"`
 	OutputOffset   int            `json:"output_offset,omitempty" jsonschema:"Output character offset; default 0"`
 	OutputMaxChars int            `json:"output_max_chars,omitempty" jsonschema:"Output character limit; default 32768, max 130048"`
+	JobAction      string         `json:"job_action,omitempty" jsonschema:"For job: status (default), wait, tail, cancel, list"`
+	JobID          string         `json:"job_id,omitempty" jsonschema:"For job: id from a yielded call"`
+	WaitSec        int            `json:"wait_sec,omitempty" jsonschema:"For job wait: seconds (default 30, max 300)"`
+	TailLines      int            `json:"tail_lines,omitempty" jsonschema:"For job tail: lines (default 20)"`
 	Compact        bool           `json:"compact,omitempty" jsonschema:"Return a reduced describe schema"`
 	ToolOperation  string         `json:"tool_operation,omitempty" jsonschema:"Operation-specific compact schema, e.g. execute"`
 	SchemaHandle   string         `json:"schema_handle,omitempty" jsonschema:"Prior handle; short acknowledgement if unchanged"`
@@ -95,7 +99,7 @@ func (m *Manager) EnableProfile(profile string) error {
 func (m *Manager) RegisterTool() {
 	common.SafeAddTool(m.server, &mcp.Tool{
 		Name:        "toolbox",
-		Description: `Discover and call tools without loading every schema. Use describe, preferably compact with tool_operation, then call with arguments. Reuse schema_handle. output retrieves preserved paged command output. list shows tools; enable/disable/profile manage direct bindings. Profiles: core-lite, core, coding, remote, analysis, full.`,
+		Description: `Discover and call tools without loading every schema. Use describe, preferably compact with tool_operation, then call with arguments. Reuse schema_handle. output retrieves preserved paged command output. job collects results of calls that returned a job_id. list shows tools; enable/disable/profile manage direct bindings. Profiles: core-lite, core, coding, remote, analysis, full.`,
 	}, m.Handle)
 }
 
@@ -114,6 +118,9 @@ func (m *Manager) Handle(ctx context.Context, req *mcp.CallToolRequest, input In
 		return m.call(ctx, req, input.Tool, input.Arguments)
 	case "output":
 		return m.output(input.OutputID, input.OutputOffset, input.OutputMaxChars)
+	case "job":
+		res := common.HandleJobOperation(ctx, input.JobAction, input.JobID, input.WaitSec, common.JobRenderOptions{TailLines: input.TailLines})
+		return res, Output{}, nil
 	case "enable":
 		changed, err = m.change(true, input.Tools, input.Groups)
 	case "disable":
@@ -126,7 +133,7 @@ func (m *Manager) Handle(ctx context.Context, req *mcp.CallToolRequest, input In
 		}
 		changed, err = m.change(true, names, groups)
 	default:
-		err = fmt.Errorf("operation must be list, describe, call, output, enable, disable, or profile")
+		err = fmt.Errorf("operation must be list, describe, call, output, job, enable, disable, or profile")
 	}
 	if err != nil {
 		msg := err.Error()

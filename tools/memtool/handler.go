@@ -93,9 +93,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MemtoolInput) (
 	case "regions":
 		return opRegions(input)
 	case "search":
-		return opSearch(input)
+		return opSearch(ctx, input)
 	case "filter":
-		return opFilter(input)
+		return opFilter(ctx, input)
 	case "read":
 		return opRead(input)
 	case "read_chain":
@@ -111,11 +111,11 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MemtoolInput) (
 	case "undo":
 		return opUndo(input)
 	case "struct_search":
-		return opStructSearch(input)
+		return opStructSearch(ctx, input)
 	case "pointer_scan":
-		return opPointerScan(input)
+		return opPointerScan(ctx, input)
 	case "diff":
-		return opDiff(input)
+		return opDiff(ctx, input)
 	default:
 		return errorResult("unhandled: %s", op)
 	}
@@ -150,7 +150,7 @@ func opRegions(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 	return successResult(formatRegions(regions, input.MaxResultsInt))
 }
 
-func opSearch(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
+func opSearch(ctx context.Context, input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 	if input.PIDInt <= 0 {
 		return errorResult("pid is required")
 	}
@@ -177,7 +177,7 @@ func opSearch(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 			return errorResult("%v", err)
 		}
 
-		snap, regions, err := takeSnapshot(reader, input.Protection)
+		snap, regions, err := takeSnapshot(withCtx(ctx, reader), input.Protection)
 		if err != nil {
 			reader.Close()
 			return errorResult("snapshot failed: %v", err)
@@ -230,7 +230,7 @@ func opSearch(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 		vSz = len(pattern)
 	}
 
-	store, err := searchMemory(reader, pattern, vt, vSz, input.Protection)
+	store, err := searchMemory(withCtx(ctx, reader), pattern, vt, vSz, input.Protection)
 	if err != nil {
 		reader.Close()
 		return errorResult("scan failed: %v", err)
@@ -259,7 +259,7 @@ func opSearch(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 	return successResult(formatSearchResult(session.id, store.Count(), totalRegions))
 }
 
-func opFilter(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
+func opFilter(ctx context.Context, input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 	if input.SessionID == "" {
 		return errorResult("session_id is required")
 	}
@@ -272,7 +272,9 @@ func opFilter(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 		return errorResult("session %q not found", input.SessionID)
 	}
 	defer session.release()
-	session.mu.Lock()
+	if !session.mu.TryLock() {
+		return errSessionBusy(session.id)
+	}
 	defer session.mu.Unlock()
 
 	if session.reader == nil {
@@ -299,7 +301,7 @@ func opFilter(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 	if session.unknownScan && session.snapshot != nil {
 		// First filter on unknown-value scan: compare snapshot vs current memory
 		newStore, err = filterFromSnapshot(
-			session.reader, session.snapshot,
+			withCtx(ctx, session.reader), session.snapshot,
 			session.valueType, session.valueSize, session.endian,
 			input.FilterType, newValue, "",
 		)
@@ -310,7 +312,7 @@ func opFilter(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 		// Transition from snapshot-based to matchStore-based
 		session.unknownScan = false
 	} else {
-		newStore, err = filterMatches(session.reader, session, input.FilterType, newValue)
+		newStore, err = filterMatches(withCtx(ctx, session.reader), session, input.FilterType, newValue)
 		if err != nil {
 			session.popUndo() // rollback failed filter (audit M1)
 			return errorResult("filter failed: %v", err)
@@ -541,7 +543,9 @@ func opInfo(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 		return errorResult("session %q not found", input.SessionID)
 	}
 	defer session.release()
-	session.mu.Lock()
+	if !session.mu.TryLock() {
+		return errSessionBusy(session.id)
+	}
 	defer session.mu.Unlock()
 
 	return successResult(formatSessionInfo(session, session.reader, input.MaxResultsInt))
@@ -567,7 +571,9 @@ func opUndo(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 		return errorResult("session %q not found", input.SessionID)
 	}
 	defer session.release()
-	session.mu.Lock()
+	if !session.mu.TryLock() {
+		return errSessionBusy(session.id)
+	}
 	defer session.mu.Unlock()
 
 	if !session.popUndo() {
@@ -577,7 +583,7 @@ func opUndo(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 	return successResult(fmt.Sprintf("Undo successful. Matches restored: %s", formatCount(session.matchCount)))
 }
 
-func opStructSearch(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
+func opStructSearch(ctx context.Context, input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 	if input.PIDInt <= 0 {
 		return errorResult("pid is required")
 	}
@@ -597,7 +603,7 @@ func opStructSearch(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, err
 	}
 	defer reader.Close()
 
-	addresses, err := structSearch(reader, fields, structSize, input.Protection)
+	addresses, err := structSearch(withCtx(ctx, reader), fields, structSize, input.Protection)
 	if err != nil {
 		return errorResult("struct search failed: %v", err)
 	}
@@ -605,7 +611,7 @@ func opStructSearch(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, err
 	return successResult(formatStructSearchResult(addresses, input.MaxResultsInt))
 }
 
-func opPointerScan(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
+func opPointerScan(ctx context.Context, input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 	if input.PIDInt <= 0 {
 		return errorResult("pid is required")
 	}
@@ -633,7 +639,7 @@ func opPointerScan(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, erro
 		maxOffset = pointerScanMaxOffset
 	}
 
-	chains, err := pointerScan(reader, addr, maxDepth, maxOffset, pointerSize(), input.Protection)
+	chains, err := pointerScan(withCtx(ctx, reader), addr, maxDepth, maxOffset, pointerSize(), input.Protection)
 	if err != nil {
 		return errorResult("pointer scan failed: %v", err)
 	}
@@ -642,7 +648,7 @@ func opPointerScan(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, erro
 	return successResult(formatPointerScanResult(chains, addr, bo))
 }
 
-func opDiff(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
+func opDiff(ctx context.Context, input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 	if input.PIDInt <= 0 && input.SessionID == "" {
 		return errorResult("pid or session_id is required for diff")
 	}
@@ -654,7 +660,9 @@ func opDiff(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 			return errorResult("session %q not found", input.SessionID)
 		}
 		defer session.release()
-		session.mu.Lock()
+		if !session.mu.TryLock() {
+			return errSessionBusy(session.id)
+		}
 		defer session.mu.Unlock()
 
 		if session.reader == nil {
@@ -663,7 +671,7 @@ func opDiff(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 
 		// First call: take snapshot and store it
 		if session.snapshot == nil {
-			snap, _, err := takeSnapshot(session.reader, input.Protection)
+			snap, _, err := takeSnapshot(withCtx(ctx, session.reader), input.Protection)
 			if err != nil {
 				return errorResult("snapshot failed: %v", err)
 			}
@@ -672,7 +680,7 @@ func opDiff(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 		}
 
 		// Second call: compare snapshot with current memory
-		diffs, err := compareWithSnapshot(session.reader, session.snapshot, input.MaxResultsInt)
+		diffs, err := compareWithSnapshot(withCtx(ctx, session.reader), session.snapshot, input.MaxResultsInt)
 		if err != nil {
 			return errorResult("diff failed: %v", err)
 		}
@@ -680,7 +688,7 @@ func opDiff(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 		// Replace snapshot: close old first, set nil to avoid dangling on failure (audit M4)
 		session.snapshot.Close()
 		session.snapshot = nil
-		snap, _, err := takeSnapshot(session.reader, input.Protection)
+		snap, _, err := takeSnapshot(withCtx(ctx, session.reader), input.Protection)
 		if err != nil {
 			return errorResult("snapshot update failed: %v", err)
 		}
@@ -695,7 +703,7 @@ func opDiff(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 		return errorResult("%v", err)
 	}
 
-	snap, _, err := takeSnapshot(reader, input.Protection)
+	snap, _, err := takeSnapshot(withCtx(ctx, reader), input.Protection)
 	if err != nil {
 		reader.Close()
 		return errorResult("snapshot failed: %v", err)
@@ -740,6 +748,9 @@ func compareWithSnapshot(reader ProcessReader, snap *memorySnapshot, maxDiffs in
 
 	for _, reg := range regions {
 		for offset := uint64(0); offset < reg.Size; offset += compareChunk {
+			if err := cancelled(reader); err != nil {
+				return nil, err
+			}
 			readLen := reg.Size - offset
 			if readLen > compareChunk {
 				readLen = compareChunk
@@ -786,7 +797,7 @@ func compareWithSnapshot(reader ProcessReader, snap *memorySnapshot, maxDiffs in
 
 // Register registers the memtool with the MCP server.
 func Register(server *mcp.Server) {
-	common.SafeAddTool(server, &mcp.Tool{
+	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name: "memtool",
 		Description: `Process memory tool for reverse engineering and game hacking.
 CheatEngine-style workflow: search → filter → filter → find exact addresses → write.

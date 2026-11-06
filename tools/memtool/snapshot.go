@@ -168,6 +168,10 @@ func takeSnapshot(reader ProcessReader, protection string) (*memorySnapshot, []M
 
 		// Read in chunks and write to snapshot
 		for offset := uint64(0); offset < region.Size; offset += scanChunkSize {
+			if err := cancelled(reader); err != nil {
+				snap.Close()
+				return nil, nil, err
+			}
 			readSize := region.Size - offset
 			if readSize > scanChunkSize {
 				readSize = scanChunkSize

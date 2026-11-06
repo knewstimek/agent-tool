@@ -240,16 +240,29 @@ CREATE TABLE IF NOT EXISTS codegraph_meta (
 // openDB opens or creates the codegraph database at the project root.
 func openDB(projectRoot string) (*sql.DB, error) {
 	dbPath := filepath.Join(projectRoot, dbFileName)
-	db, err := sql.Open("sqlite", dbPath)
+	// Pragmas go in the DSN so the driver applies them to every pooled
+	// connection; db.Exec("PRAGMA ...") only reaches whichever connection runs
+	// it, leaving later ones without foreign keys or case-sensitive LIKE.
+	// busy_timeout lets a query wait out a concurrent index commit (calls can
+	// now overlap because long ones yield) instead of failing with SQLITE_BUSY.
+	// WAL gives concurrent reads. Case-sensitive LIKE keeps a search for
+	// CheckDangerousPath from matching checkDangerousPath. modernc strips the
+	// query from a plain path, so a path containing '?' falls back to Exec.
+	const pragmas = "_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=case_sensitive_like(1)"
+	dsn := dbPath + "?" + pragmas
+	if strings.Contains(dbPath, "?") {
+		dsn = dbPath
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-
-	// WAL mode for concurrent reads
-	db.Exec("PRAGMA journal_mode=WAL")
-	db.Exec("PRAGMA foreign_keys=ON")
-	// Case-sensitive LIKE to avoid matching checkDangerousPath when searching CheckDangerousPath
-	db.Exec("PRAGMA case_sensitive_like=ON")
+	if dsn == dbPath {
+		db.Exec("PRAGMA busy_timeout=10000")
+		db.Exec("PRAGMA journal_mode=WAL")
+		db.Exec("PRAGMA foreign_keys=ON")
+		db.Exec("PRAGMA case_sensitive_like=ON")
+	}
 
 	if _, err := db.Exec(schemaSQL); err != nil {
 		db.Close()

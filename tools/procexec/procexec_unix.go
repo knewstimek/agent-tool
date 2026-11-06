@@ -46,28 +46,20 @@ func startSuspended(command string, args []string, cwd string, env []string) (in
 	return pid, nil
 }
 
-// startBackground starts a process in the background.
-func startBackground(command string, args []string, cwd string, env []string) (int, error) {
-	cmd := exec.Command(command, args...)
-	if cwd != "" {
-		cmd.Dir = cwd
-	}
-	if len(env) > 0 {
-		cmd.Env = mergeEnv(env)
-	}
-
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+// prepareJobCmd puts the child in its own process group so killProcessTree can
+// signal the whole group, and so a terminal Ctrl+C aimed at agent-tool does not
+// also hit a job the agent deliberately left running.
+func prepareJobCmd(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
 
-	if err := cmd.Start(); err != nil {
-		return 0, err
+func killProcessTree(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
 	}
-
-	pid := cmd.Process.Pid
-	cmd.Process.Release()
-
-	return pid, nil
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		_ = cmd.Process.Kill()
+	}
 }
 
 // resolvePath attempts to find the command in PATH if it's not an absolute path.

@@ -2,6 +2,7 @@ package codegraph
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -14,8 +15,17 @@ import (
 	"agent-tool/common"
 )
 
+// indexLocks serializes index runs per project root. Since a long index can
+// yield a job_id, an agent may start a second index on the same root while
+// the first still writes; two writers on one SQLite file only produce
+// "database is locked" failures, so the second is refused up front.
+var indexLocks sync.Map // lower-cased root -> *sync.Mutex
+
 // opIndex walks a directory, parses all supported files, and stores results in SQLite.
-func opIndex(input CodeGraphInput) (string, error) {
+// Cancellation stops scanning/parsing early; files already stored stay valid
+// because each file is committed with its content hash, so the next index
+// resumes where this one stopped.
+func opIndex(ctx context.Context, input CodeGraphInput) (string, error) {
 	if input.Path == "" {
 		return "", fmt.Errorf("path is required for index operation")
 	}
@@ -38,6 +48,12 @@ func opIndex(input CodeGraphInput) (string, error) {
 	if !fi.IsDir() {
 		return "", fmt.Errorf("path must be a directory")
 	}
+	lockValue, _ := indexLocks.LoadOrStore(strings.ToLower(root), &sync.Mutex{})
+	indexLock := lockValue.(*sync.Mutex)
+	if !indexLock.TryLock() {
+		return "", fmt.Errorf("an index of %s is already running (likely a call that returned a job_id). Wait for it with toolbox operation=job job_action=list / job_action=wait instead of starting another", root)
+	}
+	defer indexLock.Unlock()
 	scanRoots := []string{root}
 	if len(input.Roots) > 0 {
 		scanRoots = nil
@@ -103,6 +119,9 @@ func opIndex(input CodeGraphInput) (string, error) {
 	for _, scanRoot := range scanRoots {
 		gitIgnore := loadGitignore(scanRoot)
 		walkErr := filepath.Walk(scanRoot, func(path string, info os.FileInfo, err error) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if err != nil {
 				walkHadErrors = true
 				addError(path, err)
@@ -158,8 +177,11 @@ func opIndex(input CodeGraphInput) (string, error) {
 			return nil
 		})
 		if walkErr != nil {
+			// Also covers cancellation: an incomplete walk must not purge.
 			walkHadErrors = true
-			addError(scanRoot, fmt.Errorf("walk: %w", walkErr))
+			if ctx.Err() == nil {
+				addError(scanRoot, fmt.Errorf("walk: %w", walkErr))
+			}
 		}
 	}
 
@@ -210,6 +232,9 @@ func opIndex(input CodeGraphInput) (string, error) {
 		go func() {
 			defer wg.Done()
 			for f := range fileCh {
+				if ctx.Err() != nil {
+					continue // drain; already-parsed results are still stored
+				}
 				data, err := os.ReadFile(f.path)
 				if err != nil {
 					addError(f.path, fmt.Errorf("read: %w", err))
@@ -279,6 +304,8 @@ func opIndex(input CodeGraphInput) (string, error) {
 	}
 	flushBatch() // flush remaining
 	parseStoreElapsed = time.Since(t0) - scanElapsed
+	// Even when cancelled, resolve the graph for files already stored: the next
+	// index sees them as unchanged and would never resolve them otherwise.
 	graphChanged := fullRefresh || removed > 0 || atomic.LoadInt64(&indexedAtomic) > 0
 	if graphChanged {
 		semanticStart := time.Now()
@@ -288,7 +315,7 @@ func opIndex(input CodeGraphInput) (string, error) {
 		if err := resolveCallCandidates(db); err != nil {
 			addError(root, fmt.Errorf("resolve call candidates: %w", err))
 		}
-		if fullRefresh && compactRefresh {
+		if fullRefresh && compactRefresh && ctx.Err() == nil {
 			if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 				addError(root, fmt.Errorf("checkpoint refreshed index: %w", err))
 			}
@@ -307,6 +334,9 @@ func opIndex(input CodeGraphInput) (string, error) {
 	elapsed := time.Since(t0)
 	result := fmt.Sprintf("Index complete: %d files indexed, %d unchanged (skipped), %d removed, %d errors\nTime: %s\nDB: %s",
 		indexed, skipped, removed, errors, elapsed.Round(time.Millisecond), filepath.Join(root, dbFileName))
+	if ctx.Err() != nil {
+		result = "Index cancelled (partial; run index again to resume -- stored files are kept, stale-file purge was skipped)\n" + strings.TrimPrefix(result, "Index complete: ")
+	}
 	if fullRefresh {
 		result += "\nExtractor: v" + extractorVersion + " (full structural refresh)"
 	}

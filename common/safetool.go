@@ -71,6 +71,20 @@ func RegisteredSafeTool(server *mcp.Server, name string) (SafeToolRegistration, 
 //     than getting an opaque transport error. The SDK's jsonrpc.Error type is in
 //     an internal package and cannot be type-asserted here.
 func SafeAddTool[In, Out any](s *mcp.Server, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	safeAddTool(s, t, h, false)
+}
+
+// SafeAddYieldingTool is SafeAddTool for tools whose calls can run for
+// minutes (shell, transfers, decompilation, indexing). A call still running
+// after YieldAfter returns a job_id instead of blocking the agent; the result
+// is collected later with toolbox operation=job. Only use it for handlers that
+// honor ctx cancellation, otherwise job_action=cancel cannot stop the work.
+func SafeAddYieldingTool[In, Out any](s *mcp.Server, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	t.Description = strings.TrimRight(t.Description, "\n") + "\nCalls over ~15s return a job_id; get the result via toolbox operation=job job_action=wait."
+	safeAddTool(s, t, h, true)
+}
+
+func safeAddTool[In, Out any](s *mcp.Server, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out], yield bool) {
 	toolName := t.Name
 
 	// Generate input schema from the In type so agents see correct parameter info.
@@ -161,10 +175,17 @@ func SafeAddTool[In, Out any](s *mcp.Server, t *mcp.Tool, h mcp.ToolHandlerFor[I
 			return toolError(fmt.Sprintf("unmarshal error: %v", err)), nil
 		}
 
-		res, _, handlerErr := h(ctx, req, in)
-		if handlerErr != nil {
-			return toolError(handlerErr.Error()), nil
+		call := func(ctx context.Context) *mcp.CallToolResult {
+			res, _, handlerErr := h(ctx, req, in)
+			if handlerErr != nil {
+				return toolError(handlerErr.Error())
+			}
+			return res
 		}
+		if yield {
+			return runYielding(ctx, toolName, yieldLabel(toolName, v), call), nil
+		}
+		res := call(ctx)
 		LimitToolResultText(res, HardOutputChars)
 		return res, nil
 	}
@@ -207,6 +228,16 @@ func annotateFlexibleScalarTypes(schema *jsonschema.Schema, rt reflect.Type) {
 			property.Type = "integer"
 		}
 	}
+}
+
+// yieldLabel names a job in listings by tool and operation only. Arguments
+// such as commands, URLs, or queries can carry credentials, so they are left
+// out on purpose.
+func yieldLabel(tool string, args map[string]any) string {
+	if op, ok := args["operation"].(string); ok && strings.TrimSpace(op) != "" {
+		return tool + " operation=" + strings.TrimSpace(op)
+	}
+	return tool
 }
 
 // toolError creates a CallToolResult with IsError=true.

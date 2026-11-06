@@ -2,6 +2,7 @@ package bash
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -16,7 +17,7 @@ type BashInput struct {
 	Cwd        string      `json:"cwd,omitempty" jsonschema:"Initial working directory (only used when creating a new session)"`
 	SessionID  string      `json:"session_id,omitempty" jsonschema:"Session identifier for persistent shell. Default: default"`
 	OutputView string      `json:"output_view,omitempty" jsonschema:"Command output display: compact (default, folds repeated diagnostics) or raw"`
-	TimeoutSec interface{} `json:"timeout_sec,omitempty" jsonschema:"Command timeout in seconds (default 120, max 600). For a longer-running process, raise this up to 600 or launch it detached with procexec instead of waiting here."`
+	TimeoutSec interface{} `json:"timeout_sec,omitempty" jsonschema:"Command timeout in seconds (default 120, max 600). This is the kill limit, not how long the call blocks: a command still running after ~15s returns a job_id."`
 	Timeout    interface{} `json:"timeout,omitempty" jsonschema:"Alias for timeout_sec (seconds). Used only when timeout_sec is not set."`
 	Disconnect interface{} `json:"disconnect,omitempty" jsonschema:"Close the shell session: true or false. Default: false"`
 }
@@ -97,6 +98,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BashInput) (*mc
 
 	// Execute command
 	result, err := executeCommand(ctx, sess, input.Command, timeoutSec)
+	if errors.Is(err, errSessionBusy) {
+		return errorResult(fmt.Sprintf("session %q is still running a previous command (probably a call that returned a job_id). Use a different session_id to run this now, or wait: toolbox operation=job job_action=list shows running jobs", input.SessionID))
+	}
 	if err != nil {
 		// If session died, remove it from pool
 		pool.remove(input.SessionID)
@@ -169,12 +173,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BashInput) (*mc
 }
 
 func Register(server *mcp.Server) {
-	common.SafeAddTool(server, &mcp.Tool{
+	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name: "bash",
 		Description: `Execute shell commands with persistent session support.
 Sessions maintain working directory, environment variables, and shell state across calls.
 Use session_id to manage multiple independent shell sessions.
-Set timeout_sec (or its alias timeout) in seconds, default 120, max 600. For a process that runs longer than that, launch it detached with procexec rather than blocking here.
+Set timeout_sec (or its alias timeout) in seconds, default 120, max 600. A session runs one command at a time; while a yielded command is still running, use another session_id. For servers or work needing live output tail, prefer procexec (background=true, operation=tail).
 Output is bounded to 32768 bytes; large output keeps both the head and tail and reports original_bytes/truncated.
 Repeated diagnostic lines are compacted by default without changing exit status. Set output_view=raw to disable compaction. When compaction occurs, use toolbox operation=output with raw_output_id to retrieve the preserved bounded original for 30 minutes.
 Use disconnect=true to close a session.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"agent-tool/common"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,13 +23,14 @@ func TestProcExecHelperProcess(t *testing.T) {
 }
 
 func TestForegroundCompactsDiagnosticsAndPreservesRaw(t *testing.T) {
-	result, out, err := execForeground(context.Background(), ProcExecInput{
+	result, out, err := execJob(context.Background(), ProcExecInput{
 		Command:        os.Args[0],
 		Args:           []string{"-test.run=^TestProcExecHelperProcess$"},
 		Env:            []string{"AGENT_TOOL_PROCEXEC_HELPER=1"},
 		MaxOutputChars: common.DefaultOutputChars,
 		OutputView:     "compact",
-	}, 30)
+		TailLines:      defaultTailLines,
+	}, runOptions{timeout: 30 * time.Second, yieldAfter: 30 * time.Second})
 	if err != nil || result.IsError {
 		t.Fatalf("exec failed: result=%v out=%+v err=%v", result, out, err)
 	}
@@ -46,13 +48,14 @@ func TestForegroundCompactsDiagnosticsAndPreservesRaw(t *testing.T) {
 }
 
 func TestForegroundRawViewDoesNotCompact(t *testing.T) {
-	result, out, err := execForeground(context.Background(), ProcExecInput{
+	result, out, err := execJob(context.Background(), ProcExecInput{
 		Command:        os.Args[0],
 		Args:           []string{"-test.run=^TestProcExecHelperProcess$"},
 		Env:            []string{"AGENT_TOOL_PROCEXEC_HELPER=1"},
 		MaxOutputChars: common.DefaultOutputChars,
 		OutputView:     "raw",
-	}, 30)
+		TailLines:      defaultTailLines,
+	}, runOptions{timeout: 30 * time.Second, yieldAfter: 30 * time.Second})
 	if err != nil || result.IsError {
 		t.Fatalf("exec failed: result=%v out=%+v err=%v", result, out, err)
 	}

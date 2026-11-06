@@ -94,6 +94,9 @@ func pointerScan(reader ProcessReader, targetAddr uint64, maxDepth int, maxOffse
 		highBound := target.addr + uint64(maxOffset)
 
 		found := scanForPointers(reader, scanRegions, lowBound, highBound, ptrSize)
+		if err := cancelled(reader); err != nil {
+			return nil, err
+		}
 
 		for _, f := range found {
 			off := int64(target.addr) - int64(f.pointedValue)
@@ -123,6 +126,9 @@ func scanForPointers(reader ProcessReader, regions []MemoryRegion, low, high uin
 
 	for _, region := range regions {
 		for offset := uint64(0); offset < region.Size; offset += scanChunkSize {
+			if cancelled(reader) != nil {
+				return hits // caller turns cancellation into an error
+			}
 			readSize := region.Size - offset
 			if readSize > scanChunkSize {
 				readSize = scanChunkSize
