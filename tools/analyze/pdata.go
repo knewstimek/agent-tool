@@ -21,16 +21,23 @@ type runtimeFunction struct {
 // and returns the file offset of the function's end address.
 // Returns (0, false) if not found or not applicable (x86, no .pdata, etc.)
 func pdataFuncEndOffset(f *pe.File, queryRVA uint32) (uint32, bool) {
+	_, end, ok := pdataRangeOffsets(f, queryRVA)
+	return end, ok
+}
+
+// pdataRangeOffsets returns the file offsets of the begin and end of the
+// .pdata range containing queryRVA.
+func pdataRangeOffsets(f *pe.File, queryRVA uint32) (uint32, uint32, bool) {
 	oh64, ok := f.OptionalHeader.(*pe.OptionalHeader64)
 	if !ok || len(oh64.DataDirectory) <= 3 {
-		return 0, false
+		return 0, 0, false
 	}
 	excDir := oh64.DataDirectory[3]
 	if excDir.VirtualAddress == 0 || excDir.Size == 0 {
-		return 0, false
+		return 0, 0, false
 	}
 	if excDir.Size < 12 {
-		return 0, false
+		return 0, 0, false
 	}
 
 	// Read .pdata via section data
@@ -40,11 +47,11 @@ func pdataFuncEndOffset(f *pe.File, queryRVA uint32) (uint32, bool) {
 			excDir.VirtualAddress < s.VirtualAddress+s.VirtualSize {
 			secData, err := s.Data()
 			if err != nil {
-				return 0, false
+				return 0, 0, false
 			}
 			off := excDir.VirtualAddress - s.VirtualAddress
 			if uint64(off) >= uint64(len(secData)) {
-				return 0, false // .pdata offset beyond section raw data
+				return 0, 0, false // .pdata offset beyond section raw data
 			}
 			// uint64 math avoids a uint32 wrap of off+Size (a crafted PE with a huge
 			// exception-table Size) producing end < off and a slice-bounds panic.
@@ -57,7 +64,7 @@ func pdataFuncEndOffset(f *pe.File, queryRVA uint32) (uint32, bool) {
 		}
 	}
 	if len(pdataData) < 12 {
-		return 0, false
+		return 0, 0, false
 	}
 
 	actualEntries := uint32(len(pdataData)) / 12
@@ -75,7 +82,7 @@ func pdataFuncEndOffset(f *pe.File, queryRVA uint32) (uint32, bool) {
 		}
 	}
 	if lo == 0 {
-		return 0, false
+		return 0, 0, false
 	}
 	idx := lo - 1
 	off := idx * 12
@@ -83,15 +90,18 @@ func pdataFuncEndOffset(f *pe.File, queryRVA uint32) (uint32, bool) {
 	endRVA := binary.LittleEndian.Uint32(pdataData[off+4:])
 
 	if begin >= endRVA || queryRVA < begin || queryRVA >= endRVA {
-		return 0, false
+		return 0, 0, false
 	}
 
-	// Convert end RVA to file offset
+	beginFileOff, _, err := rvaToFileOffset(f, begin)
+	if err != nil {
+		return 0, 0, false
+	}
 	endFileOff, _, err := rvaToFileOffset(f, endRVA)
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
-	return endFileOff, true
+	return beginFileOff, endFileOff, true
 }
 
 // opFunctionAt finds the function containing a given VA using .pdata (Exception Table).

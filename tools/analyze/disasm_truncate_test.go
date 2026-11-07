@@ -117,6 +117,14 @@ func TestDisasmSwitchByteIndexTable(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
+	// Starting after the dispatch jmp (as when va points past it): the silent
+	// lead from the range start still finds the tables, and the listing
+	// starts at the requested address.
+	mid, _, _ := disasmX86Run(code, base, 0, 100, 64, disasmOpts{skip: 0x20})
+	if !strings.HasPrefix(mid, "0x140001020:  ret\n") || !strings.Contains(mid, "0x140001024:  ; switch table, 2 x 4-byte entries") ||
+		!strings.Contains(mid, "0x14000102c:  ; switch index table") || strings.Contains(mid, "jmp rax") {
+		t.Errorf("listing from mid-range lost the tables or the start, got:\n%s", mid)
+	}
 	read := func(va uint64, n int) []byte {
 		if va < base || va-base+uint64(n) > uint64(len(code)) {
 			return nil

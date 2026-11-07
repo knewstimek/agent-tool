@@ -21,6 +21,9 @@ import (
 const (
 	defaultDisasmCount = 50
 	maxDisasmCount     = 1000
+	// maxDisasmLead bounds the silent sweep from a .pdata range start to the
+	// requested address (switch-table discovery).
+	maxDisasmLead = 1 << 20
 )
 
 // opDisassemble disassembles machine code from a binary file.
@@ -124,15 +127,25 @@ func opDisassembleContext(ctx context.Context, input AnalyzeInput) (string, erro
 		}
 	}
 
+	// Starting inside an x64 .pdata range, the bytes from the range start are
+	// read too and swept without output: a switch table after the requested
+	// address is only known from its dispatch jmp, which lies before it.
+	lead := 0
+	if resolved != nil && resolved.rangeStartFileOff > 0 && arch == "x86" && mode == 64 {
+		if d := int64(offset) - resolved.rangeStartFileOff; d > 0 && d <= maxDisasmLead {
+			lead = int(d)
+		}
+	}
+
 	f, err := os.Open(input.FilePath)
 	if err != nil {
 		return "", fmt.Errorf("cannot open file: %w", err)
 	}
 	defer f.Close()
-	data := make([]byte, readSize)
+	data := make([]byte, int64(lead)+readSize)
 	// ReadAt returns io.EOF when fewer bytes are available than requested
 	// (e.g. near end of file). Partial data is still valid, so ignore EOF.
-	if _, err := f.ReadAt(data, int64(offset)); err != nil && err.Error() != "EOF" {
+	if _, err := f.ReadAt(data, int64(offset-lead)); err != nil && err.Error() != "EOF" {
 		return "", fmt.Errorf("cannot read file: %w", err)
 	}
 
@@ -158,8 +171,8 @@ func opDisassembleContext(ctx context.Context, input AnalyzeInput) (string, erro
 			text, err = disasmARM32(data, baseAddr, offset, count, showBytes)
 		}
 	default:
-		text, reachedEnd, err = disasmX86Run(data, baseAddr, offset, count, mode,
-			disasmOpts{symbols: symbolMap, stopAtRet: common.FlexBool(input.StopAtRet), showBytes: showBytes})
+		text, reachedEnd, err = disasmX86Run(data, baseAddr, offset-lead, count, mode,
+			disasmOpts{symbols: symbolMap, stopAtRet: common.FlexBool(input.StopAtRet), showBytes: showBytes, skip: lead})
 	}
 	if err != nil {
 		return "", err
@@ -211,6 +224,9 @@ type disasmOpts struct {
 	stopAtRet bool
 	showBytes bool
 	memory    bool
+	// skip is how many leading bytes of data are swept without output, only
+	// to find switch tables; listing starts at data[skip].
+	skip int
 }
 
 // disasmLine writes one listing line: address, optional hex encoding, text.
@@ -263,6 +279,57 @@ func disasmX86Run(data []byte, baseAddr uint64, offset, count, mode int, opts di
 		}
 	}
 
+	noteSwitch := func(inst x86asm.Inst) {
+		if inst.Op != x86asm.JMP {
+			return
+		}
+		if _, rel := inst.Args[0].(x86asm.Rel); rel {
+			return
+		}
+		sw := switchTable(data, winVA, pos, inst, mode, read, inWindow)
+		if len(sw.cases) == 0 {
+			return
+		}
+		parts := make([]string, len(sw.cases))
+		for i, c := range sw.cases {
+			parts[i] = fmt.Sprintf("0x%x", c)
+		}
+		addTable(sw.table, 4*len(sw.cases), fmt.Sprintf("; switch table, %d x 4-byte entries (data, not code) -> %s",
+			len(sw.cases), strings.Join(parts, ", ")))
+		if sw.index != 0 {
+			idx := make([]string, sw.indexLen)
+			for i, b := range read(sw.index, sw.indexLen) {
+				idx[i] = strconv.Itoa(int(b))
+			}
+			addTable(sw.index, sw.indexLen, fmt.Sprintf("; switch index table, %d bytes (data, not code): case value -> entry %s",
+				sw.indexLen, strings.Join(idx, ",")))
+		}
+	}
+
+	// The silent lead: sweep data[:skip] for switch tables only. A table
+	// that covers the requested address is still listed; an instruction that
+	// runs past it leaves the listing to start exactly where asked.
+	for pos < opts.skip {
+		if tb, ok := tables[pos]; ok {
+			if pos+tb.size > opts.skip {
+				break
+			}
+			pos += tb.size
+			continue
+		}
+		inst, err := x86asm.Decode(data[pos:], mode)
+		if err != nil {
+			pos++
+			continue
+		}
+		if pos+inst.Len > opts.skip {
+			pos = opts.skip
+			break
+		}
+		noteSwitch(inst)
+		pos += inst.Len
+	}
+
 	for decoded < count && pos < len(data) {
 		if tb, ok := tables[pos]; ok {
 			disasmLine(&sb, winVA+uint64(pos), nil, tb.text, false)
@@ -290,27 +357,7 @@ func disasmX86Run(data []byte, baseAddr uint64, offset, count, mode int, opts di
 			asmStr += "  ; " + annotation
 		}
 		disasmLine(&sb, addr, instBytes, asmStr, opts.showBytes)
-
-		if inst.Op == x86asm.JMP {
-			if _, rel := inst.Args[0].(x86asm.Rel); !rel {
-				if sw := switchTable(data, winVA, pos, inst, mode, read, inWindow); len(sw.cases) > 0 {
-					parts := make([]string, len(sw.cases))
-					for i, c := range sw.cases {
-						parts[i] = fmt.Sprintf("0x%x", c)
-					}
-					addTable(sw.table, 4*len(sw.cases), fmt.Sprintf("; switch table, %d x 4-byte entries (data, not code) -> %s",
-						len(sw.cases), strings.Join(parts, ", ")))
-					if sw.index != 0 {
-						idx := make([]string, sw.indexLen)
-						for i, b := range read(sw.index, sw.indexLen) {
-							idx[i] = strconv.Itoa(int(b))
-						}
-						addTable(sw.index, sw.indexLen, fmt.Sprintf("; switch index table, %d bytes (data, not code): case value -> entry %s",
-							sw.indexLen, strings.Join(idx, ",")))
-					}
-				}
-			}
-		}
+		noteSwitch(inst)
 
 		pos += inst.Len
 		decoded++
@@ -325,7 +372,7 @@ func disasmX86Run(data []byte, baseAddr uint64, offset, count, mode int, opts di
 		}
 	}
 
-	suffix := fmt.Sprintf("\n(%d instructions from offset 0x%x, arch=x86, mode=%d", decoded, offset, mode)
+	suffix := fmt.Sprintf("\n(%d instructions from offset 0x%x, arch=x86, mode=%d", decoded, offset+opts.skip, mode)
 	if opts.memory {
 		suffix = fmt.Sprintf("\n(%d instructions, arch=x86, mode=%d", decoded, mode)
 	}
@@ -440,6 +487,10 @@ type disasmResolved struct {
 	arch           string // "x86" or "arm"
 	mode           int    // 16, 32, or 64
 	funcEndFileOff int64  // -1 if unknown
+	// rangeStartFileOff is the start of the x64 .pdata range containing the
+	// requested address when that lies before it; 0 otherwise (a file offset
+	// of 0 is the PE header, never code).
+	rangeStartFileOff int64
 	// endNote explains the funcEndFileOff boundary once the output reaches
 	// it (endVA is that boundary's VA); nil when there is nothing to add.
 	endNote func(endVA uint64) string
@@ -525,6 +576,9 @@ func disasmResolvePE(filePath string, va uint64) (*disasmResolved, error) {
 			// info is read only when the output actually reaches the end.
 			r.endNote = func(uint64) string { return pdataFragmentsNote(loadPdata(f, imageBase), imageBase, rva) }
 		}
+	}
+	if begin, _, ok := pdataRangeOffsets(f, rva); ok && begin < fileOff {
+		r.rangeStartFileOff = int64(begin)
 	}
 
 	r.symbols = peSymbolMap(f, imageBase)
