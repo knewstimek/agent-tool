@@ -611,7 +611,7 @@ Static binary analysis tool with 29 operations:
 - decompile: Decompile x86/x64 PE/ELF functions to C (Ghidra-equivalent Gosleigh core; va = hex address or symbol, up to 16 comma-separated; timeout_sec; a matching PDB or embedded DWARF supplies names, prototypes, types, globals and locals, and the structs/enums the C names follow each function; Go binaries use Go's ABI; pdb_path to override)
 - type_info: Print PDB/DWARF struct/class/union/enum definitions by name (type_name): members with offsets, bitfields, base classes, union alternatives, enum values
 - annotation_set/list/delete: SQLite user labels/comments; annotations_path selects a separate DB
-- disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped), with saved user notes
+- disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped; show_bytes adds the hex encoding column; in-code switch tables print as one data line), with saved user notes
 - instruction_search: Semantic x86/x64 mnemonic/register/immediate/displacement search with exhaustive executable-offset recovery, CFG confidence, function names, target/result filters, and bounded value tracing to call/tail-call arguments
 - pe_info: PE header parsing with RWX section warnings
 - elf_info: ELF header/sections/segments/symbols with RWX warnings
@@ -636,8 +636,8 @@ Static binary analysis tool with 29 operations:
 Parameters: operation, file_path, offset, count, mode, arch (x86/arm),
   base_addr, min_length, max_results, length, section, pattern, mnemonic,
   register, immediate, trace_values, file_path_b, va, target_va,
-  target_end_va, stop_at_ret, result_offset, max_output_chars, timeout_sec, pdb_path,
-  type_name
+  target_end_va, stop_at_ret, show_bytes, result_offset, max_output_chars, timeout_sec, pdb_path,
+  noreturn_verify, type_name
 Use topic='analyze' for detailed guide with examples.
 
 ## set_config
@@ -789,13 +789,16 @@ Disassemble machine code. Supports x86 (16/32/64-bit) and ARM (32/64-bit).
         Example: va="0x140001000" (PE only)
     count: Number of instructions to decode (default: 50, max: 1000)
     stop_at_ret: Stop at function return (RET/RETF + padding/prologue boundary)
+    show_bytes: Add the hex encoding column (default false: address + instruction only)
     mode: CPU mode -- x86: 16/32/64, arm: 32/64 (default: 64)
     base_addr: Base address mapped to file offset 0 (hex string, default: "0").
                Displayed address = base_addr + offset + position.
                For PE files, use ImageBase (e.g. 0x140000000), not section VA.
 
   When using va=, disassembly auto-stops at the function boundary (via .pdata)
-  if available, preventing disassembly into the next function.
+  if available, preventing disassembly into the next function. A switch table
+  the compiler placed inside the code (MSVC x64: after the function body) prints
+  as one "; switch table, N x 4-byte entries" line with its case targets.
   Import/export symbols are annotated inline (e.g. "call [rip+0x1234]  ; CreateFileW").
 
   Output: address: hex_bytes    assembly  [; symbol] [; user:status ...]
@@ -814,6 +817,8 @@ Every hit is named by its function ("; in Class::Method+0x41").
           immediate="0x327", call_target="DeviceApi")
   analyze(operation="instruction_search", file_path="/path/to/module.dll",
           displacement="0x410")          # what reads/writes [reg+0x410]
+  analyze(operation="instruction_search", file_path="/path/to/module.dll",
+          register="RSP", displacement="0xf8") # [rsp+0xf8]: stack bases only when named
 
   The search scans every executable-section byte offset so a desynchronized linear
   sweep cannot hide a valid instruction. A function-start-anchored CFG walk labels
@@ -1142,6 +1147,10 @@ Build a static call graph from a root function (PE/ELF/Mach-O, x86/x64).
     addresses in a 78 MB x64 image and 99.5% in a 7 MB x86 one.
   Each function's calls are collected by following its control flow -- NOT a
     linear range scan -- so a boundary error cannot leak a neighbour's calls in.
+    With x64 .pdata the walk stays inside the function's own ranges, and a
+    direct call to an address that is no known function start (junk bytes
+    behind opaque predicates) is listed under "Not shown" instead of as a
+    callee. x86 has no such bound: obfuscated x86 code can still list junk calls.
   ELF / Mach-O: heuristic mode -- detects functions from CALL/BL targets.
   ARM64: scans BL imm26 targets. ARM32: scans BL imm24 targets (PC+8 offset).
   ELF/Mach-O: also merges symbol table entries as function starts.
@@ -1317,6 +1326,11 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   addresses no decompiled flow reached are listed. A Gosleigh extension: Ghidra
   rejects conditional-branch flow overrides.
 
+  Non-returning callees follow Ghidra: known names, PDB flags, and callees with
+  3+ call sites followed by padding or another function. A hot callee can reach
+  that vote by accident; when a callee that voted non-returning has a reachable
+  ret, the result warns, and noreturn_verify=true keeps such callees returning.
+
   Parameters:
     va: Function entry as hex VA or symbol name (PDB names are qualified:
         Player::TakeDamage); up to 16, comma-separated
@@ -1324,6 +1338,7 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
     pdb_force: Load pdb_path even if its GUID does not match (warns)
     timeout_sec: Worker time limit (default 60, max 600)
     assume_branches: <hex address>=taken|fallthrough, comma-separated (max 256)
+    noreturn_verify: Keep voted non-returning callees whose code reaches a ret returning
     max_output_chars: Output cap (default 32768)
     result_offset: Character offset to continue a truncated output
 
@@ -1507,7 +1522,8 @@ It works with any language that has a DAP-compatible debug adapter.
     set_expression: change expression value (expression + value + frame_id)
 
   Memory / disassembly:
-    disassemble: disassemble from memory_reference (count = instruction count)
+    disassemble: disassemble from memory_reference (count = instruction count;
+                 show_bytes=true adds the instruction bytes column)
     read_memory: read bytes from memory_reference (count = byte count, returns base64)
     write_memory: write base64 data to memory_reference
 
@@ -1747,6 +1763,7 @@ is busy, other calls on it fail fast instead of queueing.
   memtool(operation="disasm", pid=1234, address="0x...", arch="arm", mode=64)
   Reads memory from the process and disassembles in-place.
   Uses the same disassembly engine as the analyze tool (x86/x64/ARM/ARM64).
+  Lines are address + instruction; show_bytes=true adds the hex encoding column.
 
 ### struct_search - Multi-field pattern search
   memtool(operation="struct_search", pid=1234,

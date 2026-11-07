@@ -118,6 +118,15 @@ func opCallGraph(input AnalyzeInput) (string, error) {
 		}
 	}
 
+	hasPdata := false
+	for i := range funcTable {
+		if funcTable[i].exact {
+			hasPdata = true
+			break
+		}
+	}
+	unverified := map[uint64][]uint64{} // caller VA -> direct call targets that are no function start
+
 	// BFS to build call graph
 	visited := make(map[uint64]int)      // VA -> depth at which visited
 	imports := make(map[uint64][]string) // caller VA -> imported function names (FF 15)
@@ -151,7 +160,19 @@ func opCallGraph(input AnalyzeInput) (string, error) {
 		case "arm32":
 			callees = scanCallTargetsARM32(execSections, curFn.begin, curFn.end, imageBase)
 		default: // x86, x64
-			callees = scanCallTargetsCFG(execSections, curFn.begin, imageBase, is64, startSet)
+			var inside func(uint32) bool
+			if curFn.exact {
+				// x64 unwinding requires a function's code to lie in its own
+				// .pdata ranges (its own plus chained cold fragments), so flow
+				// leaving them is not its code -- the decompiler bounds an
+				// obfuscated function's flow the same way.
+				owner := curFn.entry()
+				inside = func(rva uint32) bool {
+					fn := findFunc(funcTable, rva)
+					return fn != nil && fn.exact && fn.entry() == owner
+				}
+			}
+			callees = scanCallTargetsCFG(execSections, curFn.begin, imageBase, is64, startSet, inside)
 		}
 
 		for _, ct := range callees {
@@ -171,6 +192,16 @@ func opCallGraph(input AnalyzeInput) (string, error) {
 			}
 
 			calleeVA := imageBase + uint64(ct.rva)
+			// With .pdata every function start is known (.pdata ranges plus
+			// the leaf functions laid out in the gaps), so a direct call to
+			// anything else -- the middle of a function, bytes between them --
+			// is junk decoded as code (opaque predicates in obfuscated code),
+			// not a callee. Listed apart instead of as edges. A named address
+			// (an export or PDB function entering mid-range) is a real target.
+			if _, named := symbols[calleeVA]; hasPdata && !startSet[ct.rva] && !named {
+				unverified[cur.va] = append(unverified[cur.va], calleeVA)
+				continue
+			}
 			edges = append(edges, cgEdge{callerVA: cur.va, calleeVA: calleeVA})
 
 			if _, seen := visited[calleeVA]; !seen && len(visited) < maxNodes {
@@ -247,6 +278,28 @@ func opCallGraph(input AnalyzeInput) (string, error) {
 
 	if len(visited) >= maxNodes {
 		sb.WriteString(fmt.Sprintf("\n(truncated at max_nodes=%d)\n", maxNodes))
+	}
+	if len(unverified) > 0 {
+		callers := make([]uint64, 0, len(unverified))
+		total := 0
+		for c, ts := range unverified {
+			callers = append(callers, c)
+			total += len(ts)
+		}
+		sort.Slice(callers, func(i, j int) bool { return callers[i] < callers[j] })
+		fmt.Fprintf(&sb, "\nNot shown: %d direct call target(s) that are no known function start (mid-function or between functions) -- junk bytes decoded as code, typically behind opaque predicates. A real call there would need disassemble to confirm:\n", total)
+		for _, c := range callers {
+			ts := unverified[c]
+			parts := make([]string, 0, 8)
+			for i, t := range ts {
+				if i == 8 {
+					parts = append(parts, fmt.Sprintf("... +%d more", len(ts)-8))
+					break
+				}
+				parts = append(parts, fmt.Sprintf("0x%x", t))
+			}
+			fmt.Fprintf(&sb, "  in %s: %s\n", funcName(c, symbols), strings.Join(parts, ", "))
+		}
 	}
 
 	return sb.String(), nil
@@ -678,7 +731,11 @@ type cgCallTarget struct {
 // function starts. This prevents the classic mis-attribution where an
 // over-extended heuristic funcEnd makes the linear scan walk into the NEXT
 // function and report ITS calls as edges of this one ("fall-through" edges).
-func scanCallTargetsCFG(sections []cgSection, funcBegin uint32, imageBase uint64, is64 bool, starts map[uint32]bool) []cgCallTarget {
+//
+// inside, when non-nil, bounds the walk to the function's own code: flow that
+// leaves it (a branch into junk bytes behind an opaque predicate) is not
+// followed.
+func scanCallTargetsCFG(sections []cgSection, funcBegin uint32, imageBase uint64, is64 bool, starts map[uint32]bool, inside func(uint32) bool) []cgCallTarget {
 	mode := 32
 	if is64 {
 		mode = 64
@@ -712,6 +769,9 @@ func scanCallTargetsCFG(sections []cgSection, funcBegin uint32, imageBase uint64
 		rva := secRVA + uint32(pos)
 		if pos != startOff && starts[rva] {
 			continue // reached another function -- not part of this one
+		}
+		if inside != nil && !inside(rva) {
+			continue
 		}
 		visited[pos] = true
 		budget--

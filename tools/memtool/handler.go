@@ -43,6 +43,7 @@ type MemtoolInput struct {
 	Arch          string `json:"arch,omitempty" jsonschema:"CPU architecture for disasm: x86 (default) or arm"`
 	Mode          interface{} `json:"mode,omitempty" jsonschema:"CPU mode for disasm: 32 or 64 (default)"`
 	Count         interface{} `json:"count,omitempty" jsonschema:"Number of instructions to disassemble (default 50, max 200)"`
+	ShowBytes     interface{} `json:"show_bytes,omitempty" jsonschema:"disasm: add each instruction's hex encoding column (for patching/signatures). Default false to save tokens"`
 	ForceDACL     interface{} `json:"force_dacl,omitempty" jsonschema:"Windows only. If a normal OpenProcess is denied, temporarily rewrite the target's DACL (via owner-implicit WRITE_DAC) to gain access, then restore it. Works only for SAME-USER targets that self-hardened their DACL; cannot bypass higher-integrity, other-user, OWNER_RIGHTS-SID, or PPL/anti-cheat targets. Invasive -- opt-in, default false."`
 	Chains        string `json:"chains,omitempty" jsonschema:"read_chain: JSON array of pointer chains to resolve in ONE call. Each: {base:'0x..' (hex), offsets:['0x10','0x8','0x0'] (signed hex/dec, CE order), type:'int32' (omit for hex dump), label:'hp' (optional), length:N (for string/bytes)}. Batches many chains so you avoid one call per pointer level."`
 	Offsets       string `json:"offsets,omitempty" jsonschema:"read_chain single-chain form: offsets for one chain given via address+offsets+value_type. JSON array or comma/space separated hex (e.g. '0x10, 0x8, 0x0'). Signed offsets allowed."`
@@ -525,7 +526,7 @@ func opDisasm(input MemtoolInput) (*mcp.CallToolResult, MemtoolOutput, error) {
 		return errorResult("read failed at 0x%X: %v", addr, err)
 	}
 
-	result, err := analyze.DisasmBytes(buf[:n], addr, arch, mode, count)
+	result, err := analyze.DisasmBytes(buf[:n], addr, arch, mode, count, common.FlexBool(input.ShowBytes))
 	if err != nil {
 		return errorResult("disassembly failed: %v", err)
 	}

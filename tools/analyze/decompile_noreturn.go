@@ -67,7 +67,14 @@ type callSite struct {
 // bytes, or INT3 alignment padding -- or when it was suspected once and every
 // path through it ends in a call to a non-returning function. Each new
 // non-returning function can expose more, so the search repeats.
-func (t *decompileTarget) discoverNoReturn(seed map[uint64]bool) map[uint64]bool {
+//
+// verify adds a check Ghidra does not make: a callee whose own flow reaches
+// a ret is kept returning whatever its call sites suggest. The site count
+// alone misfires on a very hot callee -- three `call; int3` sites among
+// thousands of ordinary ones (compiler-placed padding after a call the
+// optimizer knew ends the path there) meet the threshold, and every caller
+// then loses the code after its call.
+func (t *decompileTarget) discoverNoReturn(seed map[uint64]bool, verify bool) map[uint64]bool {
 	noRet := map[uint64]bool{}
 	for va := range seed {
 		noRet[va] = true
@@ -82,6 +89,9 @@ func (t *decompileTarget) discoverNoReturn(seed map[uint64]bool) map[uint64]bool
 		}
 		added := false
 		for target, n := range evidence {
+			if n >= noReturnThreshold && verify && t.reachesReturn(target, noRet) {
+				continue
+			}
 			if n >= noReturnThreshold || t.onlyCallsNoReturn(target, noRet) {
 				noRet[target] = true
 				added = true
@@ -268,6 +278,68 @@ func (t *decompileTarget) notContinuation(va uint64) bool {
 			return false // a conditional branch ends the straight line
 		}
 		va += uint64(inst.Len)
+	}
+	return false
+}
+
+// reachesReturn reports that a ret is reachable from start: direct jumps are
+// followed even into other functions (a thunk returns through its target),
+// calls are assumed to return unless the callee is in noRet, and an indirect
+// jump continues at its recovered switch cases. An exhausted walk proves
+// nothing and reports false.
+func (t *decompileTarget) reachesReturn(start uint64, noRet map[uint64]bool) bool {
+	mode := 32
+	if t.is64 {
+		mode = 64
+	}
+	seen := map[uint64]bool{}
+	work := []uint64{start}
+	for steps := 0; len(work) > 0; {
+		va := work[len(work)-1]
+		work = work[:len(work)-1]
+		for !seen[va] {
+			if steps++; steps > 20000 {
+				return false
+			}
+			seen[va] = true
+			code, ok := t.codeAt(va)
+			if !ok {
+				break
+			}
+			inst, err := x86asm.Decode(code, mode)
+			if err != nil || inst.Len == 0 {
+				break
+			}
+			next := va + uint64(inst.Len)
+			target, direct := directTarget(inst, next)
+			switch inst.Op {
+			case x86asm.RET, x86asm.LRET:
+				return true
+			case x86asm.IRET, x86asm.IRETD, x86asm.IRETQ, x86asm.HLT, x86asm.UD2, x86asm.INT:
+				next = 0
+			case x86asm.CALL:
+				if direct && noRet[target] {
+					next = 0
+				}
+			case x86asm.JMP:
+				if direct {
+					if !noRet[target] {
+						work = append(work, target)
+					}
+				} else {
+					work = append(work, t.switchTargets(va, inst)...)
+				}
+				next = 0
+			default:
+				if direct && isCondJump(inst.Op) {
+					work = append(work, target)
+				}
+			}
+			if next == 0 {
+				break
+			}
+			va = next
+		}
 	}
 	return false
 }

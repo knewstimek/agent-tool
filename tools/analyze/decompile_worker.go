@@ -25,6 +25,7 @@ import (
 	"github.com/knewstimek/gosleigh/pkg/loader"
 	"github.com/knewstimek/gosleigh/pkg/pcode"
 	"github.com/knewstimek/gosleigh/pkg/specs"
+	"golang.org/x/arch/x86/x86asm"
 )
 
 // DecompileWorkerArg is the hidden subcommand that turns this executable into
@@ -43,9 +44,12 @@ type decompileRequest struct {
 	Targets  []string `json:"targets"`
 	// AssumeBranches fixes conditional branches by address ("taken" or
 	// "fallthrough"); it changes only the flow, not the loaded binary.
-	AssumeBranches  map[uint64]string `json:"assume_branches,omitempty"`
-	MaxInstructions int               `json:"max_instructions,omitempty"`
-	MemLimitMB      int               `json:"mem_limit_mb"`
+	AssumeBranches map[uint64]string `json:"assume_branches,omitempty"`
+	// NoReturnVerify keeps a callee returning when its own flow reaches a
+	// ret, overriding Ghidra's call-site vote (see discoverNoReturn).
+	NoReturnVerify  bool `json:"noreturn_verify,omitempty"`
+	MaxInstructions int  `json:"max_instructions,omitempty"`
+	MemLimitMB      int  `json:"mem_limit_mb"`
 }
 
 // decompileLine is one JSON line of worker stdout. Lines are written as each
@@ -159,6 +163,7 @@ func RunDecompileWorker(in io.Reader, out io.Writer) int {
 		}
 		emit(l)
 		assume := assumeDirections(req.AssumeBranches)
+		t.useNoReturnVerify(req.NoReturnVerify)
 		for _, target := range req.Targets {
 			current.Store(target)
 			emit(t.decompileAssuming(target, req.MaxInstructions, false, assume))
@@ -190,6 +195,10 @@ type decompileTarget struct {
 	// extent is a function's exact address ranges from x64 PE .pdata (its
 	// own range plus chained fragments), nil when unknown.
 	extent func(entry uint64) [][2]uint64
+	// Non-returning function sets: the known seed, Ghidra's discovery, and
+	// the discovery with noreturn_verify (nil until first requested).
+	noRetSeed, noRetGhidra, noRetVerified map[uint64]bool
+	noRetVerify                           bool // the host uses noRetVerified
 }
 
 // decompile decompiles one target. ghidraFormat selects Ghidra's exact
@@ -214,6 +223,7 @@ func (t *decompileTarget) decompileAssuming(target string, maxInstr int, ghidraF
 	start := time.Now()
 	_, short := displayParts(t.host.funcs[entry])
 	localNames, localTypes := t.hostLocals(entry)
+	overrides := tailCallOverrides(t, entry)
 	// A fresh hook per attempt: it records which branches the flow reached.
 	var assumed *branchassume.Hook
 	newHooks := func() []bridge.InstructionHook {
@@ -233,7 +243,7 @@ func (t *decompileTarget) decompileAssuming(target string, maxInstr int, ghidraF
 		DisplayName:      ghidraName(t.host.funcs[entry]),
 		MaxInstructions:  maxInstr,
 		Host:             t.host,
-		FlowOverrides:    tailCallOverrides(t, entry),
+		FlowOverrides:    overrides,
 		HostLocals:       localNames,
 		HostLocalTypes:   localTypes,
 		TrackedRegs:      t.tracked,
@@ -291,6 +301,9 @@ func (t *decompileTarget) decompileAssuming(target string, maxInstr int, ghidraF
 	}
 	line.Name = t.host.nameOf(entry)
 	line.C, line.Warnings = res.C, res.Warnings
+	if w := t.votedNoReturnWarning(overrides); w != "" {
+		line.Warnings = append(line.Warnings, w)
+	}
 	if !ghidraFormat {
 		line.C = stripTypeDefinitions(line.C)
 		if t.host.debug != nil {
@@ -298,6 +311,46 @@ func (t *decompileTarget) decompileAssuming(target string, maxInstr int, ghidraF
 		}
 	}
 	return line
+}
+
+// votedNoReturnWarning names the callees this function's flow stopped at
+// only because their call sites voted them non-returning although their own
+// code reaches a ret -- the cases noreturn_verify changes. Empty when
+// verify is already on or there are none.
+func (t *decompileTarget) votedNoReturnWarning(overrides map[uint64]string) string {
+	if t.noRetVerify {
+		return ""
+	}
+	mode := 32
+	if t.is64 {
+		mode = 64
+	}
+	var names []string
+	seen := map[uint64]bool{}
+	for va := range overrides {
+		code, ok := t.codeAt(va)
+		if !ok {
+			continue
+		}
+		inst, err := x86asm.Decode(code, mode)
+		if err != nil || inst.Op != x86asm.CALL {
+			continue
+		}
+		target, direct := directTarget(inst, va+uint64(inst.Len))
+		if !direct || seen[target] || t.noRetSeed[target] || !t.host.noRet[target] {
+			continue
+		}
+		seen[target] = true
+		if t.reachesReturn(target, t.noRetSeed) {
+			names = append(names, fmt.Sprintf("%s (0x%x)", t.host.nameOf(target), target))
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return "flow stops after calls to " + strings.Join(names, ", ") +
+		": treated as non-returning because 3+ call sites in the binary look so (Ghidra's rule), yet the callee's code reaches a ret. If the C ends too early there, retry with noreturn_verify=true"
 }
 
 // stripTypeDefinitions drops the one-line struct/union/enum definitions the
@@ -513,6 +566,9 @@ func loadDecompileTarget(path, pdbPath string, pdbForce bool) (*decompileTarget,
 		return nil, fmt.Errorf("decompile supports PE and ELF, not %s", bin.format)
 	}
 	t.is64 = bin.is64
+	if !bin.is64 {
+		host.bin32 = bin
+	}
 	var tables []tableSection
 	if bin.format == "PE" {
 		for _, s := range sections {
@@ -603,7 +659,23 @@ func (t *decompileTarget) findNoReturn() {
 			h.noRetImports[va] = true
 		}
 	}
-	h.noRet = t.discoverNoReturn(seed)
+	h.noRet = t.discoverNoReturn(seed, false)
+	t.noRetSeed, t.noRetGhidra = seed, h.noRet
+}
+
+// useNoReturnVerify switches the host between Ghidra's non-returning set and
+// the one that also requires a callee to have no reachable ret (computed on
+// first use; the call sites are already cached).
+func (t *decompileTarget) useNoReturnVerify(on bool) {
+	t.noRetVerify = on
+	if !on {
+		t.host.noRet = t.noRetGhidra
+		return
+	}
+	if t.noRetVerified == nil {
+		t.noRetVerified = t.discoverNoReturn(t.noRetSeed, true)
+	}
+	t.host.noRet = t.noRetVerified
 }
 
 // decompHost answers the decompiler core's symbol queries from the binary's
@@ -624,6 +696,10 @@ type decompHost struct {
 	// non-returning library functions.
 	noRet        map[uint64]bool
 	noRetImports map[uint64]bool
+	// bin32 walks a 32-bit callee to its ret N for the purge; nil for x64,
+	// whose callees never pop arguments.
+	bin32 *cgBinary
+	purge sync.Map // entry -> extrapop (int32), 32-bit only
 }
 
 // addNames takes PDB function names and entries. A PDB entry is a real
@@ -677,12 +753,42 @@ func (h *decompHost) QueryFunction(a address.Address) (pcode.HostFunction, bool)
 			hf = *p
 		}
 	}
+	if hf.ExtraPop == pcode.ExtrapopUnknown {
+		hf.ExtraPop = h.extraPop(a.Offset)
+	}
 	hf.Name = h.nameOf(a.Offset)
 	hf.Namespace, _ = displayParts(raw)
 	if h.noRet[a.Offset] {
 		hf.NoReturn = true
 	}
 	return hf, true
+}
+
+// extraPop is how far a call to the function at va moves the stack pointer:
+// the return address plus the bytes the callee pops (Ghidra's analyzed
+// purge + stackshift, which its host sends for every known function). An
+// unknown answer leaves the core to treat the call as unrestored when the
+// default model has a fixed extrapop (x64, x86 gcc): every later stack
+// access then drifts by the return address -- RSP-8 stores, inflated frame
+// offsets, stack arguments read as locals. x64 callees never pop
+// arguments, so the answer is the return address alone. A 32-bit callee's
+// is read from its ret N; one with no reachable ret stays unknown, which
+// the x86 Windows default (__stdcall, extrapop unknown) solves per call.
+func (h *decompHost) extraPop(va uint64) int32 {
+	if h.bin32 == nil {
+		return 8
+	}
+	if v, ok := h.purge.Load(va); ok {
+		return v.(int32)
+	}
+	ep := int32(pcode.ExtrapopUnknown)
+	if va >= h.bin32.imageBase && va-h.bin32.imageBase <= 0xffffffff {
+		if n, _, ok := h.bin32.walkRet(uint32(va - h.bin32.imageBase)); ok {
+			ep = 4 + int32(n)
+		}
+	}
+	h.purge.Store(va, ep)
+	return ep
 }
 
 func (h *decompHost) QueryExternalRef(a address.Address) (string, bool) {

@@ -888,11 +888,12 @@ func opDisassemble(session *debugSession, input DebugInput) (string, error) {
 		return "Disassemble response unavailable", nil
 	}
 
+	showBytes := common.FlexBool(input.ShowBytes)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Disassembly from %s (%d instructions):\n", input.MemoryReference, len(daResp.Body.Instructions)))
 	for _, inst := range daResp.Body.Instructions {
 		sb.WriteString(fmt.Sprintf("  %s", inst.Address))
-		if inst.InstructionBytes != "" {
+		if showBytes && inst.InstructionBytes != "" {
 			sb.WriteString(fmt.Sprintf("  %-20s", inst.InstructionBytes))
 		}
 		sb.WriteString(fmt.Sprintf("  %s", inst.Instruction))

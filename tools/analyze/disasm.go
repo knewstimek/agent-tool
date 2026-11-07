@@ -5,6 +5,7 @@ import (
 	"debug/elf"
 	"debug/macho"
 	"debug/pe"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"strconv"
@@ -148,15 +149,17 @@ func opDisassembleContext(ctx context.Context, input AnalyzeInput) (string, erro
 
 	var text string
 	reachedEnd := false
+	showBytes := common.FlexBool(input.ShowBytes)
 	switch arch {
 	case "arm":
 		if mode == 64 {
-			text, err = disasmARM64(data, baseAddr, offset, count)
+			text, err = disasmARM64(data, baseAddr, offset, count, showBytes)
 		} else {
-			text, err = disasmARM32(data, baseAddr, offset, count)
+			text, err = disasmARM32(data, baseAddr, offset, count, showBytes)
 		}
 	default:
-		text, reachedEnd, err = disasmX86Run(data, baseAddr, offset, count, mode, symbolMap, common.FlexBool(input.StopAtRet))
+		text, reachedEnd, err = disasmX86Run(data, baseAddr, offset, count, mode,
+			disasmOpts{symbols: symbolMap, stopAtRet: common.FlexBool(input.StopAtRet), showBytes: showBytes})
 	}
 	if err != nil {
 		return "", err
@@ -172,7 +175,7 @@ func opDisassembleContext(ctx context.Context, input AnalyzeInput) (string, erro
 
 // DisasmBytes disassembles raw machine code bytes.
 // Exported for use by other packages (e.g., memtool for live process memory).
-func DisasmBytes(data []byte, baseAddr uint64, arch string, mode int, count int) (string, error) {
+func DisasmBytes(data []byte, baseAddr uint64, arch string, mode int, count int, showBytes bool) (string, error) {
 	if count <= 0 {
 		count = defaultDisasmCount
 	}
@@ -185,67 +188,128 @@ func DisasmBytes(data []byte, baseAddr uint64, arch string, mode int, count int)
 	switch arch {
 	case "arm":
 		if mode == 64 {
-			return disasmARM64(data, baseAddr, 0, count)
+			return disasmARM64(data, baseAddr, 0, count, showBytes)
 		}
-		return disasmARM32(data, baseAddr, 0, count)
+		return disasmARM32(data, baseAddr, 0, count, showBytes)
 	default:
 		if mode == 0 {
 			mode = 64
 		}
-		return disasmX86(data, baseAddr, 0, count, mode, nil)
+		text, _, err := disasmX86Run(data, baseAddr, 0, count, mode, disasmOpts{showBytes: showBytes, memory: true})
+		return text, err
 	}
 }
 
-func disasmX86(data []byte, baseAddr uint64, offset, count, mode int, symbols map[uint64]string) (string, error) {
-	return disasmX86Opts(data, baseAddr, offset, count, mode, symbols, false)
+// disasmOpts are the x86 listing's options. symbols names call/jump targets;
+// stopAtRet stops after a RET/RETF followed by INT3/NOP padding or a new
+// function prologue (a confirmed function boundary); showBytes adds each
+// instruction's encoding as a hex column. memory marks a listing of live
+// process memory (memtool disasm), whose resume parameter is address=, with
+// no file offset or stop_at_ret.
+type disasmOpts struct {
+	symbols   map[uint64]string
+	stopAtRet bool
+	showBytes bool
+	memory    bool
 }
 
-// disasmX86Opts is the core x86 disassembler with optional stop_at_ret behavior.
-// When stopAtRet is true, stops after a RET/RETF instruction that is followed by
-// INT3/NOP padding or a new function prologue (confirmed function boundary).
-func disasmX86Opts(data []byte, baseAddr uint64, offset, count, mode int, symbols map[uint64]string, stopAtRet bool) (string, error) {
-	text, _, err := disasmX86Run(data, baseAddr, offset, count, mode, symbols, stopAtRet)
-	return text, err
+// disasmLine writes one listing line: address, optional hex encoding, text.
+func disasmLine(sb *strings.Builder, addr uint64, raw []byte, text string, showBytes bool) {
+	if !showBytes {
+		fmt.Fprintf(sb, "0x%x:  %s\n", addr, text)
+		return
+	}
+	hex := make([]byte, 0, 3*len(raw))
+	for i, b := range raw {
+		if i > 0 {
+			hex = append(hex, ' ')
+		}
+		hex = fmt.Appendf(hex, "%02x", b)
+	}
+	fmt.Fprintf(sb, "0x%x:  %-30s %s\n", addr, hex, text)
 }
 
-// disasmX86Run is disasmX86Opts that also reports whether every byte of data
-// was consumed (neither the instruction cap nor stop_at_ret ended it first).
-func disasmX86Run(data []byte, baseAddr uint64, offset, count, mode int, symbols map[uint64]string, stopAtRet bool) (string, bool, error) {
+// disasmX86Run is the x86 linear-sweep listing. It also reports whether every
+// byte of data was consumed (neither the instruction cap nor stop_at_ret
+// ended it first).
+//
+// A switch table placed inside the code (MSVC x64 puts it right after the
+// function's instructions) is not code: once an indirect jmp resolves to a
+// table ahead in the window, the sweep prints the table as one data line
+// with its case targets and skips it, instead of decoding the entries as
+// garbage instructions that also desynchronize the code after them.
+func disasmX86Run(data []byte, baseAddr uint64, offset, count, mode int, opts disasmOpts) (string, bool, error) {
 	var sb strings.Builder
 	pos := 0
 	decoded := 0
 	stoppedAtRet := false
+	winVA := baseAddr + uint64(offset)
+	inWindow := func(va uint64) bool { return va >= winVA && va-winVA < uint64(len(data)) }
+	read := func(va uint64, n int) []byte {
+		if !inWindow(va) || va-winVA+uint64(n) > uint64(len(data)) {
+			return nil
+		}
+		return data[va-winVA : va-winVA+uint64(n)]
+	}
+	// Data tables ahead in the window: position -> (size, listing text).
+	type dataTable struct {
+		size int
+		text string
+	}
+	tables := map[int]dataTable{}
+	addTable := func(va uint64, size int, text string) {
+		if tp := int(va - winVA); inWindow(va) && va-winVA > uint64(pos) && tp+size <= len(data) {
+			tables[tp] = dataTable{size, text}
+		}
+	}
 
 	for decoded < count && pos < len(data) {
+		if tb, ok := tables[pos]; ok {
+			disasmLine(&sb, winVA+uint64(pos), nil, tb.text, false)
+			pos += tb.size
+			decoded++
+			continue
+		}
 		inst, err := x86asm.Decode(data[pos:], mode)
+		addr := winVA + uint64(pos)
 		if err != nil {
 			// Failed to decode -- emit raw byte and skip
-			addr := baseAddr + uint64(offset) + uint64(pos)
-			sb.WriteString(fmt.Sprintf("0x%x:  %02x                          db 0x%02x\n",
-				addr, data[pos], data[pos]))
+			disasmLine(&sb, addr, data[pos:pos+1], fmt.Sprintf("db 0x%02x", data[pos]), opts.showBytes)
 			pos++
 			decoded++
 			continue
 		}
 
-		addr := baseAddr + uint64(offset) + uint64(pos)
 		instBytes := data[pos : pos+inst.Len]
-
-		var hexParts []string
-		for _, b := range instBytes {
-			hexParts = append(hexParts, fmt.Sprintf("%02x", b))
-		}
-		hexStr := strings.Join(hexParts, " ")
 
 		// Intel syntax with address context for RIP-relative resolution
 		asmStr := x86asm.IntelSyntax(inst, addr, nil)
 
 		// Symbol annotation: resolve target addresses to import/export names
-		annotation := resolveSymbol(inst, addr, symbols, mode)
-		if annotation != "" {
-			sb.WriteString(fmt.Sprintf("0x%x:  %-30s %s  ; %s\n", addr, hexStr, asmStr, annotation))
-		} else {
-			sb.WriteString(fmt.Sprintf("0x%x:  %-30s %s\n", addr, hexStr, asmStr))
+		if annotation := resolveSymbol(inst, addr, opts.symbols, mode); annotation != "" {
+			asmStr += "  ; " + annotation
+		}
+		disasmLine(&sb, addr, instBytes, asmStr, opts.showBytes)
+
+		if inst.Op == x86asm.JMP {
+			if _, rel := inst.Args[0].(x86asm.Rel); !rel {
+				if sw := switchTable(data, winVA, pos, inst, mode, read, inWindow); len(sw.cases) > 0 {
+					parts := make([]string, len(sw.cases))
+					for i, c := range sw.cases {
+						parts[i] = fmt.Sprintf("0x%x", c)
+					}
+					addTable(sw.table, 4*len(sw.cases), fmt.Sprintf("; switch table, %d x 4-byte entries (data, not code) -> %s",
+						len(sw.cases), strings.Join(parts, ", ")))
+					if sw.index != 0 {
+						idx := make([]string, sw.indexLen)
+						for i, b := range read(sw.index, sw.indexLen) {
+							idx[i] = strconv.Itoa(int(b))
+						}
+						addTable(sw.index, sw.indexLen, fmt.Sprintf("; switch index table, %d bytes (data, not code): case value -> entry %s",
+							sw.indexLen, strings.Join(idx, ",")))
+					}
+				}
+			}
 		}
 
 		pos += inst.Len
@@ -253,7 +317,7 @@ func disasmX86Run(data []byte, baseAddr uint64, offset, count, mode int, symbols
 
 		// stop_at_ret: check if this instruction is a RET/RETF and next bytes
 		// indicate a function boundary (padding or new prologue)
-		if stopAtRet && isRetInstruction(instBytes) {
+		if opts.stopAtRet && isRetInstruction(instBytes) {
 			if pos >= len(data) || isFuncBoundaryAfterRet(data, pos, mode) {
 				stoppedAtRet = true
 				break
@@ -262,6 +326,9 @@ func disasmX86Run(data []byte, baseAddr uint64, offset, count, mode int, symbols
 	}
 
 	suffix := fmt.Sprintf("\n(%d instructions from offset 0x%x, arch=x86, mode=%d", decoded, offset, mode)
+	if opts.memory {
+		suffix = fmt.Sprintf("\n(%d instructions, arch=x86, mode=%d", decoded, mode)
+	}
 	if stoppedAtRet {
 		suffix += ", stopped at function return"
 	}
@@ -272,9 +339,14 @@ func disasmX86Run(data []byte, baseAddr uint64, offset, count, mode int, symbols
 	// to resume so it paginates instead of assuming it saw the whole function.
 	if decoded >= count && !stoppedAtRet && pos < len(data) {
 		nextVA := baseAddr + uint64(offset) + uint64(pos)
-		sb.WriteString(fmt.Sprintf("\n** truncated at the %d-instruction cap (NOT a function end). "+
-			"To continue, disassemble with va=\"0x%x\" (or offset=%d), optionally with a larger count or stop_at_ret=true. **",
-			count, nextVA, offset+pos))
+		if opts.memory {
+			fmt.Fprintf(&sb, "\n** truncated at the %d-instruction cap (NOT a function end). "+
+				"To continue, disasm with address=\"0x%x\", optionally with a larger count. **", count, nextVA)
+		} else {
+			fmt.Fprintf(&sb, "\n** truncated at the %d-instruction cap (NOT a function end). "+
+				"To continue, disassemble with va=\"0x%x\" (or offset=%d), optionally with a larger count or stop_at_ret=true. **",
+				count, nextVA, offset+pos)
+		}
 	}
 	return sb.String(), !stoppedAtRet && pos >= len(data), nil
 }
@@ -319,7 +391,7 @@ func isFuncBoundaryAfterRet(data []byte, pos, mode int) bool {
 	return false
 }
 
-func disasmARM64(data []byte, baseAddr uint64, offset, count int) (string, error) {
+func disasmARM64(data []byte, baseAddr uint64, offset, count int, showBytes bool) (string, error) {
 	var sb strings.Builder
 	decoded := 0
 
@@ -328,18 +400,11 @@ func disasmARM64(data []byte, baseAddr uint64, offset, count int) (string, error
 		addr := baseAddr + uint64(offset) + uint64(pos)
 
 		inst, err := arm64asm.Decode(data[pos : pos+4])
-		if err != nil {
-			sb.WriteString(fmt.Sprintf("0x%x:  %02x %02x %02x %02x                   .word 0x%08x\n",
-				addr, data[pos], data[pos+1], data[pos+2], data[pos+3],
-				uint32(data[pos])|uint32(data[pos+1])<<8|uint32(data[pos+2])<<16|uint32(data[pos+3])<<24))
-			decoded++
-			continue
+		text := fmt.Sprintf(".word 0x%08x", binary.LittleEndian.Uint32(data[pos:]))
+		if err == nil {
+			text = inst.String()
 		}
-
-		hexStr := fmt.Sprintf("%02x %02x %02x %02x", data[pos], data[pos+1], data[pos+2], data[pos+3])
-		asmStr := inst.String()
-
-		sb.WriteString(fmt.Sprintf("0x%x:  %-30s %s\n", addr, hexStr, asmStr))
+		disasmLine(&sb, addr, data[pos:pos+4], text, showBytes)
 		decoded++
 	}
 
@@ -347,7 +412,7 @@ func disasmARM64(data []byte, baseAddr uint64, offset, count int) (string, error
 	return sb.String(), nil
 }
 
-func disasmARM32(data []byte, baseAddr uint64, offset, count int) (string, error) {
+func disasmARM32(data []byte, baseAddr uint64, offset, count int, showBytes bool) (string, error) {
 	var sb strings.Builder
 	decoded := 0
 
@@ -356,18 +421,11 @@ func disasmARM32(data []byte, baseAddr uint64, offset, count int) (string, error
 		addr := baseAddr + uint64(offset) + uint64(pos)
 
 		inst, err := armasm.Decode(data[pos:pos+4], armasm.ModeARM)
-		if err != nil {
-			sb.WriteString(fmt.Sprintf("0x%x:  %02x %02x %02x %02x                   .word 0x%08x\n",
-				addr, data[pos], data[pos+1], data[pos+2], data[pos+3],
-				uint32(data[pos])|uint32(data[pos+1])<<8|uint32(data[pos+2])<<16|uint32(data[pos+3])<<24))
-			decoded++
-			continue
+		text := fmt.Sprintf(".word 0x%08x", binary.LittleEndian.Uint32(data[pos:]))
+		if err == nil {
+			text = inst.String()
 		}
-
-		hexStr := fmt.Sprintf("%02x %02x %02x %02x", data[pos], data[pos+1], data[pos+2], data[pos+3])
-		asmStr := inst.String()
-
-		sb.WriteString(fmt.Sprintf("0x%x:  %-30s %s\n", addr, hexStr, asmStr))
+		disasmLine(&sb, addr, data[pos:pos+4], text, showBytes)
 		decoded++
 	}
 

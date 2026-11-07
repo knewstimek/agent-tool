@@ -44,7 +44,7 @@ func opDecompile(ctx context.Context, input AnalyzeInput) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath, PDBForce: input.PDBForce, AssumeBranches: assume}
+	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath, PDBForce: input.PDBForce, AssumeBranches: assume, NoReturnVerify: input.NoReturnVerify}
 	start := time.Now()
 	lines, failure := runDecompileWorkerResuming(ctx, req, time.Duration(timeout)*time.Second)
 	input.annotations, input.annotationNotice, err = loadFunctionAnnotations(ctx, input, lines)

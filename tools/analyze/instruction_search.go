@@ -415,16 +415,28 @@ func instructionMatches(inst x86asm.Inst, spec instructionSearchSpec) bool {
 	if spec.mnemonic != "" && !strings.EqualFold(inst.Op.String(), spec.mnemonic) {
 		return false
 	}
-	if spec.hasRegister {
+	isReg := func(reg x86asm.Reg) bool {
+		family, width, _, ok := gprDescriptor(reg)
+		return ok && family == spec.regFamily && width == spec.regWidth
+	}
+	// With a displacement, the register may also be the base or index of the
+	// [reg+disp] operand: register=RSP displacement=0xf8 asks for [rsp+0xf8],
+	// which has no register operand at all.
+	regInMem := false
+	if spec.hasDisp {
+		// [base+index*scale+disp] through a register. Stack-pointer bases are
+		// locals and arguments, RIP-relative operands a distance to data:
+		// neither is a structure offset -- unless the caller named that
+		// register.
 		matched := false
 		for _, arg := range inst.Args {
-			reg, ok := arg.(x86asm.Reg)
-			if !ok {
+			m, ok := arg.(x86asm.Mem)
+			if !ok || memDisp(m) != spec.displacement || (m.Base == 0 && m.Index == 0) {
 				continue
 			}
-			family, width, _, ok := gprDescriptor(reg)
-			if ok && family == spec.regFamily && width == spec.regWidth {
-				matched = true
+			named := spec.hasRegister && (isReg(m.Base) || isReg(m.Index))
+			if named || !isStackOrRIP(m.Base) {
+				matched, regInMem = true, named
 				break
 			}
 		}
@@ -432,13 +444,10 @@ func instructionMatches(inst x86asm.Inst, spec instructionSearchSpec) bool {
 			return false
 		}
 	}
-	if spec.hasDisp {
-		// [base+index*scale+disp] through a register. Stack-pointer bases are
-		// locals and arguments, RIP-relative operands a distance to data:
-		// neither is a structure offset.
+	if spec.hasRegister && !regInMem {
 		matched := false
 		for _, arg := range inst.Args {
-			if m, ok := arg.(x86asm.Mem); ok && memDisp(m) == spec.displacement && (m.Base != 0 || m.Index != 0) && !isStackOrRIP(m.Base) {
+			if reg, ok := arg.(x86asm.Reg); ok && isReg(reg) {
 				matched = true
 				break
 			}
@@ -1329,9 +1338,21 @@ func calleePurge(bin *cgBinary, inst x86asm.Inst, va uint64) int {
 
 // walkPurge follows a local function's control flow to its ret N.
 func (bin *cgBinary) walkPurge(target uint32) int {
+	n, slot, ok := bin.walkRet(target)
+	if !ok && slot != 0 {
+		return bin.slotPurge(slot)
+	}
+	return n
+}
+
+// walkRet follows a 32-bit local function's control flow to its first ret:
+// ok with that ret's N, or, when the function is a jmp through an import
+// slot, that slot (the purge is the import's). Neither when no ret is
+// reachable within the walk (a non-returning function, an indirect jump).
+func (bin *cgBinary) walkRet(target uint32) (purge int, slot uint64, ok bool) {
 	sec := sectionContainingRVA(bin.execSections, target)
 	if sec == nil {
-		return 0
+		return 0, 0, false
 	}
 	seen := map[int]bool{}
 	stack := []int{int(target - sec.rva)}
@@ -1348,18 +1369,18 @@ func (bin *cgBinary) walkPurge(target uint32) int {
 		}
 		if in.Op == x86asm.RET {
 			if imm, ok := in.Args[0].(x86asm.Imm); ok {
-				return int(imm)
+				return int(imm), 0, true
 			}
-			return 0
+			return 0, 0, true
 		}
 		if in.Op == x86asm.JMP {
 			if m, ok := in.Args[0].(x86asm.Mem); ok && m.Base == 0 && m.Index == 0 {
-				return bin.slotPurge(uint64(uint32(m.Disp)))
+				return 0, uint64(uint32(m.Disp)), false
 			}
 		}
 		stack = append(stack, flowSuccessors(sec.data, in, pos)...)
 	}
-	return 0
+	return 0, 0, false
 }
 
 // slotPurge is the argument size of the function imported into an IAT slot.

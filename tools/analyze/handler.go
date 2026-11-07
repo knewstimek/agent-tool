@@ -29,6 +29,7 @@ type AnalyzeInput struct {
 	VA        string      `json:"va,omitempty" jsonschema:"Virtual address: hex (0x140001000) or a symbol name (export, import, PDB/DWARF function or global; name+0x10 adds an offset). For disassemble, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, hexdump. Preferred over offset+base_addr. For decompile: function entries, up to 16 comma-separated."`
 	Count     int         `json:"count,omitempty" jsonschema:"Number of instructions (disassemble) or depth (follow_ptr). Default: 50/4, Max: 1000/10. For a large function, raise count or set stop_at_ret=true; if output hits the cap it prints a truncation note with a resume va to continue from."`
 	StopAtRet interface{} `json:"stop_at_ret,omitempty" jsonschema:"Stop disassembly at function return (RET/RETF). Confirms boundary via INT3/NOP padding or new prologue. For disassemble only: true or false. Default: false"`
+	ShowBytes interface{} `json:"show_bytes,omitempty" jsonschema:"disassemble: add each instruction's hex encoding column (for patching/signatures). Default false to save tokens"`
 	Mode      int         `json:"mode,omitempty" jsonschema:"CPU mode: 32 or 64. Default: 64"`
 	BaseAddr  string      `json:"base_addr,omitempty" jsonschema:"Base address for display (hex string, e.g. '0x140001000'). Default: 0x0. This maps to file offset 0, so displayed address = base_addr + offset + instruction_position. For PE files, prefer 'va' parameter instead -- it auto-calculates the correct base_addr."`
 	Arch      string      `json:"arch,omitempty" jsonschema:"CPU architecture: x86 (default) or arm. For disassemble"`
@@ -52,7 +53,7 @@ type AnalyzeInput struct {
 
 	// instruction_search parameters
 	Mnemonic     string `json:"mnemonic,omitempty" jsonschema:"Optional assembly mnemonic filter such as MOV, ADD, or CALL. For instruction_search"`
-	Register     string `json:"register,omitempty" jsonschema:"Optional explicit register operand filter such as R9D, EAX, or RCX. For instruction_search"`
+	Register     string `json:"register,omitempty" jsonschema:"Optional explicit register operand filter such as R9D, EAX, or RCX. With displacement it also matches the base/index of that [reg+disp] operand, so register=RSP displacement=0xf8 finds [rsp+0xf8] (stack bases are otherwise skipped). For instruction_search"`
 	Immediate    string `json:"immediate,omitempty" jsonschema:"Optional immediate value filter in hex or decimal, e.g. 0x327 or 807. For instruction_search"`
 	Displacement string `json:"displacement,omitempty" jsonschema:"Optional memory displacement filter (hex or decimal): instructions addressing [reg+0x410] style operands, e.g. who reads or writes a struct field at that offset. For instruction_search"`
 	TraceScope   string `json:"trace_scope,omitempty" jsonschema:"Value tracing scope: seeded (default; functions holding the value as an immediate or read-only constant) or all (every function, also values computed from other constants; slower). For instruction_search"`
@@ -101,6 +102,7 @@ type AnalyzeInput struct {
 	PDBForce   bool   `json:"pdb_force,omitempty" jsonschema:"Load pdb_path even when its GUID does not match the image (relinked or patched build with the same code); output carries a warning. Requires pdb_path"`
 	// AssumeBranches is the caller's knowledge of opaque predicates.
 	AssumeBranches string `json:"assume_branches,omitempty" jsonschema:"decompile: fix conditional jumps to one side before decompiling, e.g. 0x401a2c=fallthrough,0x401b10=taken (like patching jz to nop/jmp). Only for branches you confirmed (disassembly, runtime trace): the other side is not decompiled. A flow error lists candidates"`
+	NoReturnVerify bool   `json:"noreturn_verify,omitempty" jsonschema:"decompile: keep a callee returning when its own code reaches a ret, even if 3+ call sites look non-returning (Ghidra's vote). Use when the output ends right after a call that should return; the result notes such callees"`
 }
 
 // Note: follow_ptr uses VA + Count, rtti_dump uses VA, struct_layout uses VA + Length
