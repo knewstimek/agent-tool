@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/knewstimek/gosleigh/pkg/address"
+	"github.com/knewstimek/gosleigh/pkg/analysis"
 	"github.com/knewstimek/gosleigh/pkg/bridge"
 	"github.com/knewstimek/gosleigh/pkg/decomp"
 	"github.com/knewstimek/gosleigh/pkg/ext/branchassume"
@@ -199,6 +200,10 @@ type decompileTarget struct {
 	// the discovery with noreturn_verify (nil until first requested).
 	noRetSeed, noRetGhidra, noRetVerified map[uint64]bool
 	noRetVerify                           bool // the host uses noRetVerified
+	// enhanced is Gosleigh's preset of extensions measured not to change any
+	// function Ghidra decompiles correctly; one per program, since it caches
+	// callee analysis across the functions decompiled.
+	enhanced *analysis.Enhanced
 }
 
 // decompile decompiles one target. ghidraFormat selects Ghidra's exact
@@ -249,6 +254,7 @@ func (t *decompileTarget) decompileAssuming(target string, maxInstr int, ghidraF
 		TrackedRegs:      t.tracked,
 		GhidraFormat:     ghidraFormat,
 	}
+	t.enhanced.Apply(&fn)
 	res, err := t.prog.Decompile(fn)
 	// A runaway flow (junk bytes behind opaque predicates) is retried inside
 	// the function's exact .pdata extent: x64 unwinding requires a function's
@@ -598,6 +604,7 @@ func loadDecompileTarget(path, pdbPath string, pdbForce bool) (*decompileTarget,
 	if t.prog, err = decomp.Load(spec, sections); err != nil {
 		return nil, err
 	}
+	t.enhanced = analysis.NewEnhanced(t.prog)
 	t.spec, t.host = spec.ID, host
 	t.findNoReturn()
 	return t, nil
