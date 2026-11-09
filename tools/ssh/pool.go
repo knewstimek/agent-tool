@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -26,6 +27,7 @@ type sessionEntry struct {
 	createdAt           time.Time
 	lastUsed            time.Time
 	privateWarningShown bool
+	owner               *mcp.ServerSession
 }
 
 // close releases all resources held by this session entry.
@@ -91,10 +93,10 @@ func init() {
 // sessionKey includes every connection-semantic option. Secrets are hashed so
 // pool bookkeeping and diagnostics never retain them in plaintext.
 func sessionKey(input SSHInput) string {
-	identity := fmt.Sprintf("%s\x00%s\x00%v\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s",
+	identity := fmt.Sprintf("%s\x00%s\x00%v\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%p",
 		input.Password, input.KeyFile, input.UseAgent, input.Passphrase, input.HostKeyCheck,
 		input.JumpHost, input.JumpPortInt, input.JumpUser, input.JumpPassword,
-		input.JumpKeyFile, input.JumpPassphrase)
+		input.JumpKeyFile, input.JumpPassphrase, input.requestSession)
 	sum := sha256.Sum256([]byte(identity))
 	return fmt.Sprintf("%s:%d:%s:%s", input.Host, input.PortInt, input.User, hex.EncodeToString(sum[:]))
 }
@@ -104,7 +106,7 @@ func sessionKey(input SSHInput) string {
 // operations during network I/O (up to 10s dial timeout). A double-check
 // pattern prevents duplicate connections when concurrent goroutines dial
 // the same host.
-func (p *sessionPool) getOrCreate(key string, dialFn func() (*dialResult, error)) (*gossh.Client, bool, error) {
+func (p *sessionPool) getOrCreate(owner *mcp.ServerSession, key string, dialFn func() (*dialResult, error)) (*gossh.Client, bool, error) {
 	p.mu.Lock()
 
 	// Check existing session
@@ -134,15 +136,8 @@ func (p *sessionPool) getOrCreate(key string, dialFn func() (*dialResult, error)
 			e.close()
 			delete(p.sessions, key)
 		}
-		if len(p.sessions) >= maxSessions {
-			p.evictOldestLocked()
-		}
 		p.mu.Unlock()
 	} else {
-		// Evict oldest if at capacity
-		if len(p.sessions) >= maxSessions {
-			p.evictOldestLocked()
-		}
 		p.mu.Unlock()
 	}
 
@@ -173,7 +168,11 @@ func (p *sessionPool) getOrCreate(key string, dialFn func() (*dialResult, error)
 
 	// Re-check capacity — other goroutines may have inserted while we dialed
 	if len(p.sessions) >= maxSessions {
-		p.evictOldestLocked()
+		if !p.evictOldestLocked(owner) {
+			discarded := sessionEntry{client: dr.client, agentConn: dr.agentConn, jumpCleanup: dr.jumpCleanup}
+			discarded.close()
+			return nil, false, fmt.Errorf("SSH connection capacity reached; disconnect an owned connection before retrying")
+		}
 	}
 
 	now := time.Now()
@@ -184,6 +183,7 @@ func (p *sessionPool) getOrCreate(key string, dialFn func() (*dialResult, error)
 		key:         key,
 		createdAt:   now,
 		lastUsed:    now,
+		owner:       owner,
 	}
 
 	return dr.client, true, nil
@@ -192,11 +192,16 @@ func (p *sessionPool) getOrCreate(key string, dialFn func() (*dialResult, error)
 // remove closes and removes a session by key.
 // Returns true if a session was found and removed.
 func (p *sessionPool) remove(key string) bool {
+	return p.removeIfClient(key, nil)
+}
+
+// Failed operations may refer to a client that has already been replaced.
+func (p *sessionPool) removeIfClient(key string, expected *gossh.Client) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	entry, ok := p.sessions[key]
-	if !ok {
+	if !ok || expected != nil && entry.client != expected {
 		return false
 	}
 	entry.close()
@@ -233,7 +238,7 @@ func GetClient(input SSHInput) (*gossh.Client, bool, error) {
 		return nil, false, err
 	}
 	key := sessionKey(input)
-	return pool.getOrCreate(key, func() (*dialResult, error) {
+	return pool.getOrCreate(input.requestSession, key, func() (*dialResult, error) {
 		// No resolved IP available — dial by hostname.
 		// This is acceptable because callers must perform SSRF checks before
 		// calling GetClient, and the pool reuses existing connections.
@@ -241,14 +246,15 @@ func GetClient(input SSHInput) (*gossh.Client, bool, error) {
 	})
 }
 
-// RemoveClient removes a pooled session by connection parameters.
+// RemoveClient only removes legacy nil-owner connections. MCP callers must use
+// RemoveClientFor with the resolved request input.
 func RemoveClient(host string, port int, user string) bool {
 	prefix := fmt.Sprintf("%s:%d:%s:", host, port, user)
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	removed := false
 	for key, entry := range pool.sessions {
-		if strings.HasPrefix(key, prefix) {
+		if entry.owner == nil && strings.HasPrefix(key, prefix) {
 			entry.close()
 			delete(pool.sessions, key)
 			removed = true
@@ -265,25 +271,48 @@ func RemoveClientFor(input SSHInput) bool {
 	return pool.remove(sessionKey(input))
 }
 
-// TouchClient updates the lastUsed timestamp for a pooled session.
+// RemoveBrokenClient only removes the connection used by the failed operation.
+func RemoveBrokenClient(input SSHInput, client *gossh.Client) bool {
+	if client == nil || validateInput(&input) != nil {
+		return false
+	}
+	return pool.removeIfClient(sessionKey(input), client)
+}
+
+// TouchClient only updates legacy nil-owner connections.
 func TouchClient(host string, port int, user string) {
 	prefix := fmt.Sprintf("%s:%d:%s:", host, port, user)
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	for key, entry := range pool.sessions {
-		if strings.HasPrefix(key, prefix) {
+		if entry.owner == nil && strings.HasPrefix(key, prefix) {
 			entry.lastUsed = time.Now()
 		}
 	}
 }
 
-// evictOldestLocked removes the least recently used session.
+// TouchClientFor updates only this MCP owner's exact pooled connection.
+func TouchClientFor(input SSHInput) {
+	if err := validateInput(&input); err != nil {
+		return
+	}
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	if entry := pool.sessions[sessionKey(input)]; entry != nil {
+		entry.lastUsed = time.Now()
+	}
+}
+
+// evictOldestLocked removes only this owner's least recently used session.
 // Must be called with p.mu held.
-func (p *sessionPool) evictOldestLocked() {
+func (p *sessionPool) evictOldestLocked(owner *mcp.ServerSession) bool {
 	var oldestKey string
 	var oldestTime time.Time
 
 	for key, entry := range p.sessions {
+		if entry.owner != owner {
+			continue
+		}
 		if oldestKey == "" || entry.lastUsed.Before(oldestTime) {
 			oldestKey = key
 			oldestTime = entry.lastUsed
@@ -295,5 +324,7 @@ func (p *sessionPool) evictOldestLocked() {
 			entry.close()
 		}
 		delete(p.sessions, oldestKey)
+		return true
 	}
+	return false
 }

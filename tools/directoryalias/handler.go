@@ -43,7 +43,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, in Input) (*mcp.CallT
 	remote := in.ConnectionProfile != "" || in.ConnectionID != ""
 	if remote {
 		var err error
-		scope, err = ssh.ResolveDirectoryAliasScope(in.ConnectionProfile, in.ConnectionID)
+		scope, err = ssh.ResolveDirectoryAliasScopeForRequest(ctx, req, in.ConnectionProfile, in.ConnectionID)
 		if err != nil {
 			return fail(err)
 		}

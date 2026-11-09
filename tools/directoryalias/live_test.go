@@ -74,7 +74,11 @@ func TestLivePOSIXDirectoryAliases(t *testing.T) {
 	}
 	// Explicit SSH background jobs must enforce the same owner through both
 	// the result text and the structured SSH output.
-	result, started, err := ssh.Handle(ctx, req, ssh.SSHInput{ConnectionID: rooted.ConnectionID, Operation: "start", Command: "printf BACKGROUND_ROOT_OK", Quiet: true, TimeoutSec: 15})
+	result, _, err = ssh.Handle(ctx, req, ssh.SSHInput{ConnectionID: rooted.ConnectionID, Command: "mkfifo gate", Quiet: true, TimeoutSec: 15})
+	if err != nil || result.IsError {
+		t.Fatal("live background gate setup failed")
+	}
+	result, started, err := ssh.Handle(ctx, req, ssh.SSHInput{ConnectionID: rooted.ConnectionID, Operation: "start", Command: "read marker < gate; printf '%s' \"$marker\"", Quiet: true, TimeoutSec: 15})
 	if err != nil || result.IsError || started.JobID == "" {
 		t.Fatal("live background start failed")
 	}
@@ -82,6 +86,14 @@ func TestLivePOSIXDirectoryAliases(t *testing.T) {
 	result, hidden, err := ssh.Handle(ctx, foreign, ssh.SSHInput{Operation: "status", JobID: started.JobID})
 	if err != nil || !result.IsError || hidden.JobID != "" || hidden.Stdout != "" {
 		t.Fatal("foreign SSH job metadata was exposed")
+	}
+	result, _, err = ssh.Handle(ctx, foreign, ssh.SSHInput{ConnectionProfile: profile, Disconnect: true, Quiet: true})
+	if err != nil || result.IsError {
+		t.Fatal("foreign disconnect request failed")
+	}
+	result, _, err = ssh.Handle(ctx, req, ssh.SSHInput{ConnectionID: rooted.ConnectionID, Command: "printf '%s\\n' BACKGROUND_ROOT_OK > gate", Quiet: true, TimeoutSec: 15})
+	if err != nil || result.IsError {
+		t.Fatal("foreign disconnect interrupted the owner's connection")
 	}
 	result, completed, err := ssh.Handle(ctx, req, ssh.SSHInput{Operation: "wait", JobID: started.JobID, WaitSec: 5})
 	if err != nil || result.IsError || !strings.Contains(completed.Result, "BACKGROUND_ROOT_OK") {

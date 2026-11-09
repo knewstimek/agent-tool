@@ -48,7 +48,7 @@ type SSHInput struct {
 	JobID            string      `json:"job_id,omitempty" jsonschema:"Background SSH job ID for status, wait, tail, or cancel"`
 	WaitSec          int         `json:"wait_sec,omitempty" jsonschema:"For operation=wait: seconds to block (default 30, max 300)"`
 	TailLines        int         `json:"tail_lines,omitempty" jsonschema:"Lines returned by operation=tail. Default: 50, Max: 1000"`
-	Disconnect       interface{} `json:"disconnect,omitempty" jsonschema:"Close the SSH session for this host (no command needed): true or false. Default: false"`
+	Disconnect       interface{} `json:"disconnect,omitempty" jsonschema:"Close this MCP session's pooled SSH connection for the target (no command needed): true or false. Default: false"`
 	HostKeyCheck     string      `json:"host_key_check,omitempty" jsonschema:"Host key verification: strict (requires known_hosts), tofu (trust on first use, default), none (insecure)"`
 	TimeoutSec       interface{} `json:"timeout_sec,omitempty" jsonschema:"Command execution timeout in seconds. Default: 30, Max: 300"`
 	MaxOutputChars   int         `json:"max_output_chars,omitempty" jsonschema:"Maximum combined stdout/stderr bytes retained. Default: 32768, Max: 131072. Head and tail are preserved"`
@@ -72,6 +72,7 @@ type SSHInput struct {
 
 	TrustedProfile       bool   `json:"-"`
 	ResolvedConnectionID string `json:"-"`
+	requestSession       *mcp.ServerSession
 }
 
 type SSHOutput struct {
@@ -165,7 +166,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	// 4. Get or create SSH connection
 	// Use resolved IP for dialing to prevent DNS rebinding attacks —
 	// the hostname was already verified by CheckHostSSRF above.
-	client, isNew, err := pool.getOrCreate(key, func() (*dialResult, error) {
+	client, isNew, err := pool.getOrCreate(input.requestSession, key, func() (*dialResult, error) {
 		return dial(input, resolvedIP, jumpResolvedIP)
 	})
 	if err != nil {
@@ -215,7 +216,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	if err != nil {
 		// If connection is broken, remove from pool
 		if isConnectionError(err) {
-			pool.remove(key)
+			pool.removeIfClient(key, client)
 		}
 		toolResult, output, handleErr := errorResult(fmt.Sprintf("command execution failed: %s%s", sanitizeError(err, input), warningSuffix(cleanupWarning)))
 		output.CleanupWarning = cleanupWarning

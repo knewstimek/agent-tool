@@ -84,9 +84,7 @@ var validOperations = map[string]bool{
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mcp.CallToolResult, SFTPOutput, error) {
 	ctx = common.WithToolRequest(ctx, req)
-	if req != nil {
-		input.session = req.Session
-	}
+	input.session = common.ToolSession(ctx)
 	// Merge local/remote aliases
 	if input.LocalPath == "" && input.Local != "" {
 		input.LocalPath = input.Local
@@ -220,7 +218,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mc
 	sftpClient, err := gosftp.NewClient(sshClient)
 	if err != nil {
 		if isConnectionBroken(err) {
-			ssh.RemoveClientFor(sshInput)
+			ssh.RemoveBrokenClient(sshInput, sshClient)
 		}
 		return errorResult(fmt.Sprintf("SFTP subsystem failed: %v", err))
 	}
@@ -255,13 +253,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mc
 
 	if err != nil {
 		if isConnectionBroken(err) {
-			ssh.RemoveClientFor(sshInput)
+			ssh.RemoveBrokenClient(sshInput, sshClient)
 		}
 		return errorResult(fmt.Sprintf("%s failed: %v", op, err))
 	}
 
 	// Update session lastUsed
-	ssh.TouchClient(input.Host, portInt, input.User)
+	ssh.TouchClientFor(sshInput)
 
 	// Format output
 	var sb strings.Builder
@@ -290,7 +288,7 @@ func Register(server *mcp.Server) {
 	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name: "sftp",
 		Description: `Transfer files and manage remote filesystems over SSH (SFTP protocol).
-Reuses SSH session pool — same authentication and session reuse as the ssh tool.
+Reuses the calling MCP session's SSH pool and connection_id handles, shared with the ssh tool.
 remote_root from a profile/call/connection_id anchors relative remote paths and is shared with SSH. Generated paths inside local/remote roots display relatively.
 Operations: upload (local to remote), download (remote to local), ls, stat, mkdir, rm, chmod, rename.
 Batch upload: upload_many accepts up to 100 local_path/remote_path items over one SFTP session.
@@ -303,7 +301,7 @@ Recursive delete is limited to 10,000 items for safety.`,
 
 // toSSHInput converts SFTP connection parameters to ssh.SSHInput for pool reuse.
 func toSSHInput(input SFTPInput) ssh.SSHInput {
-	return ssh.SSHInput{
+	return ssh.WithConnectionSession(ssh.SSHInput{
 		RemoteRoot:        input.RemoteRoot,
 		RemoteShell:       input.RemoteShell,
 		Host:              input.Host,
@@ -322,7 +320,7 @@ func toSSHInput(input SFTPInput) ssh.SSHInput {
 		JumpPassphrase:    input.JumpPassphrase,
 		ConnectionProfile: input.ConnectionProfile,
 		ConnectionID:      input.ConnectionID,
-	}
+	}, input.session)
 }
 
 func applyResolvedConnection(input *SFTPInput, resolved ssh.SSHInput) {

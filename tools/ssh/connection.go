@@ -66,6 +66,7 @@ type connectionProfileFile struct {
 type connectionHandle struct {
 	profile  ConnectionProfile
 	lastUsed time.Time
+	owner    *mcp.ServerSession
 }
 
 var connectionHandles = struct {
@@ -74,10 +75,10 @@ var connectionHandles = struct {
 }{items: make(map[string]connectionHandle)}
 
 // ResolveConnection fills omitted connection fields from a local profile or
-// an opaque in-process connection handle. Explicit request fields override
+// an opaque handle in the nil-session namespace. Explicit request fields override
 // local profile defaults. The returned handle can be reused by SSH and SFTP.
 func ResolveConnection(input *SSHInput) (string, error) {
-	return resolveConnection(input, nil)
+	return resolveConnection(nil, input, nil)
 }
 
 // Only the hash is retained as a private scope key; credentials are never emitted.
@@ -102,6 +103,15 @@ func ConnectionAliasScope(input SSHInput) string {
 // Management resolves identity without depending on a possibly unregistered
 // remote_root alias, and does not allocate connection handles or connect.
 func ResolveDirectoryAliasScope(profileName, handleID string) (string, error) {
+	return resolveDirectoryAliasScope(nil, profileName, handleID)
+}
+
+func ResolveDirectoryAliasScopeForRequest(ctx context.Context, req *mcp.CallToolRequest, profileName, handleID string) (string, error) {
+	ctx = common.WithToolRequest(ctx, req)
+	return resolveDirectoryAliasScope(common.ToolSession(ctx), profileName, handleID)
+}
+
+func resolveDirectoryAliasScope(owner *mcp.ServerSession, profileName, handleID string) (string, error) {
 	profileName, handleID = strings.TrimSpace(profileName), strings.TrimSpace(handleID)
 	if profileName != "" && handleID != "" {
 		return "", fmt.Errorf("use either connection_profile or connection_id, not both")
@@ -109,7 +119,7 @@ func ResolveDirectoryAliasScope(profileName, handleID string) (string, error) {
 	var profile ConnectionProfile
 	var err error
 	if handleID != "" {
-		profile, err = loadConnectionHandle(handleID)
+		profile, err = loadConnectionHandle(owner, handleID)
 	} else if profileName != "" {
 		profile, err = loadLocalConnectionProfile(profileName)
 	} else {
@@ -124,7 +134,11 @@ func ResolveDirectoryAliasScope(profileName, handleID string) (string, error) {
 }
 
 func ResolveConnectionForRequest(ctx context.Context, req *mcp.CallToolRequest, input *SSHInput) (string, error) {
-	return resolveConnection(input, func(root string) (string, error) {
+	ctx = common.WithToolRequest(ctx, req)
+	if input != nil {
+		input.requestSession = common.ToolSession(ctx)
+	}
+	return resolveConnection(common.ToolSession(ctx), input, func(root string) (string, error) {
 		if !strings.HasPrefix(root, "@") {
 			return root, nil
 		}
@@ -132,7 +146,14 @@ func ResolveConnectionForRequest(ctx context.Context, req *mcp.CallToolRequest, 
 	})
 }
 
-func resolveConnection(input *SSHInput, expandRoot func(string) (string, error)) (string, error) {
+// WithConnectionSession preserves the MCP owner when SFTP reconstructs input
+// for asynchronous pool access. It is never accepted as a JSON argument.
+func WithConnectionSession(input SSHInput, owner *mcp.ServerSession) SSHInput {
+	input.requestSession = owner
+	return input
+}
+
+func resolveConnection(owner *mcp.ServerSession, input *SSHInput, expandRoot func(string) (string, error)) (string, error) {
 	if input == nil {
 		return "", fmt.Errorf("connection input is required")
 	}
@@ -149,7 +170,7 @@ func resolveConnection(input *SSHInput, expandRoot func(string) (string, error))
 	var base ConnectionProfile
 	var err error
 	if handleID != "" {
-		base, err = loadConnectionHandle(handleID)
+		base, err = loadConnectionHandle(owner, handleID)
 		if err != nil {
 			return "", err
 		}
@@ -178,7 +199,7 @@ func resolveConnection(input *SSHInput, expandRoot func(string) (string, error))
 	}
 
 	if handleID == "" || input.RemoteRoot != base.RemoteRoot || input.RemoteShell != base.RemoteShell {
-		handleID, err = rememberConnection(*input)
+		handleID, err = rememberConnection(owner, *input)
 		if err != nil {
 			return "", err
 		}
@@ -222,14 +243,14 @@ func loadLocalConnectionProfile(name string) (ConnectionProfile, error) {
 	return profile, nil
 }
 
-func rememberConnection(input SSHInput) (string, error) {
+func rememberConnection(owner *mcp.ServerSession, input SSHInput) (string, error) {
 	profile := profileFromInput(input)
 	now := time.Now()
 	connectionHandles.Lock()
 	defer connectionHandles.Unlock()
 	pruneConnectionHandlesLocked(now)
 	for id, entry := range connectionHandles.items {
-		if reflect.DeepEqual(entry.profile, profile) {
+		if entry.owner == owner && reflect.DeepEqual(entry.profile, profile) {
 			entry.lastUsed = now
 			connectionHandles.items[id] = entry
 			return id, nil
@@ -251,17 +272,17 @@ func rememberConnection(input SSHInput) (string, error) {
 		}
 		delete(connectionHandles.items, oldestID)
 	}
-	connectionHandles.items[id] = connectionHandle{profile: profile, lastUsed: now}
+	connectionHandles.items[id] = connectionHandle{profile: profile, lastUsed: now, owner: owner}
 	return id, nil
 }
 
-func loadConnectionHandle(id string) (ConnectionProfile, error) {
+func loadConnectionHandle(owner *mcp.ServerSession, id string) (ConnectionProfile, error) {
 	connectionHandles.Lock()
 	defer connectionHandles.Unlock()
 	now := time.Now()
 	pruneConnectionHandlesLocked(now)
 	entry, ok := connectionHandles.items[id]
-	if !ok {
+	if !ok || entry.owner != owner {
 		return ConnectionProfile{}, fmt.Errorf("connection_id %q not found or expired", id)
 	}
 	entry.lastUsed = now

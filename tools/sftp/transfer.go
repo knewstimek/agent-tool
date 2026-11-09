@@ -195,7 +195,6 @@ func startAsyncUpload(input SFTPInput) (string, error) {
 
 // startAsyncDownload starts a background download and returns the transfer ID.
 func startAsyncDownload(input SFTPInput) (string, error) {
-	portInt, _ := common.FlexInt(input.Port)
 	if err := validateRemotePath(input.RemotePath); err != nil {
 		return "", err
 	}
@@ -216,7 +215,7 @@ func startAsyncDownload(input SFTPInput) (string, error) {
 	sftpClient, err := gosftp.NewClient(sshClient)
 	if err != nil {
 		if isConnectionBroken(err) {
-			ssh.RemoveClient(input.Host, portInt, input.User)
+			ssh.RemoveBrokenClient(sshInput, sshClient)
 		}
 		return "", fmt.Errorf("SFTP subsystem failed: %v", err)
 	}
@@ -233,7 +232,7 @@ func startAsyncDownload(input SFTPInput) (string, error) {
 		return "", fmt.Errorf("file too large: %s (max %s)", formatSize(remoteInfo.Size()), formatSize(maxTransferSize))
 	}
 
-	ssh.TouchClient(input.Host, portInt, input.User)
+	ssh.TouchClientFor(sshInput)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -262,7 +261,6 @@ func startAsyncDownload(input SFTPInput) (string, error) {
 
 // runAsyncUpload performs the actual upload in a background goroutine.
 func runAsyncUpload(ctx context.Context, entry *transferEntry, input SFTPInput) {
-	portInt, _ := common.FlexInt(input.Port)
 	defer entry.cancel()
 
 	sshInput := toSSHInput(input)
@@ -280,7 +278,7 @@ func runAsyncUpload(ctx context.Context, entry *transferEntry, input SFTPInput) 
 	sftpClient, err := gosftp.NewClient(sshClient)
 	if err != nil {
 		if isConnectionBroken(err) {
-			ssh.RemoveClient(input.Host, portInt, input.User)
+			ssh.RemoveBrokenClient(sshInput, sshClient)
 		}
 		entry.mu.Lock()
 		entry.Status = "failed"
@@ -345,12 +343,11 @@ func runAsyncUpload(ctx context.Context, entry *transferEntry, input SFTPInput) 
 		entry.Status = "completed"
 	}
 
-	ssh.TouchClient(input.Host, portInt, input.User)
+	ssh.TouchClientFor(sshInput)
 }
 
 // runAsyncDownload performs the actual download in a background goroutine.
 func runAsyncDownload(ctx context.Context, entry *transferEntry, input SFTPInput) {
-	portInt, _ := common.FlexInt(input.Port)
 	defer entry.cancel()
 
 	sshInput := toSSHInput(input)
@@ -368,7 +365,7 @@ func runAsyncDownload(ctx context.Context, entry *transferEntry, input SFTPInput
 	sftpClient, err := gosftp.NewClient(sshClient)
 	if err != nil {
 		if isConnectionBroken(err) {
-			ssh.RemoveClient(input.Host, portInt, input.User)
+			ssh.RemoveBrokenClient(sshInput, sshClient)
 		}
 		entry.mu.Lock()
 		entry.Status = "failed"
@@ -448,7 +445,7 @@ func runAsyncDownload(ctx context.Context, entry *transferEntry, input SFTPInput
 		entry.Status = "completed"
 	}
 
-	ssh.TouchClient(input.Host, portInt, input.User)
+	ssh.TouchClientFor(sshInput)
 }
 
 // copyWithCancel copies from src to dst, checking for context cancellation periodically.

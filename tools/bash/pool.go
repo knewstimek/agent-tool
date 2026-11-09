@@ -2,10 +2,13 @@ package bash
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
@@ -48,8 +51,8 @@ type shellSession struct {
 	shellKind shellKind
 	createdAt time.Time
 	lastUsed  time.Time
-	mu        sync.Mutex    // prevents concurrent command execution on same session
-	closeOnce sync.Once     // prevents double close
+	mu        sync.Mutex // prevents concurrent command execution on same session
+	closeOnce sync.Once  // prevents double close
 }
 
 func (s *shellSession) close() {
@@ -75,13 +78,18 @@ func (s *shellSession) alive() bool {
 	return true
 }
 
+type shellPoolKey struct {
+	owner *mcp.ServerSession
+	name  string
+}
+
 type shellPool struct {
 	mu       sync.Mutex
-	sessions map[string]*shellSession
+	sessions map[shellPoolKey]*shellSession
 }
 
 var pool = &shellPool{
-	sessions: make(map[string]*shellSession),
+	sessions: make(map[shellPoolKey]*shellSession),
 }
 
 func init() {
@@ -89,24 +97,25 @@ func init() {
 }
 
 // getOrCreate returns an existing shell session or creates a new one.
-func (p *shellPool) getOrCreate(key string, cwd string) (*shellSession, bool, error) {
+func (p *shellPool) getOrCreate(key shellPoolKey, cwd string) (*shellSession, bool, error) {
 	p.mu.Lock()
 
 	// Check existing session
 	if entry, ok := p.sessions[key]; ok {
+		if !entry.mu.TryLock() {
+			p.mu.Unlock()
+			return entry, false, nil
+		}
 		if entry.alive() {
 			// lastUsed is updated by executeCommand under entry.mu; skip here to avoid data race
+			entry.mu.Unlock()
 			p.mu.Unlock()
 			return entry, false, nil
 		}
 		// Dead session, clean up
 		entry.close()
+		entry.mu.Unlock()
 		delete(p.sessions, key)
-	}
-
-	// Evict oldest if at capacity
-	if len(p.sessions) >= maxSessions {
-		p.evictOldestLocked()
 	}
 
 	p.mu.Unlock()
@@ -114,7 +123,7 @@ func (p *shellPool) getOrCreate(key string, cwd string) (*shellSession, bool, er
 	// Start shell WITHOUT holding the lock — startShellSession blocks during
 	// process spawn, and holding the lock would prevent other goroutines
 	// (including the reaper) from accessing the pool for the duration.
-	sess, err := startShellSession(key, cwd)
+	sess, err := startShellSession(key.name, cwd)
 	if err != nil {
 		return nil, false, err
 	}
@@ -131,7 +140,10 @@ func (p *shellPool) getOrCreate(key string, cwd string) (*shellSession, bool, er
 	}
 
 	if len(p.sessions) >= maxSessions {
-		p.evictOldestLocked()
+		if !p.evictOldestLocked(key.owner) {
+			sess.close()
+			return nil, false, fmt.Errorf("shell capacity reached; close an idle session or wait for an active command")
+		}
 	}
 
 	p.sessions[key] = sess
@@ -139,10 +151,10 @@ func (p *shellPool) getOrCreate(key string, cwd string) (*shellSession, bool, er
 }
 
 // remove closes and removes a session by key.
-func (p *shellPool) remove(key string) bool {
+func (p *shellPool) remove(key shellPoolKey, expected *shellSession) bool {
 	p.mu.Lock()
 	entry, ok := p.sessions[key]
-	if !ok {
+	if !ok || expected != nil && entry != expected {
 		p.mu.Unlock()
 		return false
 	}
@@ -165,47 +177,42 @@ func (p *shellPool) reaper() {
 		p.mu.Lock()
 		now := time.Now()
 		for key, entry := range p.sessions {
-			if now.Sub(entry.lastUsed) > defaultIdleTimeout || !entry.alive() {
-				// TryLock: skip if a command is running on this session
-				if entry.mu.TryLock() {
-					entry.close()
-					delete(p.sessions, key)
-					entry.mu.Unlock()
-				}
+			if !entry.mu.TryLock() {
+				continue
 			}
+			if now.Sub(entry.lastUsed) > defaultIdleTimeout || !entry.alive() {
+				entry.close()
+				delete(p.sessions, key)
+			}
+			entry.mu.Unlock()
 		}
 		p.mu.Unlock()
 	}
 }
 
-// evictOldestLocked removes the least recently used idle session.
+// evictOldestLocked removes only this owner's least recently used idle session.
 // Must be called with p.mu held. Skips sessions with active commands.
-func (p *shellPool) evictOldestLocked() {
-	// Collect candidates sorted by lastUsed (oldest first)
-	type candidate struct {
-		key   string
-		entry *shellSession
-	}
-	var candidates []candidate
+func (p *shellPool) evictOldestLocked(owner *mcp.ServerSession) bool {
+	var oldestKey shellPoolKey
+	var oldest *shellSession
 	for key, entry := range p.sessions {
-		candidates = append(candidates, candidate{key, entry})
-	}
-	// Sort: oldest lastUsed first
-	for i := 0; i < len(candidates); i++ {
-		for j := i + 1; j < len(candidates); j++ {
-			if candidates[j].entry.lastUsed.Before(candidates[i].entry.lastUsed) {
-				candidates[i], candidates[j] = candidates[j], candidates[i]
+		if key.owner != owner || !entry.mu.TryLock() {
+			continue
+		}
+		if oldest == nil || entry.lastUsed.Before(oldest.lastUsed) {
+			if oldest != nil {
+				oldest.mu.Unlock()
 			}
+			oldestKey, oldest = key, entry
+		} else {
+			entry.mu.Unlock()
 		}
 	}
-
-	for _, c := range candidates {
-		if c.entry.mu.TryLock() {
-			c.entry.close()
-			c.entry.mu.Unlock()
-			delete(p.sessions, c.key)
-			return
-		}
-		// Session is busy, try next oldest
+	if oldest == nil {
+		return false
 	}
+	oldest.close()
+	oldest.mu.Unlock()
+	delete(p.sessions, oldestKey)
+	return true
 }

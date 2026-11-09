@@ -429,7 +429,8 @@ job_id, wait_sec, tail_lines, max_output_chars, output_view
 Execute commands on a remote server via SSH. Supports IPv4 and IPv6.
 Supports password and key-based authentication (PEM, OpenSSH, and PuTTY PPK formats). SSH agent auto-used on Unix.
 Sessions are pooled and reused (idle timeout: 30 min, max: 20 sessions).
-Pool identity includes authentication, host-key policy, and ProxyJump settings.
+Pool identity includes the MCP session, authentication, host-key policy, and ProxyJump settings.
+Connection handles and disconnect affect only the calling MCP session.
 Host key verification: strict (known_hosts required), tofu (trust on first use, default), none (insecure).
 ProxyJump: use jump_host to connect through a bastion (e.g. reach IPv6-only servers via IPv4 bastion).
 Foreground output defaults to 32768 bytes with original byte counts. output_mode
@@ -485,6 +486,8 @@ Parameters: host, port, user, password, key_file, passphrase, use_agent, host_ke
 ## bash
 Persistent shell sessions that maintain working directory, environment variables, and state across calls.
 Sessions are pooled (max 5, idle timeout 30 min). Uses sentinel markers for output delimitation.
+session_id, including default, belongs to the calling MCP session. Other clients cannot reuse or disconnect it.
+At capacity, only the caller's idle shell can be evicted; otherwise creation fails.
 Platform: bash/sh on Unix, pwsh/git-bash/powershell/cmd on Windows (auto-detected, priority order).
 Use disconnect=true to close a session.
 Output defaults to 32768 bytes and preserves head+tail with explicit truncation metadata.

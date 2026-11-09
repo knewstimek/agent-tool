@@ -493,6 +493,11 @@ SFTP background status/cancel is restricted to the MCP session that started the
 transfer. Status keeps resolved paths and renders current aliases at query time;
 if an alias was deleted or rebound, the exact remote path is shown instead.
 
+Persistent `bash` shell names (including `default`), SSH/SFTP pooled connections,
+and `connection_id` handles also belong to the calling MCP session. Other clients
+cannot reuse or disconnect them. Pool capacity never evicts another client's
+connection; creation fails when no owned entry is available for eviction.
+
 ### Local SSH/SFTP connection profiles
 
 SSH and SFTP accept either `connection_profile` or a session-local `connection_id`,

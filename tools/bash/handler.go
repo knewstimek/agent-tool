@@ -36,14 +36,16 @@ type BashOutput struct {
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input BashInput) (*mcp.CallToolResult, BashOutput, error) {
+	ctx = common.WithToolRequest(ctx, req)
 	// Normalize session ID
 	if input.SessionID == "" {
 		input.SessionID = defaultSessionID
 	}
+	key := shellPoolKey{owner: common.ToolSession(ctx), name: input.SessionID}
 
 	// Handle disconnect
 	if common.FlexBool(input.Disconnect) {
-		removed := pool.remove(input.SessionID)
+		removed := pool.remove(key, nil)
 		msg := fmt.Sprintf("Session %q closed.", input.SessionID)
 		if !removed {
 			msg = fmt.Sprintf("Session %q not found.", input.SessionID)
@@ -89,7 +91,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BashInput) (*mc
 	}
 
 	// Get or create session
-	sess, isNew, err := pool.getOrCreate(input.SessionID, input.Cwd)
+	sess, isNew, err := pool.getOrCreate(key, input.Cwd)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to start shell: %v", err))
 	}
@@ -103,7 +105,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input BashInput) (*mc
 	}
 	if err != nil {
 		// If session died, remove it from pool
-		pool.remove(input.SessionID)
+		pool.remove(key, sess)
 		return errorResult(fmt.Sprintf("execution failed: %v", err))
 	}
 
@@ -177,7 +179,7 @@ func Register(server *mcp.Server) {
 		Name: "bash",
 		Description: `Execute shell commands with persistent session support.
 Sessions maintain working directory, environment variables, and shell state across calls.
-Use session_id to manage multiple independent shell sessions.
+Use session_id to manage multiple independent shell sessions within the calling MCP session. Other clients cannot reuse or disconnect them.
 Set timeout_sec (or its alias timeout) in seconds, default 120, max 600. A session runs one command at a time; while a yielded command is still running, use another session_id. For servers or work needing live output tail, prefer procexec (background=true, operation=tail).
 Output is bounded to 32768 bytes; large output keeps both the head and tail and reports original_bytes/truncated.
 Repeated diagnostic lines are compacted by default without changing exit status. Set output_view=raw to disable compaction. When compaction occurs, use toolbox operation=output with raw_output_id to retrieve the preserved bounded original for 30 minutes.
