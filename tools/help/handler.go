@@ -669,7 +669,7 @@ Parameters: operation, file_path, offset, count, mode, arch (x86/arm),
   base_addr, min_length, max_results, length, section, pattern, mnemonic,
   register, immediate, trace_values, file_path_b, va, target_va,
   target_end_va, stop_at_ret, show_bytes, result_offset, max_output_chars, timeout_sec, pdb_path,
-  noreturn_verify, type_name
+  noreturn_verify, il2cpp_signatures, il2cpp_script, type_name
 Use topic='analyze' for detailed guide with examples.
 
 ## set_config
@@ -1368,6 +1368,13 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
         Player::TakeDamage); up to 16, comma-separated
     pdb_path: PDB file when not beside the image; "none" disables the PDB
     pdb_force: Load pdb_path even if its GUID does not match (warns)
+    il2cpp_signatures: Windows x64 IL2CPP methodsigs.tsv or Il2CppDumper script.json.
+      Default: beside the binary; none disables. il2cpp_script is an alias.
+      PDB/DWARF takes precedence; names stay unchanged. The host adds this and
+      MethodInfo* to TSV managed params. Unknown types/conflicting generic aliases
+      stay inferred. val:SIZE:NAME records exact value sizes; large aggregate
+      returns stay unlocked. A binary_sha256 TSV header must match the image.
+      No virtual-call target resolution. JSON value layouts may use il2cpp.h.
     timeout_sec: Worker time limit (default 60, max 600)
     assume_branches: <hex address>=taken|fallthrough, comma-separated (max 256)
     noreturn_verify: Keep voted non-returning callees whose code reaches a ret returning

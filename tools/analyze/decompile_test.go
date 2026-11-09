@@ -237,7 +237,7 @@ func TestDecompileIdleWorkerRetires(t *testing.T) {
 	decompPool.mu.Lock()
 	var w *decompWorker
 	for _, o := range decompPool.workers {
-		if strings.HasPrefix(o.key, exe+"|") {
+		if o.key == workerKey(decompileRequest{Path: exe}) {
 			w = o
 		}
 	}

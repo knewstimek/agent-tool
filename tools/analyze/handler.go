@@ -97,9 +97,11 @@ type AnalyzeInput struct {
 	// call_graph parameters are reused from VA + Count fields above
 
 	// decompile parameters (also uses VA)
-	TimeoutSec int    `json:"timeout_sec,omitempty" jsonschema:"Seconds before the decompile worker is killed. Default: 60, Max: 600. For decompile"`
-	PDBPath    string `json:"pdb_path,omitempty" jsonschema:"PDB for a PE image when it is not beside the binary (must match the image GUID); none disables PDB use. Used by decompile, function_at, follow_ptr, struct_layout, xref; other operations find the PDB automatically"`
-	PDBForce   bool   `json:"pdb_force,omitempty" jsonschema:"Load pdb_path even when its GUID does not match the image (relinked or patched build with the same code); output carries a warning. Requires pdb_path"`
+	TimeoutSec       int    `json:"timeout_sec,omitempty" jsonschema:"Seconds before the decompile worker is killed. Default: 60, Max: 600. For decompile"`
+	PDBPath          string `json:"pdb_path,omitempty" jsonschema:"PDB for a PE image when it is not beside the binary (must match the image GUID); none disables PDB use. Used by decompile, function_at, follow_ptr, struct_layout, xref; other operations find the PDB automatically"`
+	PDBForce         bool   `json:"pdb_force,omitempty" jsonschema:"Load pdb_path even when its GUID does not match the image (relinked or patched build with the same code); output carries a warning. Requires pdb_path"`
+	IL2CPPSignatures string `json:"il2cpp_signatures,omitempty" jsonschema:"decompile: IL2CPP prototype sidecar (methodsigs.tsv or Il2CppDumper script.json), without debug info on Windows x64. Default: adjacent script.json or methodsigs.tsv; none disables. Unknown/conflicting types stay unlocked. Names are unchanged"`
+	IL2CPPScript     string `json:"il2cpp_script,omitempty" jsonschema:"Alias for il2cpp_signatures"`
 	// AssumeBranches is the caller's knowledge of opaque predicates.
 	AssumeBranches string `json:"assume_branches,omitempty" jsonschema:"decompile: fix conditional jumps to one side before decompiling, e.g. 0x401a2c=fallthrough,0x401b10=taken (like patching jz to nop/jmp). Only for branches you confirmed (disassembly, runtime trace): the other side is not decompiled. A flow error lists candidates"`
 	NoReturnVerify bool   `json:"noreturn_verify,omitempty" jsonschema:"decompile: keep a callee returning when its own code reaches a ret, even if 3+ call sites look non-returning (Ghidra's vote). Use when the output ends right after a call that should return; the result notes such callees"`
@@ -186,6 +188,19 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 		return errorResult(fmt.Sprintf("cannot resolve file_path: %v", err))
 	}
 	input.FilePath = resolvedPath
+	if input.IL2CPPSignatures != "" {
+		if input.IL2CPPScript != "" && input.IL2CPPScript != input.IL2CPPSignatures {
+			return errorResult("use either il2cpp_signatures or il2cpp_script, not conflicting values")
+		}
+		input.IL2CPPScript = input.IL2CPPSignatures
+	}
+	if input.IL2CPPScript != "" && input.IL2CPPScript != "none" {
+		input.IL2CPPScript, err = common.ResolveRequestPath(ctx, req, input.IL2CPPScript)
+		if err != nil {
+			return errorResult(fmt.Sprintf("cannot resolve il2cpp_script: %v", err))
+		}
+	}
+	input.IL2CPPSignatures = input.IL2CPPScript
 	if input.AnnotationsPath != "" {
 		input.AnnotationsPath, err = common.ResolveRequestPath(ctx, req, input.AnnotationsPath)
 		if err != nil {
@@ -300,7 +315,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 func Register(server *mcp.Server) {
 	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name:        "analyze",
-		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several; a matching PDB or embedded DWARF is applied automatically, and the structs/enums the C names are printed after it), type_info for any other debug type (members with offsets, enum values). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Durable SQLite user labels/comments with revision-checked partial edits and bounded success receipts: annotation_set, annotation_list (query searches), annotation_delete; optional annotations_path selects the database for writes and rendered reads. disassemble/decompile show user notes separately from engine facts; decompile line_numbers=true supplies C-line/code_hash anchors (changed snapshots need review). PE annotations also accept rva. annotation_batch writes up to 32 notes with per-item receipts. evidence/provenance record user-supplied grounds. Decompile collects instruction notes from verified function ranges. annotation_suggest proposes C-line reattachment using stored anchor_text; never moves notes automatically. Annotation load errors are reported as warnings alongside analysis results. Prefer va for PE addresses. Use debug for runtime inspection.`,
+		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several; a matching PDB or embedded DWARF is applied automatically, and the structs/enums the C names are printed after it), type_info for any other debug type (members with offsets, enum values). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Durable SQLite user labels/comments with revision-checked partial edits and bounded success receipts: annotation_set, annotation_list (query searches), annotation_delete; optional annotations_path selects the database for writes and rendered reads. disassemble/decompile show user notes separately from engine facts; decompile line_numbers=true supplies C-line/code_hash anchors (changed snapshots need review). PE annotations also accept rva. annotation_batch writes up to 32 notes with per-item receipts. evidence/provenance record user-supplied grounds. Decompile collects instruction notes from verified function ranges. annotation_suggest proposes C-line reattachment using stored anchor_text; never moves notes automatically. Annotation load errors are reported as warnings alongside analysis results. Prefer va for PE addresses. IL2CPP Windows x64 prototypes can also come from il2cpp_signatures (methodsigs.tsv or script.json) without debug info; unknown/conflicting signatures stay inferred and names stay unchanged. Use debug for runtime inspection.`,
 	}, Handle)
 }
 

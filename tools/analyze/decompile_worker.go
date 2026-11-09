@@ -40,9 +40,10 @@ const DecompileWorkerArg = "__decompile-worker"
 type decompileRequest struct {
 	Path string `json:"path"`
 	// PDBPath overrides where the PE's PDB is looked for; "none" disables it.
-	PDBPath  string   `json:"pdb_path,omitempty"`
-	PDBForce bool     `json:"pdb_force,omitempty"` // load PDBPath despite a GUID mismatch
-	Targets  []string `json:"targets"`
+	PDBPath      string   `json:"pdb_path,omitempty"`
+	PDBForce     bool     `json:"pdb_force,omitempty"` // load PDBPath despite a GUID mismatch
+	IL2CPPScript string   `json:"il2cpp_script,omitempty"`
+	Targets      []string `json:"targets"`
 	// AssumeBranches fixes conditional branches by address ("taken" or
 	// "fallthrough"); it changes only the flow, not the loaded binary.
 	AssumeBranches map[uint64]string `json:"assume_branches,omitempty"`
@@ -60,16 +61,19 @@ type decompileLine struct {
 	Kind string `json:"kind"` // "load", "result", "fatal" or "done" (end of a request)
 
 	// load
-	Format      string  `json:"format,omitempty"`
-	Spec        string  `json:"spec,omitempty"`
-	KnownStarts int     `json:"known_starts,omitempty"`
-	NamedStarts int     `json:"named_starts,omitempty"`
-	Imports     int     `json:"imports,omitempty"`
-	LoadSecs    float64 `json:"load_secs,omitempty"`
-	HostTracked string  `json:"tracked,omitempty"`
-	PDB         string  `json:"pdb,omitempty"`      // PDB used
-	PDBNote     string  `json:"pdb_note,omitempty"` // why no PDB was used, or a forced-load warning
-	Reused      bool    `json:"reused,omitempty"`   // the binary was already loaded
+	Format        string  `json:"format,omitempty"`
+	Spec          string  `json:"spec,omitempty"`
+	KnownStarts   int     `json:"known_starts,omitempty"`
+	NamedStarts   int     `json:"named_starts,omitempty"`
+	Imports       int     `json:"imports,omitempty"`
+	LoadSecs      float64 `json:"load_secs,omitempty"`
+	HostTracked   string  `json:"tracked,omitempty"`
+	PDB           string  `json:"pdb,omitempty"`      // PDB used
+	PDBNote       string  `json:"pdb_note,omitempty"` // why no PDB was used, or a forced-load warning
+	Reused        bool    `json:"reused,omitempty"`   // the binary was already loaded
+	IL2CPPScript  string  `json:"il2cpp_script,omitempty"`
+	IL2CPPLocked  int     `json:"il2cpp_locked,omitempty"`
+	IL2CPPSkipped int     `json:"il2cpp_skipped,omitempty"`
 
 	// result (and fatal: the target that was running)
 	Target    string   `json:"target,omitempty"`
@@ -141,11 +145,11 @@ func RunDecompileWorker(in io.Reader, out io.Writer) int {
 				}
 			}(req.MemLimitMB)
 		}
-		if key := fmt.Sprintf("%s|%s|%t", req.Path, req.PDBPath, req.PDBForce); t == nil || key != loaded {
+		if key := workerKey(req); t == nil || key != loaded {
 			t = nil
 			runtime.GC() // let the previous binary go before loading the next
 			start := time.Now()
-			nt, err := loadDecompileTarget(req.Path, req.PDBPath, req.PDBForce)
+			nt, err := loadDecompileTargetWithIL2CPP(req.Path, req.PDBPath, req.PDBForce, req.IL2CPPScript)
 			if err != nil {
 				emit(decompileLine{Kind: "fatal", ErrorKind: "load", Error: err.Error()})
 				emit(decompileLine{Kind: "done"})
@@ -155,6 +159,9 @@ func RunDecompileWorker(in io.Reader, out io.Writer) int {
 			loadLine = decompileLine{Kind: "load", Format: t.format, Spec: t.spec, KnownStarts: len(t.host.funcs),
 				NamedStarts: t.host.named, Imports: len(t.host.imports), HostTracked: t.trackedDesc,
 				PDB: t.pdb, PDBNote: t.pdbNote, LoadSecs: time.Since(start).Seconds()}
+			if src := t.host.il2cpp; src != nil {
+				loadLine.IL2CPPScript, loadLine.IL2CPPLocked, loadLine.IL2CPPSkipped = src.path, src.locked, src.skipped
+			}
 		} else {
 			loadNote = "reused"
 		}
@@ -468,6 +475,10 @@ type execBytes struct {
 // loadDecompileTarget maps the binary, picks the embedded spec and builds the
 // host symbol scope from what the file itself records.
 func loadDecompileTarget(path, pdbPath string, pdbForce bool) (*decompileTarget, error) {
+	return loadDecompileTargetWithIL2CPP(path, pdbPath, pdbForce, "")
+}
+
+func loadDecompileTargetWithIL2CPP(path, pdbPath string, pdbForce bool, script string) (*decompileTarget, error) {
 	bin, err := cgOpenBinaryPDB(path, false)
 	if err != nil {
 		return nil, fmt.Errorf("%v; decompile supports x86/x64 PE and ELF", err)
@@ -572,6 +583,13 @@ func loadDecompileTarget(path, pdbPath string, pdbForce bool) (*decompileTarget,
 		return nil, fmt.Errorf("decompile supports PE and ELF, not %s", bin.format)
 	}
 	t.is64 = bin.is64
+	if host.debug == nil && bin.format == "PE" && bin.is64 {
+		if host.il2cpp, err = loadIL2CPPPrototypes(path, script, bin); err != nil {
+			return nil, err
+		}
+	} else if host.debug == nil && script != "" && script != "none" {
+		return nil, fmt.Errorf("il2cpp_script currently requires a Windows x64 PE image")
+	}
 	if !bin.is64 {
 		host.bin32 = bin
 	}
@@ -689,15 +707,15 @@ func (t *decompileTarget) useNoReturnVerify(on bool) {
 // own records: known function starts (.pdata, exports, symbol tables, call
 // targets, the entry point), import address table slots, read-only
 // sections and, with a matching PDB, function prototypes and global data.
-// Without a PDB callee signatures stay unlocked and the core recovers them,
-// as Ghidra does for a program without type info.
+// Without debug information, optional IL2CPP prototypes precede inference.
 type decompHost struct {
 	funcs    map[uint64]string // function entry -> recorded name ("" = unnamed)
 	starts   []uint64          // sorted keys of funcs
 	imports  map[uint64]string // import slot address -> imported name
 	named    int
-	debug    debugSource // PDB or DWARF; nil without debug information
-	roRanges [][2]uint64 // non-writable sections
+	debug    debugSource       // PDB or DWARF; nil without debug information
+	il2cpp   *il2cppPrototypes // prototypes only; never replaces names or debug info
+	roRanges [][2]uint64       // non-writable sections
 	// noRet are functions that never return (known names, PDB flags,
 	// discovered from call sites); noRetImports the import slots of
 	// non-returning library functions.
@@ -744,6 +762,11 @@ func (h *decompHost) nameOf(va uint64) string {
 
 func (h *decompHost) QueryFunction(a address.Address) (pcode.HostFunction, bool) {
 	raw, ok := h.funcs[a.Offset]
+	var il2cpp *pcode.HostFunction
+	if h.debug == nil {
+		il2cpp = h.il2cpp.prototype(a.Offset)
+		ok = ok || il2cpp != nil
+	}
 	if !ok {
 		// The import slot of a non-returning library function stands for that
 		// function, as Ghidra's host answers for an external reference: the
@@ -759,6 +782,8 @@ func (h *decompHost) QueryFunction(a address.Address) (pcode.HostFunction, bool)
 		if p := h.debug.prototype(a.Offset); p != nil {
 			hf = *p
 		}
+	} else if il2cpp != nil {
+		hf = *il2cpp
 	}
 	if hf.ExtraPop == pcode.ExtrapopUnknown {
 		hf.ExtraPop = h.extraPop(a.Offset)

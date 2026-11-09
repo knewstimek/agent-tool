@@ -44,7 +44,13 @@ func opDecompile(ctx context.Context, input AnalyzeInput) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath, PDBForce: input.PDBForce, AssumeBranches: assume, NoReturnVerify: input.NoReturnVerify}
+	if input.IL2CPPSignatures != "" {
+		if input.IL2CPPScript != "" && input.IL2CPPScript != input.IL2CPPSignatures {
+			return "", fmt.Errorf("use either il2cpp_signatures or il2cpp_script, not conflicting values")
+		}
+		input.IL2CPPScript = input.IL2CPPSignatures
+	}
+	req := decompileRequest{Path: input.FilePath, Targets: targets, MemLimitMB: decompileMemLimitMB, PDBPath: input.PDBPath, PDBForce: input.PDBForce, IL2CPPScript: input.IL2CPPScript, AssumeBranches: assume, NoReturnVerify: input.NoReturnVerify}
 	start := time.Now()
 	lines, failure := runDecompileWorkerResuming(ctx, req, time.Duration(timeout)*time.Second)
 	input.annotations, input.annotationNotice, err = loadFunctionAnnotations(ctx, input, lines)
@@ -186,7 +192,11 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 		if load.PDBNote != "" {
 			fmt.Fprintf(&sb, "PDB: %s.\n", load.PDBNote)
 		}
-		sb.WriteString("No debug types or prototypes are applied: parameter/local types and callee signatures are inferred by the decompiler (Ghidra-equivalent core), so treat names like param_1/local_10 and undefined types as recovered, not declared.\n")
+		if load.IL2CPPScript != "" {
+			fmt.Fprintf(&sb, "IL2CPP prototypes: %s, %d locked entries, %d unsupported/ambiguous or unmapped entries skipped. Unlocked signatures and local types are inferred; names are unchanged.\n", filepath.Base(load.IL2CPPScript), load.IL2CPPLocked, load.IL2CPPSkipped)
+		} else {
+			sb.WriteString("No debug types or prototypes are applied: parameter/local types and callee signatures are inferred by the decompiler (Ghidra-equivalent core), so treat names like param_1/local_10 and undefined types as recovered, not declared.\n")
+		}
 	}
 
 	if assume, _ := parseAssumeBranches(input.AssumeBranches); len(assume) != 0 {

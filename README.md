@@ -88,6 +88,14 @@ Local relative paths resolve against an explicit workspace, then the MCP client 
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 
+## IL2CPP prototype sidecars
+
+For Windows x64 IL2CPP images without PDB/DWARF, `analyze(operation="decompile")` accepts `il2cpp_signatures` (`il2cpp_script` is an alias). Pass an Il2CppDumper `script.json` or an exported `methodsigs.tsv`. By default, the tool looks beside the binary for these files; `none` disables this source. `decompile-all` also accepts `-il2cpp-signatures`.
+
+TSV columns are `VA<TAB>static<TAB>ret<TAB>params<TAB>name`: absolute VA, static `0/1`, return type, comma-separated managed parameter types, and a diagnostic name. Types include `bool`, `int32`, `uint64`, `float32`, `float64`, `ref:Type`, `ptr:Type`, and `val:12:Type` (exact value-type payload size). Escape commas in type names as `%2C`. The host supplies an instance `this` and trailing `MethodInfo*`; do not include them in TSV params. A `# binary_sha256=<hex>` header, when present, must match the binary.
+
+Debug information takes precedence. Names are unchanged, and unknown or conflicting shared-generic signatures remain inferred. Known large aggregate returns remain unlocked because they require a hidden return buffer. JSON value types need layouts from a sibling `il2cpp.h`; unsupported layouts are skipped. No metadata parser or new MCP tool is added. Resolving virtual-call targets from vtable slots is outside this feature.
+
 ## Persistent analysis annotations
 
 The existing `analyze` tool can save user comments and labels in SQLite with

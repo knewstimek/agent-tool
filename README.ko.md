@@ -86,6 +86,14 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
 | **SetConfig** | 런타임 설정 변경 (인코딩, 파일 크기 제한, symlink, workspace 등) | ✅ |
 | **Help** | 에이전트용 사용법 안내 (인코딩, 들여쓰기, 트러블슈팅) | ✅ |
 
+## IL2CPP 프로토타입 파일
+
+PDB/DWARF가 없는 Windows x64 IL2CPP 바이너리는 `analyze(operation="decompile")`의 `il2cpp_signatures`로 Il2CppDumper `script.json` 또는 내보낸 `methodsigs.tsv`를 지정할 수 있습니다. `il2cpp_script`도 같은 옵션입니다. 기본값은 바이너리 옆 파일 자동 탐색이며, `none`이면 사용하지 않습니다. `decompile-all`에서도 `-il2cpp-signatures`를 지원합니다.
+
+TSV 열은 `VA<TAB>static<TAB>ret<TAB>params<TAB>name`입니다. 절대 VA, static 여부(`0/1`), 반환형, 쉼표로 구분한 관리 코드 매개변수 타입, 진단용 이름을 기록합니다. 타입은 `bool`, `int32`, `uint64`, `float32`, `float64`, `ref:Type`, `ptr:Type`, `val:12:Type`(정확한 값 타입 크기) 등을 사용합니다. 타입 이름 안의 쉼표는 `%2C`로 이스케이프합니다. 인스턴스의 `this`와 마지막 `MethodInfo*`는 호스트가 추가하므로 TSV params에 넣지 않습니다. `# binary_sha256=<hex>`가 있으면 바이너리 해시와 일치해야 합니다.
+
+디버그 정보가 우선하고 이름은 바꾸지 않습니다. 모르는 타입과 시그니처가 충돌하는 공유 제네릭은 추론에 맡깁니다. 숨은 반환 버퍼가 필요한 큰 구조체 반환도 고정하지 않습니다. JSON의 값 타입은 옆의 `il2cpp.h`에서 크기를 알 수 있을 때만 적용합니다. 메타데이터 직접 파서나 새 MCP 도구를 추가하지 않으며, vtable 슬롯으로 가상 호출 대상을 찾는 기능은 이번 범위에 포함하지 않습니다.
+
 ## 분석 주석 저장
 
 기존 `analyze` 도구에서 `annotation_set`으로 사용자 주석·라벨을 저장하고,
