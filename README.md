@@ -496,6 +496,13 @@ if the SSH server uses a different default. Windows roots must be drive-based;
 cmd roots containing shell expansion/metacharacters are rejected. `powershell_script`
 uses PowerShell location handling independently of the SSH default shell.
 
+With `remote_root`, Windows CMD commands are launched as child processes with
+an explicit working directory through PowerShell (which must be installed).
+Command text is passed as data, keeping parentheses and `%CD%` out of the cwd
+guard's parser. PowerShell script text keeps leading `using` and `param`
+declarations; location setup occurs outside its scriptblock. Generated Windows
+launchers are staged when their final length reaches the command-line threshold.
+
 Tool-generated local paths in read diagnostics, multiread headers, edit and copy
 results use workspace-relative paths when inside the workspace. SFTP reports local
 paths relative to the workspace and remote paths relative to `remote_root`, including

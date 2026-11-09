@@ -71,14 +71,14 @@ func TestRemotePathsAreHostIndependent(t *testing.T) {
 
 func TestRemoteRootShellQuotingAndScriptPreservation(t *testing.T) {
 	in := SSHInput{RemoteRoot: "/srv/app's $data", RemoteShell: "posix", Command: "printf '%s' '/srv/app/unchanged'"}
-	applyRemoteRoot(&in)
-	if !strings.HasPrefix(in.Command, "cd '/srv/app'\"'\"'s $data' && {\n") || !strings.Contains(in.Command, "'/srv/app/unchanged'") {
-		t.Fatalf("unsafe or rewritten command: %s", in.Command)
+	command, plan, err := prepareSSHExecution(in)
+	if err != nil || plan != nil || command != "cd "+quotePOSIX(in.RemoteRoot)+" && exec sh -c "+quotePOSIX(in.Command) {
+		t.Fatalf("unsafe or rewritten command: %s %v", command, err)
 	}
 	ps := SSHInput{RemoteRoot: "D:/app's files", PowerShellScript: "Write-Output '/absolute/unchanged'"}
-	applyRemoteRoot(&ps)
-	if ps.PowerShellScript != "Set-Location -LiteralPath 'D:/app''s files' -ErrorAction Stop;\nWrite-Output '/absolute/unchanged'" {
-		t.Fatalf("script=%s", ps.PowerShellScript)
+	_, plan, err = prepareSSHExecution(ps)
+	if err != nil || plan == nil || plan.script != ps.PowerShellScript || plan.remoteRoot != ps.RemoteRoot {
+		t.Fatalf("script changed: %+v %v", plan, err)
 	}
 }
 
@@ -100,15 +100,31 @@ func TestPOSIXRemoteRootExecutionAndFailure(t *testing.T) {
 		root = "/" + strings.ToLower(root[:1]) + root[2:]
 	}
 	in := SSHInput{RemoteRoot: root, RemoteShell: "posix", Command: "pwd; printf '%s' '/srv/app/unchanged'; exit 17"}
-	applyRemoteRoot(&in)
-	out, err := exec.Command(shell, "-c", in.Command).CombinedOutput()
+	command, _, err := prepareSSHExecution(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(shell, "-c", command).CombinedOutput()
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 17 || !strings.Contains(string(out), root) || !strings.Contains(string(out), "/srv/app/unchanged") {
 		t.Fatalf("cwd/output/exit lost: err=%v out=%s", err, out)
 	}
 	in = SSHInput{RemoteRoot: root + "/missing", RemoteShell: "posix", Command: "printf ROOT_BAD; printf SECOND_BAD"}
-	applyRemoteRoot(&in)
-	out, err = exec.Command(shell, "-c", in.Command).CombinedOutput()
+	command, _, err = prepareSSHExecution(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = exec.Command(shell, "-c", command).CombinedOutput()
 	if err == nil || strings.Contains(string(out), "ROOT_BAD") || strings.Contains(string(out), "SECOND_BAD") {
 		t.Fatalf("executed after failed cd: err=%v out=%s", err, out)
+	}
+	// Closing syntax in user text must never escape the cwd success condition.
+	in.Command = "}\nprintf ROOT_BAD"
+	command, _, err = prepareSSHExecution(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = exec.Command(shell, "-c", command).CombinedOutput()
+	if err == nil || strings.Contains(string(out), "ROOT_BAD") {
+		t.Fatalf("escaped cwd guard: %v %s", err, out)
 	}
 }

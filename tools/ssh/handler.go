@@ -114,19 +114,9 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	}
 
 	originalCommand := input.Command
-	// Validate the original command/script combination before adding the cwd.
-	plan, err := planPowerShell(input)
+	preparedCommand, plan, err := prepareSSHExecution(input)
 	if err != nil {
 		return errorResult(err.Error())
-	}
-	if plan != nil {
-		rooted := input
-		rooted.Command = ""
-		rooted.PowerShellScript = plan.script
-		applyRemoteRoot(&rooted)
-		plan.script = rooted.PowerShellScript
-	} else if input.Command != "" {
-		applyRemoteRoot(&input)
 	}
 
 	// SSRF policy: cloud metadata always blocked. Private IPs allowed by default
@@ -183,7 +173,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 	timeout := time.Duration(input.TimeoutSecInt) * time.Second
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	command := input.Command
+	command := preparedCommand
 	var staged *stagedPowerShell
 	if plan != nil {
 		staged, err = stagePowerShell(execCtx, client, plan)

@@ -21,6 +21,7 @@ const (
 )
 
 type powerShellPlan struct {
+	remoteRoot string
 	script     string
 	prefix     string
 	executable string
@@ -34,7 +35,7 @@ func planPowerShell(input SSHInput) (*powerShellPlan, error) {
 		if len(input.PowerShellScript) > maxPowerShellScriptBytes || !utf8.ValidString(input.PowerShellScript) {
 			return nil, fmt.Errorf("powershell_script must be valid UTF-8 and at most 4 MiB")
 		}
-		return &powerShellPlan{input.PowerShellScript, "powershell.exe -NoProfile -NonInteractive -EncodedCommand ", "powershell.exe"}, nil
+		return &powerShellPlan{script: input.PowerShellScript, prefix: defaultPowerShellPrefix, executable: "powershell.exe"}, nil
 	}
 	if len(utf16.Encode([]rune(input.Command))) < powerShellInlineLimit {
 		return nil, nil
@@ -79,7 +80,7 @@ func planPowerShell(input SSHInput) (*powerShellPlan, error) {
 			if len(script) > maxPowerShellScriptBytes {
 				return nil, fmt.Errorf("PowerShell script exceeds 4 MiB")
 			}
-			return &powerShellPlan{script, strings.Join(tokens[:i], " ") + " -EncodedCommand ", tokens[0]}, nil
+			return &powerShellPlan{script: script, prefix: strings.Join(tokens[:i], " ") + " -EncodedCommand ", executable: tokens[0]}, nil
 		case "-noprofile", "-nop", "-noninteractive", "-noni", "-nologo", "-sta", "-mta":
 		case "-executionpolicy", "-ep":
 			i++
@@ -122,13 +123,17 @@ func encodePowerShell(script string) string {
 const psPrelude = "$ProgressPreference='SilentlyContinue';try{[Console]::OutputEncoding=New-Object Text.UTF8Encoding $false}catch{};"
 
 func powerShellBootstrap(remotePath string) string {
+	return powerShellBootstrapRoot(remotePath, "")
+}
+
+func powerShellBootstrapRoot(remotePath, root string) string {
 	literal := "'" + strings.ReplaceAll(remotePath, "'", "''") + "'"
 	// Execute script text in the EncodedCommand scope, preserving exit and error
 	// behavior without subjecting the uploaded file to execution-policy checks.
 	// finally runs on normal completion, script errors, and explicit exit.
 	// PowerShell 5 resets $? after a parenthesized expression. Capture the last
 	// command's status inside the script block rather than after invoking it.
-	return psPrelude + "try { . ([scriptblock]::Create([IO.File]::ReadAllText(" + literal + ",[Text.Encoding]::UTF8) + \"`n`nif (`$?) { exit 0 } else { exit 1 }\")) } finally { try { Remove-Item -LiteralPath " + literal + " -Force -ErrorAction Stop } catch { [Console]::Error.WriteLine('[agent-tool cleanup] temporary script deletion failed') } }"
+	return psPrelude + "try { " + powerShellInvocation("[IO.File]::ReadAllText("+literal+",[Text.Encoding]::UTF8)", root) + " } finally { try { Remove-Item -LiteralPath " + literal + " -Force -ErrorAction Stop } catch { [Console]::Error.WriteLine('[agent-tool cleanup] temporary script deletion failed') } }"
 }
 
 type stagedPowerShell struct {
@@ -138,7 +143,7 @@ type stagedPowerShell struct {
 }
 
 func stagePowerShell(ctx context.Context, client *gossh.Client, plan *powerShellPlan) (*stagedPowerShell, error) {
-	probe := plan.executable + " -NoProfile -NonInteractive -EncodedCommand " + encodePowerShell(psPrelude + "[Console]::Out.Write([IO.Path]::GetTempPath())")
+	probe := plan.executable + " -NoProfile -NonInteractive -EncodedCommand " + encodePowerShell(psPrelude+"[Console]::Out.Write([IO.Path]::GetTempPath())")
 	result, err := executeCommand(ctx, client, probe, 8192, "head")
 	if err != nil {
 		return nil, fmt.Errorf("cannot locate remote PowerShell temporary directory: %w", err)
@@ -154,7 +159,7 @@ func stagePowerShell(ctx context.Context, client *gossh.Client, plan *powerShell
 		return nil, err
 	}
 	remotePath := strings.TrimRight(strings.ReplaceAll(dir, "\\", "/"), "/") + "/agent-tool-" + hex.EncodeToString(random) + ".ps1"
-	command := plan.prefix + encodePowerShell(powerShellBootstrap(remotePath))
+	command := plan.prefix + encodePowerShell(powerShellBootstrapRoot(remotePath, plan.remoteRoot))
 	if len(utf16.Encode([]rune(command))) >= powerShellInlineLimit {
 		return nil, fmt.Errorf("temporary script launcher exceeds the Windows command-line limit")
 	}

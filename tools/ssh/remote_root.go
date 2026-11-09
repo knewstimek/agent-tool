@@ -1,9 +1,11 @@
 package ssh
 
 import (
+	"encoding/base64"
 	"fmt"
 	"path"
 	"strings"
+	"unicode/utf16"
 )
 
 func windowsRemotePath(p string) bool {
@@ -100,23 +102,67 @@ func DisplayRemotePath(root, p string) string {
 func quotePOSIX(s string) string      { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 func quotePowerShell(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
-// applyRemoteRoot changes execution cwd, never command operands or output.
-// A failed directory change must prevent the command from running.
-func applyRemoteRoot(input *SSHInput) {
+const defaultPowerShellPrefix = "powershell.exe -NoProfile -NonInteractive -EncodedCommand "
+
+func decodedPowerShellText(s string) string {
+	return "[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + base64.StdEncoding.EncodeToString([]byte(s)) + "'))"
+}
+
+// User text is compiled separately, preserving using/param declarations. Never
+// insert command text into the syntax controlling whether cwd setup succeeded.
+func powerShellInvocation(textExpression, root string) string {
+	location := ""
+	if root != "" {
+		location = "Set-Location -LiteralPath " + quotePowerShell(root) + " -ErrorAction Stop; "
+	}
+	return location + ". ([scriptblock]::Create(" + textExpression + " + \"`n`nif (`$?) { exit 0 } else { exit 1 }\"))"
+}
+
+func cmdProcessScript(root, command string) string {
+	// WorkingDirectory is a process attribute, so cmd expands %CD% only after
+	// launch. The command remains data until the child cmd parses it once.
+	return "$ErrorActionPreference='Stop';$i=New-Object Diagnostics.ProcessStartInfo;" +
+		"$i.FileName=$env:ComSpec;$i.UseShellExecute=$false;$i.WorkingDirectory=" + quotePowerShell(root) + ";" +
+		"$i.Arguments='/d /s /c \"' + (" + decodedPowerShellText(command) + ") + '\"';" +
+		"$p=[Diagnostics.Process]::Start($i);$p.WaitForExit();exit $p.ExitCode"
+}
+
+// prepareSSHExecution chooses staging after including all generated syntax.
+// POSIX command data uses a separate sh parser; Windows uses PowerShell's data
+// APIs or a separately compiled scriptblock, never a command grouping wrapper.
+func prepareSSHExecution(input SSHInput) (string, *powerShellPlan, error) {
+	plan, err := planPowerShell(input)
+	if err != nil {
+		return "", nil, err
+	}
 	if input.RemoteRoot == "" {
-		return
+		return input.Command, plan, nil
 	}
-	ps := "Set-Location -LiteralPath " + quotePowerShell(input.RemoteRoot) + " -ErrorAction Stop;\n"
-	if input.PowerShellScript != "" {
-		input.PowerShellScript = ps + input.PowerShellScript
-		return
+	if plan != nil {
+		plan.remoteRoot = input.RemoteRoot
+		return "", plan, nil
 	}
-	switch input.RemoteShell {
-	case "powershell":
-		input.Command = ps + input.Command
-	case "cmd":
-		input.Command = "cd /d \"" + strings.ReplaceAll(input.RemoteRoot, "/", "\\") + "\" && (" + input.Command + ")"
-	default:
-		input.Command = "cd " + quotePOSIX(input.RemoteRoot) + " && {\n" + input.Command + "\n}"
+	if input.Command == "" {
+		return "", nil, nil
 	}
+	if input.RemoteShell == "posix" {
+		return "cd " + quotePOSIX(input.RemoteRoot) + " && exec sh -c " + quotePOSIX(input.Command), nil, nil
+	}
+	plan = &powerShellPlan{script: input.Command, prefix: defaultPowerShellPrefix, executable: "powershell.exe", remoteRoot: input.RemoteRoot}
+	script := psPrelude + "try { " + powerShellInvocation(decodedPowerShellText(input.Command), input.RemoteRoot) + " } catch { [Console]::Error.WriteLine($_); exit 1 }"
+	if input.RemoteShell == "cmd" {
+		plan.script = cmdProcessScript(input.RemoteRoot, input.Command)
+		plan.remoteRoot = ""
+		script = psPrelude + plan.script
+	}
+	// The PowerShell default shell parses a data-only launcher directly; cmd
+	// needs an explicit PowerShell executable to host the process API.
+	command := script
+	if input.RemoteShell == "cmd" {
+		command = defaultPowerShellPrefix + encodePowerShell(script)
+	}
+	if len(utf16.Encode([]rune(command))) >= powerShellInlineLimit {
+		return "", plan, nil
+	}
+	return command, nil, nil
 }
