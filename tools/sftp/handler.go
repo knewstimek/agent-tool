@@ -20,6 +20,7 @@ type SFTPInput struct {
 	localRoot     string
 	localAliases  map[string]string
 	remoteAliases map[string]string
+	session       *mcp.ServerSession
 	// SSH connection parameters (same as ssh tool, minus Command/Disconnect/TimeoutSec)
 	Host         string      `json:"host,omitempty" jsonschema:"SSH server hostname or IP address (IPv4 or IPv6). Required unless connection_profile or connection_id is used"`
 	Port         interface{} `json:"port,omitempty" jsonschema:"SSH port number. Default: 22"`
@@ -82,6 +83,9 @@ var validOperations = map[string]bool{
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mcp.CallToolResult, SFTPOutput, error) {
+	if req != nil {
+		input.session = req.Session
+	}
 	// Merge local/remote aliases
 	if input.LocalPath == "" && input.Local != "" {
 		input.LocalPath = input.Local
@@ -99,7 +103,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mc
 
 	// Status and cancel operate on an existing transfer and need no connection.
 	if op == "status" {
-		result, err := opStatus(input)
+		result, err := opStatus(ctx, req, input)
 		if err != nil {
 			return errorResult(fmt.Sprintf("status failed: %v", err))
 		}
@@ -290,6 +294,7 @@ remote_root from a profile/call/connection_id anchors relative remote paths and 
 Operations: upload (local to remote), download (remote to local), ls, stat, mkdir, rm, chmod, rename.
 Batch upload: upload_many accepts up to 100 local_path/remote_path items over one SFTP session.
 Async operations: upload_async, download_async (returns transfer_id immediately), status (check progress), cancel.
+Status/cancel is limited to the originating MCP session. Status uses current aliases, falling back to exact remote paths.
 Max file transfer size: 2 GB. Use overwrite=true to replace existing files.
 Recursive delete is limited to 10,000 items for safety.`,
 	}, Handle)

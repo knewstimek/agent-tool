@@ -474,6 +474,7 @@ remote_root is a working directory, not a filesystem sandbox.
 	Sync operations: upload (local→remote), upload_many (up to 100 files over one session),
 	download (remote→local), ls, stat, mkdir, rm, chmod, rename.
 Async operations: upload_async, download_async (returns transfer_id), status (check progress), cancel.
+Status/cancel is restricted to the originating MCP session; status rechecks current aliases and shows exact remote paths when aliases no longer match.
 Max transfer size: 2 GB. Recursive delete limited to 10,000 items. Dangerous paths (/, /home, /etc, etc.) protected.
 Parameters: host, port, user, password, key_file, passphrase, use_agent, host_key_check,
   jump_host, jump_port, jump_user, jump_password, jump_key_file, jump_passphrase,

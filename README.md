@@ -478,6 +478,10 @@ and 64 aliases per scope. Unknown aliases, rooted suffixes, `..` and `:` in suff
 are rejected. Use `./@name` for a literal filename starting with `@`. Aliases are
 path conveniences, not sandboxes; symlink destinations are not constrained.
 
+SFTP background status/cancel is restricted to the MCP session that started the
+transfer. Status keeps resolved paths and renders current aliases at query time;
+if an alias was deleted or rebound, the exact remote path is shown instead.
+
 ### Local SSH/SFTP connection profiles
 
 SSH and SFTP accept either `connection_profile` or a session-local `connection_id`,

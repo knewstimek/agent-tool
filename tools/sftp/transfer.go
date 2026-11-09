@@ -15,6 +15,7 @@ import (
 	"agent-tool/common"
 	"agent-tool/tools/ssh"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	gosftp "github.com/pkg/sftp"
 )
 
@@ -31,18 +32,20 @@ const (
 
 // transferEntry tracks a background file transfer.
 type transferEntry struct {
-	ID          string
-	Operation   string // "upload" or "download"
-	LocalPath   string
-	RemotePath  string
-	TotalSize   int64
-	Transferred atomic.Int64
-	Status      string // "running", "completed", "failed", "cancelled"
-	Error       string
-	StartedAt   time.Time
-	CompletedAt time.Time
-	cancel      context.CancelFunc
-	mu          sync.Mutex
+	session          *mcp.ServerSession
+	remoteAliasScope string
+	ID               string
+	Operation        string // "upload" or "download"
+	LocalPath        string
+	RemotePath       string
+	TotalSize        int64
+	Transferred      atomic.Int64
+	Status           string // "running", "completed", "failed", "cancelled"
+	Error            string
+	StartedAt        time.Time
+	CompletedAt      time.Time
+	cancel           context.CancelFunc
+	mu               sync.Mutex
 }
 
 var transfers = struct {
@@ -168,13 +171,15 @@ func startAsyncUpload(input SFTPInput) (string, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	entry := &transferEntry{
-		Operation:  "upload",
-		LocalPath:  input.displayLocal(),
-		RemotePath: input.displayRemote(input.RemotePath),
-		TotalSize:  localInfo.Size(),
-		Status:     "running",
-		StartedAt:  time.Now(),
-		cancel:     cancel,
+		session:          input.session,
+		remoteAliasScope: ssh.ConnectionAliasScope(toSSHInput(input)),
+		Operation:        "upload",
+		LocalPath:        input.LocalPath,
+		RemotePath:       input.RemotePath,
+		TotalSize:        localInfo.Size(),
+		Status:           "running",
+		StartedAt:        time.Now(),
+		cancel:           cancel,
 	}
 
 	// Atomic: check concurrent limit + allocate ID + insert entry
@@ -233,13 +238,15 @@ func startAsyncDownload(input SFTPInput) (string, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	entry := &transferEntry{
-		Operation:  "download",
-		LocalPath:  input.displayLocal(),
-		RemotePath: input.displayRemote(input.RemotePath),
-		TotalSize:  remoteInfo.Size(),
-		Status:     "running",
-		StartedAt:  time.Now(),
-		cancel:     cancel,
+		session:          input.session,
+		remoteAliasScope: ssh.ConnectionAliasScope(toSSHInput(input)),
+		Operation:        "download",
+		LocalPath:        input.LocalPath,
+		RemotePath:       input.RemotePath,
+		TotalSize:        remoteInfo.Size(),
+		Status:           "running",
+		StartedAt:        time.Now(),
+		cancel:           cancel,
 	}
 
 	// Atomic: check concurrent limit + allocate ID + insert entry
@@ -477,7 +484,7 @@ func copyWithCancel(ctx context.Context, dst io.Writer, src io.Reader) (int64, e
 }
 
 // opStatus returns the status of a transfer or all active transfers.
-func opStatus(input SFTPInput) (string, error) {
+func opStatus(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (string, error) {
 	transferID := input.TransferID
 
 	if transferID != "" {
@@ -486,18 +493,20 @@ func opStatus(input SFTPInput) (string, error) {
 		entry, ok := transfers.m[transferID]
 		transfers.mu.Unlock()
 
-		if !ok {
+		if !ok || entry.session != input.session {
 			return "", fmt.Errorf("transfer not found: %s", transferID)
 		}
 
-		return formatTransferStatus(entry), nil
+		return formatTransferStatus(ctx, req, entry), nil
 	}
 
 	// All transfers
 	transfers.mu.Lock()
 	entries := make([]*transferEntry, 0, len(transfers.m))
 	for _, e := range transfers.m {
-		entries = append(entries, e)
+		if e.session == input.session {
+			entries = append(entries, e)
+		}
 	}
 	transfers.mu.Unlock()
 
@@ -508,7 +517,7 @@ func opStatus(input SFTPInput) (string, error) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("=== Transfers (%d) ===\n\n", len(entries)))
 	for _, e := range entries {
-		sb.WriteString(formatTransferStatus(e))
+		sb.WriteString(formatTransferStatus(ctx, req, e))
 		sb.WriteString("\n")
 	}
 
@@ -525,7 +534,7 @@ func opCancel(input SFTPInput) (string, error) {
 	entry, ok := transfers.m[input.TransferID]
 	transfers.mu.Unlock()
 
-	if !ok {
+	if !ok || entry.session != input.session {
 		return "", fmt.Errorf("transfer not found: %s", input.TransferID)
 	}
 
@@ -542,7 +551,10 @@ func opCancel(input SFTPInput) (string, error) {
 }
 
 // formatTransferStatus formats a single transfer entry for display.
-func formatTransferStatus(e *transferEntry) string {
+func formatTransferStatus(ctx context.Context, req *mcp.CallToolRequest, e *transferEntry) string {
+	root := common.RequestWorkspace(ctx, req)
+	localAliases := common.DirectoryAliasMap(ctx, req, common.LocalAliasScope(ctx, req))
+	remoteAliases := common.DirectoryAliasMap(ctx, req, e.remoteAliasScope)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -558,8 +570,10 @@ func formatTransferStatus(e *transferEntry) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("ID: %s\n", e.ID))
 	sb.WriteString(fmt.Sprintf("Operation: %s\n", e.Operation))
-	sb.WriteString(fmt.Sprintf("Local: %s\n", e.LocalPath))
-	sb.WriteString(fmt.Sprintf("Remote: %s\n", e.RemotePath))
+	sb.WriteString(fmt.Sprintf("Local: %s\n", common.DisplayPathWithAliases(root, e.LocalPath, localAliases)))
+	// Without a still-valid alias, show the exact remote path: status calls
+	// need no connection/root arguments and must not imply a different cwd.
+	sb.WriteString(fmt.Sprintf("Remote: %s\n", ssh.DisplayRemotePathWithAliases("", e.RemotePath, remoteAliases)))
 	sb.WriteString(fmt.Sprintf("Progress: %s\n", progress))
 	sb.WriteString(fmt.Sprintf("Status: %s\n", e.Status))
 
