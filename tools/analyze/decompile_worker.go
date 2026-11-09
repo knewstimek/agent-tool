@@ -44,6 +44,7 @@ type decompileRequest struct {
 	PDBForce     bool     `json:"pdb_force,omitempty"` // load PDBPath despite a GUID mismatch
 	IL2CPPScript string   `json:"il2cpp_script,omitempty"`
 	Targets      []string `json:"targets"`
+	ListStarts   bool     `json:"list_starts,omitempty"`
 	// AssumeBranches fixes conditional branches by address ("taken" or
 	// "fallthrough"); it changes only the flow, not the loaded binary.
 	AssumeBranches map[uint64]string `json:"assume_branches,omitempty"`
@@ -61,20 +62,21 @@ type decompileLine struct {
 	Kind string `json:"kind"` // "load", "result", "fatal" or "done" (end of a request)
 
 	// load
-	Format        string  `json:"format,omitempty"`
-	Spec          string  `json:"spec,omitempty"`
-	KnownStarts   int     `json:"known_starts,omitempty"`
-	NamedStarts   int     `json:"named_starts,omitempty"`
-	Imports       int     `json:"imports,omitempty"`
-	LoadSecs      float64 `json:"load_secs,omitempty"`
-	HostTracked   string  `json:"tracked,omitempty"`
-	PDB           string  `json:"pdb,omitempty"`      // PDB used
-	PDBNote       string  `json:"pdb_note,omitempty"` // why no PDB was used, or a forced-load warning
-	Reused        bool    `json:"reused,omitempty"`   // the binary was already loaded
-	IL2CPPScript  string  `json:"il2cpp_script,omitempty"`
-	IL2CPPLocked  int     `json:"il2cpp_locked,omitempty"`
-	IL2CPPSkipped int     `json:"il2cpp_skipped,omitempty"`
-	IL2CPPNote    string  `json:"il2cpp_note,omitempty"`
+	Format        string   `json:"format,omitempty"`
+	Spec          string   `json:"spec,omitempty"`
+	KnownStarts   int      `json:"known_starts,omitempty"`
+	NamedStarts   int      `json:"named_starts,omitempty"`
+	Imports       int      `json:"imports,omitempty"`
+	LoadSecs      float64  `json:"load_secs,omitempty"`
+	HostTracked   string   `json:"tracked,omitempty"`
+	PDB           string   `json:"pdb,omitempty"`      // PDB used
+	PDBNote       string   `json:"pdb_note,omitempty"` // why no PDB was used, or a forced-load warning
+	Reused        bool     `json:"reused,omitempty"`   // the binary was already loaded
+	IL2CPPScript  string   `json:"il2cpp_script,omitempty"`
+	IL2CPPLocked  int      `json:"il2cpp_locked,omitempty"`
+	IL2CPPSkipped int      `json:"il2cpp_skipped,omitempty"`
+	IL2CPPNote    string   `json:"il2cpp_note,omitempty"`
+	Starts        []string `json:"starts,omitempty"`
 
 	// result (and fatal: the target that was running)
 	Target    string   `json:"target,omitempty"`
@@ -172,6 +174,15 @@ func RunDecompileWorker(in io.Reader, out io.Writer) int {
 			l.LoadSecs, l.Reused = 0, true
 		}
 		emit(l)
+		if req.ListStarts {
+			starts := make([]string, len(t.host.starts))
+			for i, va := range t.host.starts {
+				starts[i] = fmt.Sprintf("0x%x", va)
+			}
+			emit(decompileLine{Kind: "starts", Starts: starts})
+			emit(decompileLine{Kind: "done"})
+			continue
+		}
 		assume := assumeDirections(req.AssumeBranches)
 		t.useNoReturnVerify(req.NoReturnVerify)
 		for _, target := range req.Targets {

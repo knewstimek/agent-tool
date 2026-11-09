@@ -51,3 +51,11 @@ func TestDecompileAllCorpus(t *testing.T) {
 		t.Errorf("resume did not skip the first run's functions:\n%s", log.String())
 	}
 }
+
+func TestDecompileAllRejectsInvalidMetadata(t *testing.T) {
+	var log bytes.Buffer
+	code := RunDecompileAll([]string{"-pdb", "none", "-il2cpp-signatures", filepath.Join(t.TempDir(), "missing.dat"), "-o", filepath.Join(t.TempDir(), "out.jsonl"), filepath.Join("testdata", "pdb", "fixture_x64.exe")}, &log)
+	if code != 1 || !strings.Contains(log.String(), "error:") {
+		t.Fatalf("invalid metadata did not fail before scheduling: exit=%d %s", code, log.String())
+	}
+}

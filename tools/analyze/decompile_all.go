@@ -56,24 +56,49 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 		*out = bin + ".decompiled.jsonl"
 	}
 
-	// The function list is the decompile host's known starts (with PDB or
-	// DWARF functions); the analysis cache makes this load cheap.
-	t, err := loadDecompileTargetWithIL2CPP(bin, *pdbPath, *pdbForce, *il2cppScript)
-	if err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	// List starts through the same bounded worker that will run the first
+	// batch. Do not keep a second full program/metadata graph in the CLI parent.
+	lines, failure := runDecompileWorker(ctx, decompileRequest{Path: bin, PDBPath: *pdbPath, PDBForce: *pdbForce, IL2CPPScript: *il2cppScript, ListStarts: true, MemLimitMB: decompileMemLimitMB}, time.Duration(max(60, *perFunc))*time.Second)
+	var starts []uint64
+	listed := false
+	for _, line := range lines {
+		switch line.Kind {
+		case "fatal":
+			failure = line.Error
+		case "load":
+			if line.PDB != "" {
+				fmt.Fprintf(stderr, "pdb: %s\n", line.PDB)
+			}
+			if line.PDBNote != "" {
+				fmt.Fprintf(stderr, "pdb: %s\n", line.PDBNote)
+			}
+			if line.IL2CPPNote != "" {
+				fmt.Fprintf(stderr, "il2cpp: %s\n", line.IL2CPPNote)
+			}
+		case "starts":
+			listed = true
+			for _, s := range line.Starts {
+				va, err := parseHexAddr(s)
+				if err != nil {
+					failure = "invalid function start from worker"
+					break
+				}
+				starts = append(starts, va)
+			}
+		}
+	}
+	if failure != "" || !listed {
+		if failure == "" {
+			failure = "worker did not return function starts"
+		}
+		fmt.Fprintf(stderr, "error: %s\n", failure)
+		if ctx.Err() != nil {
+			return 130
+		}
 		return 1
 	}
-	if t.pdb != "" {
-		fmt.Fprintf(stderr, "pdb: %s\n", t.pdb)
-	}
-	if t.pdbNote != "" {
-		fmt.Fprintf(stderr, "pdb: %s\n", t.pdbNote)
-	}
-	if src := t.host.il2cpp; src != nil && src.note != "" {
-		fmt.Fprintf(stderr, "il2cpp: %s\n", src.note)
-	}
-	starts := append([]uint64(nil), t.host.starts...)
-	t = nil
 
 	done, err := readCorpusEntries(*out)
 	if err != nil {
@@ -99,8 +124,6 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 	fmt.Fprintf(stderr, "%s: %d functions, %d already in %s, %d to go, %d workers\n",
 		bin, len(starts), len(done), *out, len(todo), *jobs)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	var mu sync.Mutex
 	written, failed := 0, 0
 	write := func(e corpusEntry) {
