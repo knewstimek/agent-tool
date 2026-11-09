@@ -88,6 +88,7 @@ type runOptions struct {
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input ProcExecInput) (*mcp.CallToolResult, ProcExecOutput, error) {
+	ctx = common.WithToolRequest(ctx, req)
 	op := strings.ToLower(strings.TrimSpace(input.Operation))
 	if op == "" {
 		op = "run"
@@ -108,7 +109,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ProcExecInput) 
 	switch op {
 	case "run":
 	case "list":
-		text := common.FormatJobList(common.ListJobs())
+		text := common.FormatJobList(common.ListJobsForContext(ctx))
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, ProcExecOutput{Status: "list"}, nil
 	case "status", "wait", "tail", "cancel":
 		return handleJobOperation(ctx, op, input)
@@ -243,7 +244,7 @@ func execJob(ctx context.Context, input ProcExecInput, opts runOptions) (*mcp.Ca
 	// No KillOnClose: background servers must outlive an agent-tool restart.
 	// The job object only makes cancel/timeout reach orphaned grandchildren.
 	guard, _ := common.GuardProcess(cmd.Process, common.GuardOptions{})
-	job := common.NewJob("procexec", displayCommand, cmd.Process.Pid, stdout, stderr, guard.Kill)
+	job := common.NewJobForContext(ctx, "procexec", displayCommand, cmd.Process.Pid, stdout, stderr, guard.Kill)
 	job.SetLogs(logs...)
 	job.SetRenderer(renderForJob)
 	go func() {
@@ -293,7 +294,7 @@ func handleJobOperation(ctx context.Context, op string, input ProcExecInput) (*m
 	res := common.HandleJobOperation(ctx, op, input.JobID, waitSec,
 		common.JobRenderOptions{TailLines: input.TailLines, TailOnly: input.tailExplicit, OutputView: input.OutputView})
 	out := ProcExecOutput{}
-	if job, found := common.GetJob(input.JobID); found {
+	if job, found := common.GetJobForContext(ctx, input.JobID); found {
 		s := job.Snapshot()
 		out = ProcExecOutput{PID: s.PID, JobID: s.ID, Status: s.Status, ExitCode: s.ExitCode,
 			Stdout: s.Stdout, Stderr: s.Stderr, ElapsedMs: s.Elapsed().Milliseconds()}

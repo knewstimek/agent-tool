@@ -27,7 +27,7 @@ func runYielding(ctx context.Context, tool, label string, work func(context.Cont
 	// WithoutCancel: the request context ends when we return the job_id, but
 	// the work must outlive it. Values (session, roots) are still carried.
 	workCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	job := NewJob(tool, label, 0, nil, nil, cancel)
+	job := NewJobForContext(ctx, tool, label, 0, nil, nil, cancel)
 	go func() {
 		defer cancel()
 		defer func() {
@@ -79,7 +79,7 @@ func HandleJobOperation(ctx context.Context, op, id string, waitSec int, opts Jo
 		op = "status"
 	}
 	if op == "list" {
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: FormatJobList(ListJobs())}}}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: FormatJobList(ListJobsForContext(ctx))}}}
 	}
 	if op != "status" && op != "wait" && op != "tail" && op != "cancel" {
 		return toolError("job_action must be status, wait, tail, cancel, or list")
@@ -87,7 +87,7 @@ func HandleJobOperation(ctx context.Context, op, id string, waitSec int, opts Jo
 	if strings.TrimSpace(id) == "" {
 		return toolError(fmt.Sprintf("job_id is required for %s. List known jobs with toolbox operation=job job_action=list", op))
 	}
-	job, ok := GetJob(id)
+	job, ok := GetJobForContext(ctx, id)
 	if !ok {
 		return toolError(fmt.Sprintf("job %q not found: finished jobs expire after 1 hour and jobs do not survive an agent-tool restart. List known jobs with toolbox operation=job job_action=list", strings.TrimSpace(id)))
 	}

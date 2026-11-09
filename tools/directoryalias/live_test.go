@@ -72,4 +72,19 @@ func TestLivePOSIXDirectoryAliases(t *testing.T) {
 	if err != nil || !result.IsError {
 		t.Fatal("live alias traversal was accepted")
 	}
+	// Explicit SSH background jobs must enforce the same owner through both
+	// the result text and the structured SSH output.
+	result, started, err := ssh.Handle(ctx, req, ssh.SSHInput{ConnectionID: rooted.ConnectionID, Operation: "start", Command: "printf BACKGROUND_ROOT_OK", Quiet: true, TimeoutSec: 15})
+	if err != nil || result.IsError || started.JobID == "" {
+		t.Fatal("live background start failed")
+	}
+	foreign, _ := testSession(t, server)
+	result, hidden, err := ssh.Handle(ctx, foreign, ssh.SSHInput{Operation: "status", JobID: started.JobID})
+	if err != nil || !result.IsError || hidden.JobID != "" || hidden.Stdout != "" {
+		t.Fatal("foreign SSH job metadata was exposed")
+	}
+	result, completed, err := ssh.Handle(ctx, req, ssh.SSHInput{Operation: "wait", JobID: started.JobID, WaitSec: 5})
+	if err != nil || result.IsError || !strings.Contains(completed.Result, "BACKGROUND_ROOT_OK") {
+		t.Fatal("live background owner wait failed")
+	}
 }

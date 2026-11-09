@@ -129,6 +129,7 @@ directory_alias (through toolbox) registers session-only @name/subpath reference
 - Use toolbox(operation='describe', tool='ssh'), then toolbox(operation='call', tool='ssh', arguments={...}) for an SSH task
 - Long calls do not block: bash, ssh, sftp, download, analyze, codegraph, and memtool return a job_id after ~15s
   (procexec after yield_after_sec). Keep working, then toolbox(operation='job', job_action='wait', job_id=...)
+- Job listing/results/cancel are limited to the originating MCP session, across SSH/ProcExec/toolbox.
 - Use 'agent_tool_help' with topic='troubleshooting' for common issues`
 }
 
@@ -517,6 +518,8 @@ Use @src/file in common local path arguments, or a remote alias in SSH remote_ro
 and SFTP path arguments. SSH command text and file contents are never substituted.
 list returns mappings only on request (names filters); delete removes names.
 Changing existing values requires overwrite=true. No alias files are saved/loaded.
+Each call uses one workspace/alias snapshot; concurrent changes affect later calls.
+File path whitespace is preserved. Equivalent SSH defaults keep the same alias scope.
 Session/workspace/remote-target scopes are separate; names are case-sensitive,
 at most 64 aliases per scope. Unknown aliases and .. / rooted / colon suffixes fail.
 Use ./@literal for actual names beginning with @. This is not a symlink sandbox.

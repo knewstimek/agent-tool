@@ -436,6 +436,11 @@ collects the result; cancelling a wait never stops the job. `enable`,
 `disable`, and `profile` remain available for clients that honor
 `tools/list_changed`; fixed-binding clients can always keep using the gateway.
 
+Job listing, results and cancellation are restricted to the originating MCP
+session, including SSH/ProcExec job operations and toolbox. A job ID alone does
+not grant access from another session. Closing a session does not terminate
+background work; its job records cannot be retrieved by a newly created session.
+
 ### Environment Variable
 
 Set `AGENT_TOOL_FALLBACK_ENCODING` and/or `AGENT_TOOL_PROFILE` to avoid repeating CLI flags:
@@ -477,6 +482,12 @@ ASCII letters/digits, with `_`/`-` allowed after the first character; max 64 cha
 and 64 aliases per scope. Unknown aliases, rooted suffixes, `..` and `:` in suffixes
 are rejected. Use `./@name` for a literal filename starting with `@`. Aliases are
 path conveniences, not sandboxes; symlink destinations are not constrained.
+
+Each MCP call uses one workspace and alias snapshot, captured lazily on first
+use. Concurrent registrations/rebindings apply to later calls, so a multi-path
+operation does not mix alias versions. File path whitespace is significant and
+is not trimmed. Equivalent SSH port/authentication defaults use the same target
+scope; different hosts, credentials or jump settings remain isolated.
 
 SFTP background status/cancel is restricted to the MCP session that started the
 transfer. Status keeps resolved paths and renders current aliases at query time;

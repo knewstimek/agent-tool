@@ -83,6 +83,17 @@ func ResolveConnection(input *SSHInput) (string, error) {
 // Only the hash is retained as a private scope key; credentials are never emitted.
 func ConnectionAliasScope(input SSHInput) string {
 	profile := profileFromInput(input)
+	// Canonicalize exactly the defaults applied before connecting. This must
+	// remain stable both before and after validation, including ProxyJump.
+	canonical := input
+	if err := validateInput(&canonical); err == nil {
+		profile = profileFromInput(canonical)
+		profile.Port = canonical.PortInt
+		profile.UseAgent = common.FlexBool(canonical.UseAgent) || canonical.KeyFile == "" && canonical.Password == ""
+		if canonical.JumpHost != "" {
+			profile.JumpPort = canonical.JumpPortInt
+		}
+	}
 	profile.RemoteRoot, profile.RemoteShell, profile.Trusted = "", "", false
 	data, _ := json.Marshal(profile)
 	return fmt.Sprintf("remote:%x", sha256.Sum256(data))

@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -22,6 +23,10 @@ func startSSHJob(client *gossh.Client, command string, maxOutputBytes int, outpu
 }
 
 func startSSHJobPrepared(client *gossh.Client, command string, maxOutputBytes int, outputMode string, staged *stagedPowerShell) (*common.Job, error) {
+	return startSSHJobPreparedForContext(context.Background(), client, command, maxOutputBytes, outputMode, staged)
+}
+
+func startSSHJobPreparedForContext(ctx context.Context, client *gossh.Client, command string, maxOutputBytes int, outputMode string, staged *stagedPowerShell) (*common.Job, error) {
 	if err := common.CheckJobCapacity(); err != nil {
 		return nil, err
 	}
@@ -42,7 +47,7 @@ func startSSHJobPrepared(client *gossh.Client, command string, maxOutputBytes in
 		_ = session.Signal(gossh.SIGKILL)
 		_ = session.Close()
 	}
-	job = common.NewJob("ssh", "ssh operation=start", 0, stdout, stderr, stop)
+	job = common.NewJobForContext(ctx, "ssh", "ssh operation=start", 0, stdout, stderr, stop)
 	job.SetRenderer(renderSSHJob)
 	common.RegisterJob(job)
 

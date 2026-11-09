@@ -50,3 +50,21 @@ func TestDirectoryAliasDisplayCanBeReused(t *testing.T) {
 		t.Errorf("emitted an unusable alias %q: %v", display, err)
 	}
 }
+
+func TestDirectoryAliasPreservesPathWhitespace(t *testing.T) {
+	root := t.TempDir()
+	old := GetWorkspace()
+	SetWorkspace(root)
+	t.Cleanup(func() { SetWorkspace(old) })
+	scope := LocalAliasScope(t.Context(), nil)
+	if err := UpdateDirectoryAliases(t.Context(), nil, scope, map[string]string{"src": root}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = UpdateDirectoryAliases(t.Context(), nil, scope, nil, []string{"src"}, false) })
+	for _, name := range []string{"file ", " file", "file\t"} {
+		got, err := ResolveRequestPath(t.Context(), nil, "@src/"+name)
+		if err != nil || got != filepath.Join(root, name) {
+			t.Errorf("path bytes changed: %q -> %q %v", name, got, err)
+		}
+	}
+}

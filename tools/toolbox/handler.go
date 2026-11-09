@@ -99,7 +99,7 @@ func (m *Manager) EnableProfile(profile string) error {
 func (m *Manager) RegisterTool() {
 	common.SafeAddTool(m.server, &mcp.Tool{
 		Name:        "toolbox",
-		Description: `Discover and call tools without loading every schema. Use describe, preferably compact with tool_operation, then call with arguments. Reuse schema_handle. output retrieves preserved paged command output. job collects results of calls that returned a job_id. list shows tools; enable/disable/profile manage direct bindings. Profiles: core-lite, core, coding, remote, analysis, full.`,
+		Description: `Discover and call tools without loading every schema. Use describe, preferably compact with tool_operation, then call with arguments. Reuse schema_handle. output retrieves preserved paged command output. job collects results of calls that returned a job_id, limited to the originating MCP session. list shows tools; enable/disable/profile manage direct bindings. Profiles: core-lite, core, coding, remote, analysis, full.`,
 	}, m.Handle)
 }
 

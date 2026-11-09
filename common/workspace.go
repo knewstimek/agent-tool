@@ -17,6 +17,14 @@ import (
 // This makes relative paths follow the agent's project instead of the often
 // unrelated directory from which the MCP server happened to be launched.
 func RequestWorkspace(ctx context.Context, req *mcp.CallToolRequest) string {
+	if state := operationFor(ctx); state != nil {
+		state.rootOnce.Do(func() { state.root = requestWorkspace(ctx, req) })
+		return state.root
+	}
+	return requestWorkspace(ctx, req)
+}
+
+func requestWorkspace(ctx context.Context, req *mcp.CallToolRequest) string {
 	if configured := GetWorkspace(); configured != "" {
 		return configured
 	}
@@ -40,7 +48,6 @@ func RequestWorkspace(ctx context.Context, req *mcp.CallToolRequest) string {
 
 // ResolveRequestPath resolves a local relative path against RequestWorkspace.
 func ResolveRequestPath(ctx context.Context, req *mcp.CallToolRequest, path string) (string, error) {
-	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("path is empty")
 	}

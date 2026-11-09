@@ -89,6 +89,7 @@ type SSHOutput struct {
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp.CallToolResult, SSHOutput, error) {
+	ctx = common.WithToolRequest(ctx, req)
 	op := strings.ToLower(strings.TrimSpace(input.Operation))
 	if op == "" {
 		if input.Background {
@@ -190,7 +191,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 			}
 			return errorResult(fmt.Sprintf("SSH job preparation failed: %s%s", err, warningSuffix(warning)))
 		}
-		job, err := startSSHJobPrepared(client, command, input.MaxOutputChars, input.OutputMode, staged)
+		job, err := startSSHJobPreparedForContext(ctx, client, command, input.MaxOutputChars, input.OutputMode, staged)
 		if err != nil {
 			warning := ""
 			if staged != nil {
@@ -309,7 +310,7 @@ func handleJobOperation(ctx context.Context, op string, input SSHInput) (*mcp.Ca
 	// Shared with toolbox operation=job; ssh jobs render via renderSSHJob.
 	res := common.HandleJobOperation(ctx, op, input.JobID, input.WaitSec, common.JobRenderOptions{TailLines: input.TailLines, TailOnly: tailOnly && op != "tail"})
 	out := SSHOutput{Result: textOf(res)}
-	if job, ok := common.GetJob(input.JobID); ok {
+	if job, ok := common.GetJobForContext(ctx, input.JobID); ok {
 		s := job.Snapshot()
 		out.JobID, out.Status, out.ExitCode, out.CleanupWarning = s.ID, s.Status, s.ExitCode, s.Note
 		out.Truncated = s.StdoutTruncated || s.StderrTruncated

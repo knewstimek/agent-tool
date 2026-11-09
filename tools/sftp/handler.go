@@ -83,6 +83,7 @@ var validOperations = map[string]bool{
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mcp.CallToolResult, SFTPOutput, error) {
+	ctx = common.WithToolRequest(ctx, req)
 	if req != nil {
 		input.session = req.Session
 	}

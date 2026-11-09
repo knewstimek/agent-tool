@@ -124,6 +124,7 @@ func safeAddTool[In, Out any](s *mcp.Server, t *mcp.Tool, h mcp.ToolHandlerFor[I
 		// Every tool call passes through here, which makes it the one place the
 		// idle watcher can learn the server is still in use.
 		MarkActivity()
+		ctx = WithToolRequest(ctx, req)
 
 		defer func() {
 			if r := recover(); r != nil {

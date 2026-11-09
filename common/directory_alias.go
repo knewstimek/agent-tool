@@ -36,6 +36,9 @@ func LocalAliasScope(ctx context.Context, req *mcp.CallToolRequest) string {
 
 // DirectoryAliasMap returns a snapshot, never mutable registry state.
 func DirectoryAliasMap(ctx context.Context, req *mcp.CallToolRequest, scope string) map[string]string {
+	if state := operationFor(ctx); state != nil {
+		return operationAliasMap(ctx, req, scope)
+	}
 	key := aliasKey(ctx, req)
 	directoryAliases.RLock()
 	defer directoryAliases.RUnlock()

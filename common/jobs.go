@@ -39,6 +39,7 @@ const (
 )
 
 type Job struct {
+	owner      *mcp.ServerSession
 	mu         sync.Mutex
 	id         string
 	tool       string
@@ -107,6 +108,7 @@ var jobRegistry = struct {
 // NewJob creates an unregistered job. Callers register it only when the work
 // outlives the call (RegisterJob), so fast commands never touch the registry.
 // stop must terminate the underlying work; it may be called more than once.
+// MCP-visible producers must use NewJobForContext to retain session ownership.
 func NewJob(tool, label string, pid int, stdout, stderr OutputSource, stop func()) *Job {
 	idBytes := make([]byte, 6)
 	_, _ = rand.Read(idBytes)
@@ -115,6 +117,24 @@ func NewJob(tool, label string, pid int, stdout, stderr OutputSource, stop func(
 		createdAt: time.Now(), status: JobRunning, stdout: stdout, stderr: stderr,
 		stop: stop, done: make(chan struct{}),
 	}
+}
+
+func NewJobForContext(ctx context.Context, tool, label string, pid int, stdout, stderr OutputSource, stop func()) *Job {
+	job := NewJob(tool, label, pid, stdout, stderr, stop)
+	job.owner = ToolSession(ctx)
+	return job
+}
+
+func GetJobForContext(ctx context.Context, id string) (*Job, bool) {
+	job, ok := GetJob(id)
+	if !ok || job.owner != ToolSession(ctx) {
+		return nil, false
+	}
+	return job, true
+}
+
+func ListJobsForContext(ctx context.Context) []JobSnapshot {
+	return listJobs(ToolSession(ctx), true)
 }
 
 // CheckJobCapacity fails fast before starting work that may need a job slot.
@@ -144,6 +164,7 @@ func (j *Job) SetLogs(paths ...string) {
 	j.mu.Unlock()
 }
 
+// GetJob is an internal unfiltered lookup. MCP endpoints use GetJobForContext.
 func GetJob(id string) (*Job, bool) {
 	jobRegistry.Lock()
 	defer jobRegistry.Unlock()
@@ -152,12 +173,19 @@ func GetJob(id string) (*Job, bool) {
 	return j, ok
 }
 
+// ListJobs is for internal inspection. MCP endpoints use ListJobsForContext.
 func ListJobs() []JobSnapshot {
+	return listJobs(nil, false)
+}
+
+func listJobs(owner *mcp.ServerSession, filter bool) []JobSnapshot {
 	jobRegistry.Lock()
 	pruneJobsLocked(time.Now())
 	jobs := make([]*Job, 0, len(jobRegistry.items))
 	for _, j := range jobRegistry.items {
-		jobs = append(jobs, j)
+		if !filter || j.owner == owner {
+			jobs = append(jobs, j)
+		}
 	}
 	jobRegistry.Unlock()
 	out := make([]JobSnapshot, 0, len(jobs))
