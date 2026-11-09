@@ -51,6 +51,8 @@ func TestRemotePathsAreHostIndependent(t *testing.T) {
 		{"D:/", "a.txt", "D:/a.txt", "a.txt"},
 		{"D:/", ".", "D:/", "."},
 		{"D:/", "../a.txt", "D:/a.txt", "a.txt"},
+		{"D:/\u212Aroot", "D:/\u212Aroot/a.txt", "D:/\u212Aroot/a.txt", "a.txt"},
+		{"D:/\u212Aroot", "d:/kroot/a.txt", "d:/kroot/a.txt", "a.txt"},
 		{"", "relative.txt", "relative.txt", "relative.txt"},
 	} {
 		in := SSHInput{RemoteRoot: tt.root}

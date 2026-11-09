@@ -465,11 +465,13 @@ Local values must be existing directories (relative to the workspace or absolute
 Remote values must be absolute; registration does not connect to the server.
 Use `@src/main.go` in read/write/edit/copy/multiread and other common local path
 arguments, or `@deploy` in SSH `remote_root` and SFTP path arguments. Output path
-metadata uses aliases when shorter; contents and SSH commands are never substituted.
+metadata in read diagnostics, write/edit/copy/multiread results and SFTP uses aliases
+when shorter and reusable. Other tools may retain ordinary path displays. Contents
+and SSH commands are never substituted.
 
 Bindings stay in client-session memory, scoped by local workspace or remote
-connection/authentication identity, and disappear on disconnect. No JSON file is
-created or loaded. `list` shows mappings on demand (`names` filters), `delete` removes
+connection/authentication identity, and disappear when the MCP session ends. No alias JSON file
+is created or loaded; existing SSH connection profiles are still read as usual. `list` shows mappings on demand (`names` filters), `delete` removes
 `names`, and changing a binding requires `overwrite:true`. Names are case-sensitive
 ASCII letters/digits, with `_`/`-` allowed after the first character; max 64 characters
 and 64 aliases per scope. Unknown aliases, rooted suffixes, `..` and `:` in suffixes

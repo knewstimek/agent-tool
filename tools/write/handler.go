@@ -20,7 +20,7 @@ const smallLocaleFileRunes = 200
 
 type WriteInput struct {
 	Encoding string `json:"encoding,omitempty" jsonschema:"Charset override, e.g. EUC-KR or Shift_JIS; overrides .editorconfig, existing BOM takes priority"`
-	FilePath string `json:"file_path,omitempty" jsonschema:"Workspace-relative, absolute, or @directory_alias/subpath"`
+	FilePath string `json:"file_path,omitempty" jsonschema:"Workspace-relative, absolute, or @name/subpath (directory_alias)"`
 	Path     string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 	Content  string `json:"content" jsonschema:"Content to write to the file"`
 }

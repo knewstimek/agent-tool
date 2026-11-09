@@ -102,15 +102,26 @@ func DisplayRemotePath(root, p string) string {
 		clean = strings.ReplaceAll(clean, "\\", "/")
 	}
 	clean = cleanRemotePath(clean)
-	comparison, base := clean, root
-	if windowsRemotePath(root) {
-		comparison, base = strings.ToLower(clean), strings.ToLower(root)
-	}
-	if comparison == base {
+	windows := windowsRemotePath(root)
+	if clean == root || windows && strings.EqualFold(clean, root) {
 		return "."
 	}
-	prefix := strings.TrimRight(base, "/") + "/"
-	if strings.HasPrefix(comparison, prefix) {
+	prefix := strings.TrimRight(root, "/") + "/"
+	if windows {
+		// Case folding can change UTF-8 byte length. Find the boundary in the
+		// original path, then compare; never slice with a folded string's length.
+		end := 0
+		for i := 0; i < strings.Count(prefix, "/"); i++ {
+			next := strings.IndexByte(clean[end:], '/')
+			if next < 0 {
+				return p
+			}
+			end += next + 1
+		}
+		if strings.EqualFold(clean[:end], prefix) {
+			return clean[end:]
+		}
+	} else if strings.HasPrefix(clean, prefix) {
 		return clean[len(prefix):]
 	}
 	return p

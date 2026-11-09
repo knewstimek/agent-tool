@@ -15,7 +15,7 @@ import (
 )
 
 type SFTPInput struct {
-	RemoteRoot    string `json:"remote_root,omitempty" jsonschema:"Absolute remote directory or @directory_alias/subpath; inherited from connection_profile/connection_id"`
+	RemoteRoot    string `json:"remote_root,omitempty" jsonschema:"Absolute remote directory or @name/subpath (directory_alias); inherited from connection_profile/connection_id"`
 	RemoteShell   string `json:"remote_shell,omitempty" jsonschema:"SSH default shell saved with remote_root for SSH reuse: posix, cmd, powershell"`
 	localRoot     string
 	localAliases  map[string]string
@@ -43,7 +43,7 @@ type SFTPInput struct {
 
 	// File paths
 	LocalPath  string `json:"local_path,omitempty" jsonschema:"Local file path for upload/download. Relative paths use workspace/MCP root"`
-	RemotePath string `json:"remote_path,omitempty" jsonschema:"Remote path relative to remote_root, absolute, or @directory_alias/subpath"`
+	RemotePath string `json:"remote_path,omitempty" jsonschema:"Remote path relative to remote_root, absolute, or @name/subpath (directory_alias)"`
 	// Aliases for compatibility
 	Local  string `json:"local,omitempty" jsonschema:"Alias for local_path"`
 	Remote string `json:"remote,omitempty" jsonschema:"Alias for remote_path"`

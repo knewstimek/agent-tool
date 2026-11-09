@@ -26,7 +26,7 @@ const (
 )
 
 type SSHInput struct {
-	RemoteRoot  string `json:"remote_root,omitempty" jsonschema:"Absolute remote working directory or @directory_alias/subpath; saved in returned connection_id and shared by SSH/SFTP"`
+	RemoteRoot  string `json:"remote_root,omitempty" jsonschema:"Absolute remote working directory or @name/subpath (directory_alias); saved in returned connection_id and shared by SSH/SFTP"`
 	RemoteShell string `json:"remote_shell,omitempty" jsonschema:"SSH default shell for remote_root: posix, cmd, powershell. Default: cmd for Windows drive roots, posix otherwise"`
 	// Resolved int values set by validateInput after FlexInt conversion.
 	// Not exported in JSON; used internally after validation.

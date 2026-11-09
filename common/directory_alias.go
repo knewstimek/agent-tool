@@ -163,6 +163,10 @@ func DisplayPathWithAliases(root, p string, aliases map[string]string) string {
 }
 
 func DisplayDirectoryAliases(p, best string, aliases map[string]string, relative func(string, string) string) string {
+	// An ordinary filename must not become an alias when copied into the next call.
+	if strings.HasPrefix(best, "@") {
+		best = "./" + best
+	}
 	names := make([]string, 0, len(aliases))
 	for name := range aliases {
 		names = append(names, name)
@@ -176,6 +180,11 @@ func DisplayDirectoryAliases(p, best string, aliases map[string]string, relative
 		candidate := "@" + name
 		if rel != "." {
 			candidate += "/" + rel
+		}
+		// Some legal filesystem names (e.g. POSIX ':') cannot be expressed
+		// with our intentionally stricter alias syntax.
+		if _, err := ExpandDirectoryAlias(aliases, candidate, func(_, tail string) string { return tail }); err != nil {
+			continue
 		}
 		if len(candidate) < len(best) {
 			best = candidate

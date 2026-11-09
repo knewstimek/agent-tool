@@ -508,6 +508,19 @@ DLP: POST/PUT/PATCH bodies are scanned for sensitive data (PEM keys, AWS keys, t
 Response body is truncated at max_response_kb. Binary responses show Content-Type and size only.
 Parameters: url, method, body, headers, content_type (default application/json), timeout_sec (default 30, max 120), max_response_kb (default 32, max 128), proxy_url, no_doh, no_ech
 
+## directory_alias
+Register session-only directory shortcuts through toolbox describe/call.
+Local set: {"operation":"set","aliases":{"src":"src"}} (directory must exist).
+Remote set: add connection_profile or connection_id; values must be absolute.
+Use @src/file in common local path arguments, or a remote alias in SSH remote_root
+and SFTP path arguments. SSH command text and file contents are never substituted.
+list returns mappings only on request (names filters); delete removes names.
+Changing existing values requires overwrite=true. No alias files are saved/loaded.
+Session/workspace/remote-target scopes are separate; names are case-sensitive,
+at most 64 aliases per scope. Unknown aliases and .. / rooted / colon suffixes fail.
+Use ./@literal for actual names beginning with @. This is not a symlink sandbox.
+Parameters: operation, aliases, names, overwrite, connection_profile, connection_id
+
 ## copy
 Copy a file or directory. Supports recursive directory copying.
 Uses atomic write (temp file + rename) and preserves file permissions.
