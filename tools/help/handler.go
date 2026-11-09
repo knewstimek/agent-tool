@@ -1285,7 +1285,7 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
 
   Every function of a binary (a corpus) is a CLI job, not a tool call -- it takes
   minutes on a large program. Run it in the background and read the file:
-    agent-tool decompile-all [-j workers] [-timeout sec] [-pdb path [-pdb-force]] [-limit n] [-o out.jsonl] <binary>
+    agent-tool decompile-all [-j workers] [-timeout sec] [-pdb path [-pdb-force]] [-il2cpp-signatures path|none] [-limit n] [-o out.jsonl] <binary>
   One JSON object per line: {"entry","name","c","secs"} or {"entry","error"};
   rerunning resumes an existing output file.
 
@@ -1308,6 +1308,21 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
 
   Without a PDB, embedded DWARF (ELF, MinGW/Go PE) supplies the same: names,
   prototypes, types, globals and stack locals.
+
+  IL2CPP Windows x64: il2cpp_signatures (il2cpp_script is an alias) accepts
+  methodsigs.tsv, Il2CppDumper script.json, or global-metadata.dat. Adjacent
+  sidecars take priority; otherwise standard Unity metadata locations are
+  discovered. Multiple metadata files require an explicit path; none disables.
+  Native extraction supports metadata v39, needs no .NET/external dumper, and
+  never executes the DLL. It provides direct signatures and, when the runtime
+  accessor proves the vtable offset, class/virtual-slot types. Other metadata
+  versions need external exports. Debug information retains precedence; names
+  are unchanged. Unknown/conflicting generics and hidden-return-buffer outputs
+  stay inferred. No C# dumps are generated. Extraction is reused in worker
+  memory; changed metadata invalidates reuse. decompile-all uses the same path.
+  Auto-detection needs recognizable runtime exports; stripped images require
+  an explicit path. Failed automatic extraction reports a note and preserves
+  inference; invalid explicitly selected metadata reports an error.
 
   Non-returning functions are found as Ghidra's analyzers do: known names (exit,
   abort, ExitProcess, _CxxThrowException, Go runtime panics, ...), debug-info

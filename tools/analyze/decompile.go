@@ -192,7 +192,9 @@ func formatDecompile(input AnalyzeInput, targets []string, lines []decompileLine
 		if load.PDBNote != "" {
 			fmt.Fprintf(&sb, "PDB: %s.\n", load.PDBNote)
 		}
-		if load.IL2CPPScript != "" {
+		if load.IL2CPPNote != "" {
+			fmt.Fprintf(&sb, "IL2CPP: %s.\n", load.IL2CPPNote)
+		} else if load.IL2CPPScript != "" {
 			fmt.Fprintf(&sb, "IL2CPP prototypes: %s, %d locked entries, %d unsupported/ambiguous or unmapped entries skipped. Unlocked signatures and local types are inferred; names are unchanged.\n", filepath.Base(load.IL2CPPScript), load.IL2CPPLocked, load.IL2CPPSkipped)
 		} else {
 			sb.WriteString("No debug types or prototypes are applied: parameter/local types and callee signatures are inferred by the decompiler (Ghidra-equivalent core), so treat names like param_1/local_10 and undefined types as recovered, not declared.\n")

@@ -38,7 +38,7 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 	perFunc := fs.Int("timeout", 30, "seconds allowed per function")
 	pdbPath := fs.String("pdb", "", "PDB path, or none (PE only)")
 	pdbForce := fs.Bool("pdb-force", false, "load -pdb even if its GUID does not match the image")
-	il2cppScript := fs.String("il2cpp-signatures", "", "methodsigs.tsv or Il2CppDumper script.json (default auto-discover), or none")
+	il2cppScript := fs.String("il2cpp-signatures", "", "methodsigs.tsv, script.json, or global-metadata.dat (native v39 Windows x64; default auto-discover), or none")
 	limit := fs.Int("limit", 0, "decompile at most this many functions (0 = all)")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: agent-tool %s [flags] <binary>\n\nDecompiles every known function of an x86/x64 PE/ELF binary to C, one JSON\nobject per line: {\"entry\",\"name\",\"c\"} or {\"entry\",\"error\"}.\n\n", DecompileAllArg)
@@ -68,6 +68,9 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 	}
 	if t.pdbNote != "" {
 		fmt.Fprintf(stderr, "pdb: %s\n", t.pdbNote)
+	}
+	if src := t.host.il2cpp; src != nil && src.note != "" {
+		fmt.Fprintf(stderr, "il2cpp: %s\n", src.note)
 	}
 	starts := append([]uint64(nil), t.host.starts...)
 	t = nil

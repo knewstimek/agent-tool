@@ -74,6 +74,7 @@ type decompileLine struct {
 	IL2CPPScript  string  `json:"il2cpp_script,omitempty"`
 	IL2CPPLocked  int     `json:"il2cpp_locked,omitempty"`
 	IL2CPPSkipped int     `json:"il2cpp_skipped,omitempty"`
+	IL2CPPNote    string  `json:"il2cpp_note,omitempty"`
 
 	// result (and fatal: the target that was running)
 	Target    string   `json:"target,omitempty"`
@@ -161,6 +162,7 @@ func RunDecompileWorker(in io.Reader, out io.Writer) int {
 				PDB: t.pdb, PDBNote: t.pdbNote, LoadSecs: time.Since(start).Seconds()}
 			if src := t.host.il2cpp; src != nil {
 				loadLine.IL2CPPScript, loadLine.IL2CPPLocked, loadLine.IL2CPPSkipped = src.path, src.locked, src.skipped
+				loadLine.IL2CPPNote = src.note
 			}
 		} else {
 			loadNote = "reused"

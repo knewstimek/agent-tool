@@ -32,6 +32,7 @@ type il2cppPrototypes struct {
 	skipped      int
 	binarySHA256 string
 	classes      *il2cppClasses
+	note         string
 }
 
 func il2cppScriptPath(binary, selected string) string {
@@ -49,6 +50,9 @@ func il2cppScriptPath(binary, selected string) string {
 	if _, err := os.Stat(tsvPath); err == nil {
 		return tsvPath
 	}
+	if paths, err := discoverIL2CPPMetadata(binary); err == nil && len(paths) == 1 {
+		return paths[0]
+	}
 	return jsonPath
 }
 
@@ -64,6 +68,46 @@ func loadIL2CPPPrototypes(binary, selected string, bin *cgBinary) (*il2cppProtot
 	path := il2cppScriptPath(binary, selected)
 	if path == "" {
 		return nil, nil
+	}
+	// A plugin beside a Unity player can share its metadata directory without
+	// containing the IL2CPP runtime. Explicit paths still support stripped images.
+	canAutoNative := bin == nil
+	if bin != nil {
+		for va, name := range bin.symbols {
+			if name == "il2cpp_init" || name == "il2cpp_domain_get" {
+				if _, imported := bin.imports[va]; !imported {
+					canAutoNative = true
+					break
+				}
+			}
+		}
+	}
+	if selected == "" && strings.EqualFold(filepath.Base(path), "script.json") {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if !canAutoNative {
+				return nil, nil
+			}
+			paths, err := discoverIL2CPPMetadata(binary)
+			if err != nil {
+				return nil, nil
+			} // bounded discovery must not break unrelated PE analysis
+			if len(paths) > 1 {
+				return nil, fmt.Errorf("multiple IL2CPP metadata files; select one with il2cpp_signatures")
+			}
+		}
+	}
+	if strings.EqualFold(filepath.Ext(path), ".dat") {
+		if selected == "" && !canAutoNative {
+			return nil, nil
+		}
+		idx, err := nativeIL2CPPPrototypes(binary, path)
+		if err != nil {
+			if selected == "" {
+				return &il2cppPrototypes{path: path, note: fmt.Sprintf("Automatic native extraction unavailable: %v. Using inferred prototypes; supply matching external signatures or none", err)}, nil
+			}
+			return nil, fmt.Errorf("native IL2CPP extraction: %w", err)
+		}
+		return idx, nil
 	}
 	f, err := os.Open(path)
 	if os.IsNotExist(err) && selected == "" {

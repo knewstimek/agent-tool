@@ -1,5 +1,13 @@
 # IL2CPP class and virtual-slot types
 
+Native v39 extraction on Windows x64 uses the same internal type contract when
+`global-metadata.dat` is selected or auto-discovered. It resolves registrations,
+method addresses (including generic aliases), instance fields and virtual slots
+without an external runtime. The exported `il2cpp_object_get_virtual_method`
+accessor must reveal the runtime's vtable offset before class types are applied;
+an unrecognized accessor leaves direct prototypes available. No dump files are
+written. Other metadata versions require the external exports described below.
+
 For Windows x64, place an optional `il2cpp-types.json` beside the `methodsigs.tsv`
 selected by `il2cpp_signatures`. Both files must declare the same binary SHA-256;
 the signature loader also checks the image itself. `none` disables both sources.
