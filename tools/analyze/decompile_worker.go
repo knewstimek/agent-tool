@@ -500,7 +500,7 @@ func loadDecompileTarget(path, pdbPath string, pdbForce bool) (*decompileTarget,
 			return nil, err
 		}
 		for _, s := range secs {
-			sections = append(sections, decomp.Section{Name: s.Name, VMA: s.VMA, Data: s.Bytes})
+			sections = append(sections, decomp.Section{Name: s.Name, VMA: s.VMA, Data: s.Bytes, Exec: s.Exec})
 		}
 		var pd *pdataIndex
 		if bits == 64 {
@@ -557,7 +557,7 @@ func loadDecompileTarget(path, pdbPath string, pdbForce bool) (*decompileTarget,
 			if err != nil {
 				continue
 			}
-			sections = append(sections, decomp.Section{Name: s.Name, VMA: s.Addr, Data: data})
+			sections = append(sections, decomp.Section{Name: s.Name, VMA: s.Addr, Data: data, Exec: s.Flags&elf.SHF_EXECINSTR != 0})
 		}
 		host = newELFHost(bin)
 		if dd, err := f.DWARF(); err == nil {

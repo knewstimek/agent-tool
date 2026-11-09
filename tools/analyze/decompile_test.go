@@ -2,6 +2,8 @@ package analyze
 
 import (
 	"context"
+	"debug/elf"
+	"debug/pe"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +15,7 @@ import (
 )
 
 func TestDecompileFixtureEntry(t *testing.T) {
+	assertDecompileSectionExec(t, testBinary)
 	// The fixture is a Go program: Go ABI spec, DWARF names and types.
 	out, err := opDecompile(context.Background(), AnalyzeInput{FilePath: testBinary, VA: "main.main, 0x1", MaxOutputChars: 100000})
 	if err != nil {
@@ -111,11 +114,51 @@ func decompileGoProgram(t *testing.T, goarch string) string {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	assertDecompileSectionExec(t, bin)
 	out, err := opDecompile(context.Background(), AnalyzeInput{FilePath: bin, VA: "main.addMul, main.main", MaxOutputChars: 100000})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// Exercise the loaded program used by callee analyses, including data that
+// must remain readable without being treated as executable instructions.
+func assertDecompileSectionExec(t *testing.T, path string) {
+	t.Helper()
+	target, err := loadDecompileTarget(path, "none", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".text", ".data"} {
+		var start uint64
+		if f, err := pe.Open(path); err == nil {
+			for _, s := range f.Sections {
+				if s.Name == name {
+					switch h := f.OptionalHeader.(type) {
+					case *pe.OptionalHeader64:
+						start = h.ImageBase + uint64(s.VirtualAddress)
+					case *pe.OptionalHeader32:
+						start = uint64(h.ImageBase) + uint64(s.VirtualAddress)
+					}
+				}
+			}
+			f.Close()
+		} else if f, err := elf.Open(path); err == nil {
+			if s := f.Section(name); s != nil {
+				start = s.Addr
+			}
+			f.Close()
+		} else {
+			t.Fatal(err)
+		}
+		if start == 0 {
+			t.Fatalf("fixture missing %s", name)
+		}
+		if got, want := target.prog.IsExec(start), name == ".text"; got != want {
+			t.Errorf("%s IsExec = %v, want %v", name, got, want)
+		}
+	}
 }
 
 func TestDecompileRequiresVA(t *testing.T) {
