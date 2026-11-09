@@ -88,6 +88,10 @@ Local relative paths resolve against an explicit workspace, then the MCP client 
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |
 | **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
 
+## Decompilation
+
+The Gosleigh v0.1.16 enhanced preset is applied automatically. It improves inferred stack and floating-point arguments, indirect-call arguments, and reused stack locals while keeping pointers distinct from floating-point values. No additional options are needed; supplied debug or IL2CPP prototypes retain precedence over inference.
+
 ## IL2CPP prototype sidecars
 
 For Windows x64 IL2CPP images without PDB/DWARF, `analyze(operation="decompile")` accepts `il2cpp_signatures` (`il2cpp_script` is an alias). Pass an Il2CppDumper `script.json` or an exported `methodsigs.tsv`. By default, the tool looks beside the binary for these files; `none` disables this source. `decompile-all` also accepts `-il2cpp-signatures`.

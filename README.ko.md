@@ -86,6 +86,10 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
 | **SetConfig** | 런타임 설정 변경 (인코딩, 파일 크기 제한, symlink, workspace 등) | ✅ |
 | **Help** | 에이전트용 사용법 안내 (인코딩, 들여쓰기, 트러블슈팅) | ✅ |
 
+## 디컴파일
+
+Gosleigh v0.1.16의 Enhanced 프리셋을 자동 적용합니다. 스택·부동소수점 인자와 간접 호출 인자 추론, 재사용된 스택 지역변수 복원을 개선하고 포인터가 부동소수점 타입으로 잘못 전파되는 것을 줄입니다. 추가 옵션은 필요 없으며, 제공된 디버그·IL2CPP 프로토타입이 추론보다 우선합니다.
+
 ## IL2CPP 프로토타입 파일
 
 PDB/DWARF가 없는 Windows x64 IL2CPP 바이너리는 `analyze(operation="decompile")`의 `il2cpp_signatures`로 Il2CppDumper `script.json` 또는 내보낸 `methodsigs.tsv`를 지정할 수 있습니다. `il2cpp_script`도 같은 옵션입니다. 기본값은 바이너리 옆 파일 자동 탐색이며, `none`이면 사용하지 않습니다. `decompile-all`에서도 `-il2cpp-signatures`를 지원합니다.
