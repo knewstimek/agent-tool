@@ -31,6 +31,7 @@ type il2cppPrototypes struct {
 	locked       int
 	skipped      int
 	binarySHA256 string
+	classes      *il2cppClasses
 }
 
 func il2cppScriptPath(binary, selected string) string {
@@ -56,7 +57,7 @@ func il2cppSourceIdentity(binary, selected string) string {
 	if path == "" {
 		return "none"
 	}
-	return fmt.Sprintf("%q:%q:%q:%q", path, fileIdentity(path), fileIdentity(filepath.Join(filepath.Dir(path), "il2cpp.h")), fileIdentity(filepath.Join(filepath.Dir(path), "sizes.tsv")))
+	return fmt.Sprintf("%q:%q:%q:%q:%q", path, fileIdentity(path), fileIdentity(filepath.Join(filepath.Dir(path), "il2cpp.h")), fileIdentity(filepath.Join(filepath.Dir(path), "sizes.tsv")), fileIdentity(filepath.Join(filepath.Dir(path), "il2cpp-types.json")))
 }
 
 func loadIL2CPPPrototypes(binary, selected string, bin *cgBinary) (*il2cppPrototypes, error) {
@@ -112,6 +113,9 @@ func loadIL2CPPPrototypes(binary, selected string, bin *cgBinary) (*il2cppProtot
 		if readErr != nil || !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), idx.binarySHA256) {
 			return nil, fmt.Errorf("IL2CPP signatures were exported for a different binary (SHA-256 mismatch)")
 		}
+	}
+	if err := loadIL2CPPClasses(path, idx); err != nil {
+		return nil, fmt.Errorf("IL2CPP classes: %w", err)
 	}
 	idx.path = path
 	return idx, nil
@@ -335,6 +339,9 @@ func (s *il2cppPrototypes) prototype(va uint64) *pcode.HostFunction {
 		return nil
 	}
 	p := s.methods[va].function
+	if s.classes != nil {
+		p = s.classes.decorate(va, p)
+	}
 	p.Params = append([]pcode.HostParam(nil), p.Params...)
 	if p.Output != nil {
 		out := *p.Output

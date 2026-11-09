@@ -98,7 +98,7 @@ For Windows x64 IL2CPP images without PDB/DWARF, `analyze(operation="decompile")
 
 TSV columns are `VA<TAB>static<TAB>ret<TAB>params<TAB>name`: absolute VA, static `0/1`, return type, comma-separated managed parameter types, and a diagnostic name. Types include `bool`, `int32`, `uint64`, `float32`, `float64`, `ref:Type`, `ptr:Type`, and `val:12:Type` (exact value-type payload size). Escape commas in type names as `%2C`. The host supplies an instance `this` and trailing `MethodInfo*`; do not include them in TSV params. A `# binary_sha256=<hex>` header, when present, must match the binary.
 
-Debug information takes precedence. Names are unchanged, and unknown or conflicting shared-generic signatures remain inferred. Known large aggregate returns remain unlocked because they require a hidden return buffer. JSON value types need layouts from a sibling `il2cpp.h`; unsupported layouts are skipped. No metadata parser or new MCP tool is added. Resolving virtual-call targets from vtable slots is outside this feature.
+Debug information takes precedence. Names are unchanged, and unknown or conflicting shared-generic signatures remain inferred. Known large aggregate returns remain unlocked because they require a hidden return buffer. JSON value types need layouts from a sibling `il2cpp.h`; unsupported layouts are skipped. No metadata parser or new MCP tool is added. A sibling, binary-bound `il2cpp-types.json` can additionally supply class layouts and typed virtual slots; see [the type export contract](docs/il2cpp-types.md). Virtual prototypes apply where the object's class type reaches the call; unknown slots and hidden-buffer returns stay inferred.
 
 ## Persistent analysis annotations
 

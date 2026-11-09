@@ -1374,7 +1374,10 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
       MethodInfo* to TSV managed params. Unknown types/conflicting generic aliases
       stay inferred. val:SIZE:NAME records exact value sizes; large aggregate
       returns stay unlocked. A binary_sha256 TSV header must match the image.
-      No virtual-call target resolution. JSON value layouts may use il2cpp.h.
+      A sibling il2cpp-types.json can supply binary-bound class layouts/virtual slot
+      prototypes (docs/il2cpp-types.md). Slots require stable method IDs and an exact
+      runtime vtable offset; types must propagate to the call. Unknown slots and
+      hidden-buffer returns stay inferred. JSON value layouts may use il2cpp.h.
     timeout_sec: Worker time limit (default 60, max 600)
     assume_branches: <hex address>=taken|fallthrough, comma-separated (max 256)
     noreturn_verify: Keep voted non-returning callees whose code reaches a ret returning
