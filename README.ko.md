@@ -447,6 +447,29 @@ export AGENT_TOOL_PROFILE=coding
 
 우선순위: CLI 플래그 > 환경변수 > 기본값 (UTF-8).
 
+### 세션 디렉터리 별칭
+
+`directory_alias`를 toolbox의 `describe` 후 `call`로 호출해 여러 디렉터리를 등록합니다.
+
+```json
+{"operation":"set","aliases":{"src":"src","logs":"logs"}}
+{"operation":"set","connection_profile":"dev","aliases":{"deploy":"/srv/releases/current"}}
+```
+
+로컬 값은 존재하는 디렉터리의 작업공간 상대경로나 절대경로입니다. 원격 값은 절대경로이며
+등록할 때 서버에 접속하지 않습니다. read·write·edit·copy·multiread 등 공통 로컬 경로에는
+`@src/main.go`, SSH `remote_root`와 SFTP 경로에는 `@deploy`를 쓸 수 있습니다.
+경로 표시는 별칭이 더 짧을 때 축약하며 파일 내용과 SSH 명령문은 치환하지 않습니다.
+
+별칭은 클라이언트 세션 메모리에만 저장하고 로컬 작업공간·원격 접속 대상별로 구분하며,
+연결 종료 시 정리합니다. JSON 파일을 생성하거나 읽지 않습니다. `list`로 필요할 때만
+조회(`names`로 필터)하고, `delete`의 `names`로 삭제합니다. 기존 값을 바꾸려면
+`overwrite:true`가 필요합니다. 이름은 대소문자를 구분하는 ASCII 영숫자이며 두 번째
+문자부터 `_`·`-`를 허용합니다. 이름은 64자, 범위별 별칭은 64개까지입니다.
+미등록 이름과 절대경로 형태·`..`·`:`가 들어간 접미 경로는 거부합니다.
+실제 파일명이 `@`로 시작하면 `./@name`을 쓰세요. 별칭은 경로 편의 기능이며
+샌드박스가 아니므로 심볼릭 링크의 대상까지 제한하지는 않습니다.
+
 ### 로컬 SSH/SFTP connection profile
 
 SSH와 SFTP는 `connection_profile` 또는 세션 로컬 `connection_id`를 받아 host, user,

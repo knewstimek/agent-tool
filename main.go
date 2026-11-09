@@ -19,6 +19,7 @@ import (
 	"agent-tool/tools/debug"
 	"agent-tool/tools/delete"
 	"agent-tool/tools/diff"
+	"agent-tool/tools/directoryalias"
 	"agent-tool/tools/download"
 	edit "agent-tool/tools/edit"
 	"agent-tool/tools/fileinfo"
@@ -186,6 +187,7 @@ Groups: core, file, coding, system, remote, data, analysis, windows. Use agent_t
 		{Name: "glob", Group: "core", Register: func() { glob.Register(server) }},
 		{Name: "listdir", Group: "core", Register: func() { listdir.Register(server) }},
 		{Name: "set_config", Group: "file", Register: func() { config.Register(server) }},
+			{Name: "directory_alias", Group: "file", Hint: "session directory aliases for local paths and SSH/SFTP targets", Register: func() { directoryalias.Register(server) }},
 		{Name: "checksum", Group: "file", Register: func() { checksum.Register(server) }},
 		{Name: "file_info", Group: "file", Register: func() { fileinfo.Register(server) }},
 		{Name: "diff", Group: "file", Register: func() { diff.Register(server) }},

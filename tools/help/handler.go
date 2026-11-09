@@ -80,6 +80,7 @@ This gateway works even when a client ignores dynamic tool-list changes.
 Relative local paths resolve against an explicit workspace, then the client's MCP root.
 read diagnostics, multiread headers and edit/copy path metadata use workspace-relative display; file contents stay unchanged.
 SSH/SFTP remote_root sets a reusable remote working directory; see topic='tools'.
+directory_alias (through toolbox) registers session-only @name/subpath references for local paths and SSH/SFTP targets.
 
 ## Current Configuration
 - Fallback encoding: ` + common.GetFallbackEncoding() + `
@@ -119,6 +120,7 @@ SSH/SFTP remote_root sets a reusable remote working directory; see topic='tools'
 - debug: Interactive debugger via DAP (breakpoints, stepping, variables, stack traces)
 - analyze: Static binary analysis (29 operations: SQLite user annotations (annotation_set/list/delete/batch/suggest), decompile to C (x86/x64 PE/ELF), type_info (PDB/DWARF types), disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
 - set_config: Change runtime settings (encoding, file size, SSRF policy, DoH/ECH toggle)
+- directory_alias: Set/list/delete session directory aliases; local workspace or remote connection scope
 - agent_tool_help: This help tool
 - toolbox: Describe/call any tool through one stable gateway; collect yielded jobs (operation=job); optionally manage direct bindings
 

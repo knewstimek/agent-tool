@@ -15,9 +15,11 @@ import (
 )
 
 type SFTPInput struct {
-	RemoteRoot  string `json:"remote_root,omitempty" jsonschema:"Absolute remote working directory; inherited from connection_profile/connection_id. Relative remote paths resolve here"`
-	RemoteShell string `json:"remote_shell,omitempty" jsonschema:"SSH default shell saved with remote_root for SSH reuse: posix, cmd, powershell"`
-	localRoot   string
+	RemoteRoot    string `json:"remote_root,omitempty" jsonschema:"Absolute remote directory or @directory_alias/subpath; inherited from connection_profile/connection_id"`
+	RemoteShell   string `json:"remote_shell,omitempty" jsonschema:"SSH default shell saved with remote_root for SSH reuse: posix, cmd, powershell"`
+	localRoot     string
+	localAliases  map[string]string
+	remoteAliases map[string]string
 	// SSH connection parameters (same as ssh tool, minus Command/Disconnect/TimeoutSec)
 	Host         string      `json:"host,omitempty" jsonschema:"SSH server hostname or IP address (IPv4 or IPv6). Required unless connection_profile or connection_id is used"`
 	Port         interface{} `json:"port,omitempty" jsonschema:"SSH port number. Default: 22"`
@@ -41,7 +43,7 @@ type SFTPInput struct {
 
 	// File paths
 	LocalPath  string `json:"local_path,omitempty" jsonschema:"Local file path for upload/download. Relative paths use workspace/MCP root"`
-	RemotePath string `json:"remote_path,omitempty" jsonschema:"Remote file/directory path"`
+	RemotePath string `json:"remote_path,omitempty" jsonschema:"Remote path relative to remote_root, absolute, or @directory_alias/subpath"`
 	// Aliases for compatibility
 	Local  string `json:"local,omitempty" jsonschema:"Alias for local_path"`
 	Remote string `json:"remote,omitempty" jsonschema:"Alias for remote_path"`
@@ -112,13 +114,17 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mc
 	}
 
 	sshInput := toSSHInput(input)
-	connectionID, err := ssh.ResolveConnection(&sshInput)
+	connectionID, err := ssh.ResolveConnectionForRequest(ctx, req, &sshInput)
 	if err != nil {
 		return errorResult(err.Error())
 	}
 	applyResolvedConnection(&input, sshInput)
 	input.localRoot = common.RequestWorkspace(ctx, req)
-	input.resolveRemotePaths()
+	input.localAliases = common.DirectoryAliasMap(ctx, req, common.LocalAliasScope(ctx, req))
+	input.remoteAliases = common.DirectoryAliasMap(ctx, req, ssh.ConnectionAliasScope(sshInput))
+	if err := input.resolveRemotePaths(); err != nil {
+		return errorResult(err.Error())
+	}
 
 	// SSRF policy: cloud metadata is always blocked. Private addresses are
 	// allowed only by policy, and trusted local profiles warn once per session.

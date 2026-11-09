@@ -39,7 +39,7 @@ const readHashThreshold = 10 * 1024 * 1024 // 10MB
 
 type ReadInput struct {
 	Encoding       string `json:"encoding,omitempty" jsonschema:"Charset override, e.g. EUC-KR or Shift_JIS; overrides .editorconfig, BOM takes priority"`
-	FilePath       string `json:"file_path,omitempty" jsonschema:"Absolute or workspace/MCP-root-relative file path"`
+	FilePath       string `json:"file_path,omitempty" jsonschema:"Workspace-relative, absolute, or @directory_alias/subpath"`
 	Path           string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 	Offset         any    `json:"offset,omitempty" jsonschema:"Start line: 1-based integer, negative from end, 'start-end', or [start,end]; default 1"`
 	Limit          *int   `json:"limit,omitempty" jsonschema:"Line limit; default 400. Use 0 or all=true for no line cap"`

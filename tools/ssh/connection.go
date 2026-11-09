@@ -1,7 +1,9 @@
 package ssh
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -11,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"agent-tool/common"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
@@ -72,6 +77,51 @@ var connectionHandles = struct {
 // an opaque in-process connection handle. Explicit request fields override
 // local profile defaults. The returned handle can be reused by SSH and SFTP.
 func ResolveConnection(input *SSHInput) (string, error) {
+	return resolveConnection(input, nil)
+}
+
+// Only the hash is retained as a private scope key; credentials are never emitted.
+func ConnectionAliasScope(input SSHInput) string {
+	profile := profileFromInput(input)
+	profile.RemoteRoot, profile.RemoteShell, profile.Trusted = "", "", false
+	data, _ := json.Marshal(profile)
+	return fmt.Sprintf("remote:%x", sha256.Sum256(data))
+}
+
+// Management resolves identity without depending on a possibly unregistered
+// remote_root alias, and does not allocate connection handles or connect.
+func ResolveDirectoryAliasScope(profileName, handleID string) (string, error) {
+	profileName, handleID = strings.TrimSpace(profileName), strings.TrimSpace(handleID)
+	if profileName != "" && handleID != "" {
+		return "", fmt.Errorf("use either connection_profile or connection_id, not both")
+	}
+	var profile ConnectionProfile
+	var err error
+	if handleID != "" {
+		profile, err = loadConnectionHandle(handleID)
+	} else if profileName != "" {
+		profile, err = loadLocalConnectionProfile(profileName)
+	} else {
+		return "", fmt.Errorf("remote connection reference required")
+	}
+	if err != nil {
+		return "", err
+	}
+	input := SSHInput{}
+	applyProfileDefaults(&input, profile)
+	return ConnectionAliasScope(input), nil
+}
+
+func ResolveConnectionForRequest(ctx context.Context, req *mcp.CallToolRequest, input *SSHInput) (string, error) {
+	return resolveConnection(input, func(root string) (string, error) {
+		if !strings.HasPrefix(root, "@") {
+			return root, nil
+		}
+		return common.ExpandDirectoryAlias(common.DirectoryAliasMap(ctx, req, ConnectionAliasScope(*input)), root, ResolveRemotePath)
+	})
+}
+
+func resolveConnection(input *SSHInput, expandRoot func(string) (string, error)) (string, error) {
 	if input == nil {
 		return "", fmt.Errorf("connection input is required")
 	}
@@ -103,6 +153,12 @@ func ResolveConnection(input *SSHInput) (string, error) {
 		base.Trusted = false
 	}
 	applyProfileDefaults(input, base)
+	if expandRoot != nil {
+		input.RemoteRoot, err = expandRoot(input.RemoteRoot)
+		if err != nil {
+			return "", err
+		}
+	}
 	if err := normalizeRemoteRoot(input); err != nil {
 		return "", err
 	}

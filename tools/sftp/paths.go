@@ -6,17 +6,35 @@ import (
 )
 
 func (input SFTPInput) displayLocal() string {
-	return common.DisplayPath(input.localRoot, input.LocalPath)
+	return common.DisplayPathWithAliases(input.localRoot, input.LocalPath, input.localAliases)
 }
 
 func (input SFTPInput) displayRemote(p string) string {
-	return ssh.DisplayRemotePath(input.RemoteRoot, p)
+	return ssh.DisplayRemotePathWithAliases(input.RemoteRoot, p, input.remoteAliases)
 }
 
-func (input *SFTPInput) resolveRemotePaths() {
-	input.RemotePath = ssh.ResolveRemotePath(input.RemoteRoot, input.RemotePath)
-	input.NewPath = ssh.ResolveRemotePath(input.RemoteRoot, input.NewPath)
-	for i := range input.Uploads {
-		input.Uploads[i].RemotePath = ssh.ResolveRemotePath(input.RemoteRoot, input.Uploads[i].RemotePath)
+func (input *SFTPInput) resolveRemotePaths() error {
+	resolve := func(p string) (string, error) {
+		expanded, err := common.ExpandDirectoryAlias(input.remoteAliases, p, ssh.ResolveRemotePath)
+		if err != nil {
+			return "", err
+		}
+		return ssh.ResolveRemotePath(input.RemoteRoot, expanded), nil
 	}
+	var err error
+	input.RemotePath, err = resolve(input.RemotePath)
+	if err != nil {
+		return err
+	}
+	input.NewPath, err = resolve(input.NewPath)
+	if err != nil {
+		return err
+	}
+	for i := range input.Uploads {
+		input.Uploads[i].RemotePath, err = resolve(input.Uploads[i].RemotePath)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

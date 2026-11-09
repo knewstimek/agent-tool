@@ -452,6 +452,30 @@ export AGENT_TOOL_PROFILE=coding
 
 Priority: CLI flag > environment variable > default (UTF-8).
 
+### Session directory aliases
+
+Use `directory_alias` through toolbox (`describe`, then `call`) to register directories:
+
+```json
+{"operation":"set","aliases":{"src":"src","logs":"logs"}}
+{"operation":"set","connection_profile":"dev","aliases":{"deploy":"/srv/releases/current"}}
+```
+
+Local values must be existing directories (relative to the workspace or absolute).
+Remote values must be absolute; registration does not connect to the server.
+Use `@src/main.go` in read/write/edit/copy/multiread and other common local path
+arguments, or `@deploy` in SSH `remote_root` and SFTP path arguments. Output path
+metadata uses aliases when shorter; contents and SSH commands are never substituted.
+
+Bindings stay in client-session memory, scoped by local workspace or remote
+connection/authentication identity, and disappear on disconnect. No JSON file is
+created or loaded. `list` shows mappings on demand (`names` filters), `delete` removes
+`names`, and changing a binding requires `overwrite:true`. Names are case-sensitive
+ASCII letters/digits, with `_`/`-` allowed after the first character; max 64 characters
+and 64 aliases per scope. Unknown aliases, rooted suffixes, `..` and `:` in suffixes
+are rejected. Use `./@name` for a literal filename starting with `@`. Aliases are
+path conveniences, not sandboxes; symlink destinations are not constrained.
+
 ### Local SSH/SFTP connection profiles
 
 SSH and SFTP accept either `connection_profile` or a session-local `connection_id`,

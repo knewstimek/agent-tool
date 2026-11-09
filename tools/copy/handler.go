@@ -103,17 +103,13 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input CopyInput) (*mc
 	}
 
 	if srcInfo.IsDir() {
-		return handleDirCopy(srcCleaned, dstCleaned, dryRun, overwrite, common.RequestWorkspace(ctx, req))
+		return handleDirCopy(srcCleaned, dstCleaned, dryRun, overwrite, func(p string) string { return common.DisplayRequestPath(ctx, req, p) })
 	}
-	return handleFileCopy(srcCleaned, dstCleaned, srcInfo, dryRun, common.RequestWorkspace(ctx, req))
+	return handleFileCopy(srcCleaned, dstCleaned, srcInfo, dryRun, func(p string) string { return common.DisplayRequestPath(ctx, req, p) })
 }
 
 // handleDirCopy copies a directory recursively.
-func handleDirCopy(src, dst string, dryRun, overwrite bool, displayRoot ...string) (*mcp.CallToolResult, CopyOutput, error) {
-	root := ""
-	if len(displayRoot) > 0 {
-		root = displayRoot[0]
-	}
+func handleDirCopy(src, dst string, dryRun, overwrite bool, display func(string) string) (*mcp.CallToolResult, CopyOutput, error) {
 	// Prevent copying a directory into itself (either direction).
 	// Windows NTFS is case-insensitive, so normalize case before comparison
 	// to prevent bypassing via "C:\Foo" vs "C:\foo".
@@ -166,7 +162,7 @@ func handleDirCopy(src, dst string, dryRun, overwrite bool, displayRoot ...strin
 
 	if dryRun {
 		msg := fmt.Sprintf("[DRY RUN] would copy directory: %s → %s\nFiles: %d, Total size: %s",
-			common.DisplayPath(root, src), common.DisplayPath(root, dst), fileCount, formatSize(totalSize))
+			display(src), display(dst), fileCount, formatSize(totalSize))
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 		}, CopyOutput{Result: msg}, nil
@@ -214,21 +210,17 @@ func handleDirCopy(src, dst string, dryRun, overwrite bool, displayRoot ...strin
 	}
 
 	msg := fmt.Sprintf("OK: copied directory %s → %s (%d files, %s)",
-		common.DisplayPath(root, src), common.DisplayPath(root, dst), copiedFiles, formatSize(totalSize))
+		display(src), display(dst), copiedFiles, formatSize(totalSize))
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 	}, CopyOutput{Result: msg}, nil
 }
 
 // handleFileCopy copies a single file.
-func handleFileCopy(src, dst string, srcInfo os.FileInfo, dryRun bool, displayRoot ...string) (*mcp.CallToolResult, CopyOutput, error) {
-	root := ""
-	if len(displayRoot) > 0 {
-		root = displayRoot[0]
-	}
+func handleFileCopy(src, dst string, srcInfo os.FileInfo, dryRun bool, display func(string) string) (*mcp.CallToolResult, CopyOutput, error) {
 	if dryRun {
 		msg := fmt.Sprintf("[DRY RUN] would copy file: %s → %s\nSize: %s",
-			common.DisplayPath(root, src), common.DisplayPath(root, dst), formatSize(srcInfo.Size()))
+			display(src), display(dst), formatSize(srcInfo.Size()))
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 		}, CopyOutput{Result: msg}, nil
@@ -245,9 +237,9 @@ func handleFileCopy(src, dst string, srcInfo os.FileInfo, dryRun bool, displayRo
 		return errorResult(fmt.Sprintf("copy failed: %v", err))
 	}
 
-	msg := fmt.Sprintf("OK: copied file %s → %s (%s)", common.DisplayPath(root, src), common.DisplayPath(root, dst), formatSize(srcInfo.Size()))
+	msg := fmt.Sprintf("OK: copied file %s → %s (%s)", display(src), display(dst), formatSize(srcInfo.Size()))
 	if cr.RenamedOld != "" {
-		msg += fmt.Sprintf("\nWARNING: destination was locked (in use). Old file renamed to: %s", common.DisplayPath(root, cr.RenamedOld))
+		msg += fmt.Sprintf("\nWARNING: destination was locked (in use). Old file renamed to: %s", display(cr.RenamedOld))
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: msg}},

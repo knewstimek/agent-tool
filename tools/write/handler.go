@@ -20,7 +20,7 @@ const smallLocaleFileRunes = 200
 
 type WriteInput struct {
 	Encoding string `json:"encoding,omitempty" jsonschema:"Charset override, e.g. EUC-KR or Shift_JIS; overrides .editorconfig, existing BOM takes priority"`
-	FilePath string `json:"file_path,omitempty" jsonschema:"File path; relative to workspace/MCP root"`
+	FilePath string `json:"file_path,omitempty" jsonschema:"Workspace-relative, absolute, or @directory_alias/subpath"`
 	Path     string `json:"path,omitempty" jsonschema:"Alias for file_path"`
 	Content  string `json:"content" jsonschema:"Content to write to the file"`
 }
@@ -57,7 +57,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WriteInput) (*m
 
 	if fi, err := os.Stat(input.FilePath); err == nil {
 		if fi.IsDir() {
-			return errorResult(fmt.Sprintf("path is a directory: %s", input.FilePath))
+			return errorResult(fmt.Sprintf("path is a directory: %s", common.DisplayRequestPath(ctx, req, input.FilePath)))
 		}
 		// Detect encoding of existing file
 		_, encInfo, err = common.ReadFileWithEncodingHash(input.FilePath, hintCharset)
@@ -78,7 +78,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input WriteInput) (*m
 		return errorResult(fmt.Sprintf("failed to write file: %v", err))
 	}
 
-	msg := fmt.Sprintf("OK: file written (%s, encoding=%s)", input.FilePath, encInfo.Charset)
+	msg := fmt.Sprintf("OK: file written (%s, encoding=%s)", common.DisplayRequestPath(ctx, req, input.FilePath), encInfo.Charset)
 
 	// write takes whole-file content, so a full echo would be noise. But a new
 	// localized file is exactly where an escape-composed typo lands, so echo

@@ -158,6 +158,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MultiReadInput)
 
 	var sb strings.Builder
 	displayRoot := common.RequestWorkspace(ctx, req)
+	displayAliases := common.DirectoryAliasMap(ctx, req, common.LocalAliasScope(ctx, req))
 	var errorCount int
 	var totalBytesRead int64
 	filesRead := 0
@@ -212,7 +213,7 @@ readLoop:
 			continue
 		}
 		filePath = resolvedPath
-		displayPath := common.DisplayPath(displayRoot, filePath)
+		displayPath := common.DisplayPathWithAliases(displayRoot, filePath, displayAliases)
 
 		// Header for each file
 		header := fmt.Sprintf("=== %s ===\n", displayPath)

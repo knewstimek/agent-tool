@@ -6,6 +6,8 @@ import (
 	"path"
 	"strings"
 	"unicode/utf16"
+
+	"agent-tool/common"
 )
 
 func windowsRemotePath(p string) bool {
@@ -18,6 +20,21 @@ func cleanRemotePath(p string) string {
 		return p[:2] + path.Clean(p[2:])
 	}
 	return path.Clean(p)
+}
+
+func NormalizeRemoteDirectory(p string) (string, error) {
+	input := SSHInput{RemoteRoot: p, RemoteShell: "powershell"}
+	if p == "" {
+		return "", fmt.Errorf("remote directory is required")
+	}
+	if err := normalizeRemoteRoot(&input); err != nil {
+		return "", err
+	}
+	return input.RemoteRoot, nil
+}
+
+func DisplayRemotePathWithAliases(root, p string, aliases map[string]string) string {
+	return common.DisplayDirectoryAliases(p, DisplayRemotePath(root, p), aliases, DisplayRemotePath)
 }
 
 // normalizeRemoteRoot is host-independent: never apply local filepath rules to

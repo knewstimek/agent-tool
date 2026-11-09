@@ -44,6 +44,9 @@ func ResolveRequestPath(ctx context.Context, req *mcp.CallToolRequest, path stri
 	if path == "" {
 		return "", fmt.Errorf("path is empty")
 	}
+	if strings.HasPrefix(path, "@") {
+		return ExpandDirectoryAlias(DirectoryAliasMap(ctx, req, LocalAliasScope(ctx, req)), path, func(base, tail string) string { return filepath.Join(base, tail) })
+	}
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path), nil
 	}
@@ -64,7 +67,8 @@ func DisplayPath(root, path string) string {
 }
 
 func DisplayRequestPath(ctx context.Context, req *mcp.CallToolRequest, path string) string {
-	return DisplayPath(RequestWorkspace(ctx, req), path)
+	root := RequestWorkspace(ctx, req)
+	return DisplayPathWithAliases(root, path, DirectoryAliasMap(ctx, req, "local:"+root))
 }
 
 // FileURIPath converts an MCP file:// root URI into a native filesystem path.

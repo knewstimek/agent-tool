@@ -90,6 +90,21 @@ func TestRemoteRootSharedHandleAndSFTPOperations(t *testing.T) {
 	if err != nil || count != 1 || strings.Contains(result, input.RemoteRoot) || strings.Contains(result, input.localRoot) {
 		t.Fatalf("batch: %s %d %v", result, count, err)
 	}
+	input.remoteAliases = map[string]string{"deploy": "/opt/deep/releases/current"}
+	if err := client.MkdirAll(input.remoteAliases["deploy"]); err != nil {
+		t.Fatal(err)
+	}
+	input.RemotePath = "@deploy/aliased.txt"
+	if err := input.resolveRemotePaths(); err != nil {
+		t.Fatal(err)
+	}
+	result, err = opUpload(client, input)
+	if err != nil || !strings.Contains(result, "@deploy/aliased.txt") {
+		t.Fatalf("aliased upload: %s %v", result, err)
+	}
+	if _, err := client.Stat("/opt/deep/releases/current/aliased.txt"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRemoteRootDriveDeletionGuard(t *testing.T) {

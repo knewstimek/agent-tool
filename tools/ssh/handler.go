@@ -26,7 +26,7 @@ const (
 )
 
 type SSHInput struct {
-	RemoteRoot  string `json:"remote_root,omitempty" jsonschema:"Absolute remote working directory; saved in returned connection_id and reusable by SSH/SFTP. May also be set in connection_profile"`
+	RemoteRoot  string `json:"remote_root,omitempty" jsonschema:"Absolute remote working directory or @directory_alias/subpath; saved in returned connection_id and shared by SSH/SFTP"`
 	RemoteShell string `json:"remote_shell,omitempty" jsonschema:"SSH default shell for remote_root: posix, cmd, powershell. Default: cmd for Windows drive roots, posix otherwise"`
 	// Resolved int values set by validateInput after FlexInt conversion.
 	// Not exported in JSON; used internally after validation.
@@ -104,7 +104,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 		return errorResult("operation must be execute, start, status, wait, tail, or cancel")
 	}
 	// 1. Resolve a local profile or reusable session-local connection handle.
-	connectionID, err := ResolveConnection(&input)
+	connectionID, err := ResolveConnectionForRequest(ctx, req, &input)
 	if err != nil {
 		return errorResult(err.Error())
 	}
