@@ -2,7 +2,9 @@ package sftp
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -98,15 +100,20 @@ func validateLocalPath(path string) error {
 func isSensitiveLocalPath(path string) error {
 	cleaned := filepath.Clean(path)
 
-	// Resolve symlinks to prevent symlink-based bypass
-	resolved, err := filepath.EvalSymlinks(filepath.Dir(cleaned))
-	if err == nil {
-		cleaned = filepath.Join(resolved, filepath.Base(cleaned))
+	// Resolve the final link and existing ancestors even when a new child does
+	// not exist yet. Looking up only the parent misses both of those cases.
+	resolved, err := resolveDownloadDestination(cleaned, 0)
+	if err != nil {
+		return fmt.Errorf("cannot verify download destination: %w", err)
 	}
+	cleaned = resolved
 
 	// Check each component of the path for sensitive directories
 	parts := strings.Split(filepath.ToSlash(cleaned), "/")
 	for _, part := range parts {
+		if runtime.GOOS == "windows" {
+			part = strings.ToLower(strings.TrimRight(part, ". "))
+		}
 		if sensitiveLocalDirs[part] {
 			return fmt.Errorf("refusing to write to sensitive directory %q in path: %s", part, path)
 		}
@@ -114,11 +121,46 @@ func isSensitiveLocalPath(path string) error {
 
 	// Check filename
 	baseName := filepath.Base(cleaned)
+	if runtime.GOOS == "windows" {
+		baseName = strings.ToLower(strings.TrimRight(baseName, ". "))
+	}
 	if sensitiveLocalFiles[baseName] {
 		return fmt.Errorf("refusing to write to sensitive file: %s", baseName)
 	}
 
 	return nil
+}
+
+func resolveDownloadDestination(p string, depth int) (string, error) {
+	if depth > 256 {
+		return "", fmt.Errorf("download path resolution limit exceeded")
+	}
+	info, err := os.Lstat(p)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(p)
+			if err != nil {
+				return "", err
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(p), target)
+			}
+			return resolveDownloadDestination(target, depth+1)
+		}
+		return filepath.EvalSymlinks(p)
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	parent := filepath.Dir(p)
+	if parent == p {
+		return "", err
+	}
+	resolved, err := resolveDownloadDestination(parent, depth+1)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolved, filepath.Base(p)), nil
 }
 
 // isDangerousPath checks if a remote path is too dangerous for recursive delete.
