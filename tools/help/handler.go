@@ -78,6 +78,8 @@ compact=true with tool_operation limits describe to one operation; reuse its
 schema_handle to receive only an unchanged acknowledgement.
 This gateway works even when a client ignores dynamic tool-list changes.
 Relative local paths resolve against an explicit workspace, then the client's MCP root.
+read diagnostics, multiread headers and edit/copy path metadata use workspace-relative display; file contents stay unchanged.
+SSH/SFTP remote_root sets a reusable remote working directory; see topic='tools'.
 
 ## Current Configuration
 - Fallback encoding: ` + common.GetFallbackEncoding() + `
@@ -439,12 +441,16 @@ Non-zero remote exits return IsError=true. For long-running commands, use backgr
 	SSH jobs share the job registry, so toolbox operation=job also lists and waits on them.
 	powershell_script forces UTF-8 output and silences progress records, so non-English hosts return readable text.
 	connection_profile reads a named local ignored profile; connection_id reuses its
-	connection fields for 30 minutes. quiet suppresses banners, echo_command controls
-	command echoing, and result_only returns stdout/stderr/exit_code JSON.
+	connection fields for 30 minutes. remote_root in a profile or first call is also
+	retained in connection_id and shared with SFTP. Each command starts in that root;
+	failed cwd setup prevents execution. remote_shell: posix (default), cmd (default
+	for Windows drive roots), powershell. Windows CMD+remote_root requires PowerShell.
+	quiet suppresses banners, echo_command defaults false, and result_only returns
+	stdout/stderr/exit_code JSON. stdout/stderr are never rewritten.
 	Parameters: operation, background, job_id, tail_lines, host, port, user, password,
 	key_file, passphrase, use_agent, command, powershell_script, disconnect, host_key_check, timeout_sec,
 	max_output_chars, output_mode, jump_host, jump_port, jump_user, jump_password,
-	jump_key_file, jump_passphrase, connection_profile, connection_id, quiet, echo_command, result_only
+	jump_key_file, jump_passphrase, connection_profile, connection_id, remote_root, remote_shell, quiet, echo_command, result_only
 
 ## ssh_key
 Convert a local SSH private-key file. Input is auto-detected as PPK, PEM, PKCS#8,
@@ -459,6 +465,10 @@ Parameters: operation (convert), input_path, output_path, output_format,
 ## sftp
 Transfer files and manage remote filesystems over SSH (SFTP protocol).
 Reuses SSH session pool — same authentication, session reuse, and idle timeout (30 min) as ssh tool.
+remote_root (from profile, connection_id, or call) anchors relative remote_path,
+rename new_path and batch destinations. Generated path metadata is relative to
+the local workspace / remote root. Absolute outside paths keep their meaning;
+remote_root is a working directory, not a filesystem sandbox.
 	Sync operations: upload (local→remote), upload_many (up to 100 files over one session),
 	download (remote→local), ls, stat, mkdir, rm, chmod, rename.
 Async operations: upload_async, download_async (returns transfer_id), status (check progress), cancel.
@@ -466,7 +476,7 @@ Max transfer size: 2 GB. Recursive delete limited to 10,000 items. Dangerous pat
 Parameters: host, port, user, password, key_file, passphrase, use_agent, host_key_check,
   jump_host, jump_port, jump_user, jump_password, jump_key_file, jump_passphrase,
 	  operation, local_path, remote_path, uploads, recursive, mode, new_path, overwrite,
-	  transfer_id, connection_profile, connection_id, quiet, result_only
+	  transfer_id, connection_profile, connection_id, remote_root, remote_shell, quiet, result_only
 
 ## bash
 Persistent shell sessions that maintain working directory, environment variables, and state across calls.

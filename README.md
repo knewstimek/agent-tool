@@ -515,6 +515,13 @@ to display the original command. No root banner or alias list is added per call.
 {"operation":"upload","connection_profile":"dev","local_path":"build/app","remote_path":"bin/app"}
 ```
 
+To set the root without editing a profile, pass it once and reuse the returned ID:
+
+```json
+{"connection_profile":"dev","remote_root":"/srv/app","command":"git status"}
+{"operation":"ls","connection_id":"<returned-id>","remote_path":"logs"}
+```
+
 For Windows PowerShell, pass script text in `powershell_script` instead of `command`.
 SSH uploads a unique UTF-8 temporary `.ps1` through a short PowerShell command's
 standard input, executes its contents with

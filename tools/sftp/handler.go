@@ -280,6 +280,7 @@ func Register(server *mcp.Server) {
 		Name: "sftp",
 		Description: `Transfer files and manage remote filesystems over SSH (SFTP protocol).
 Reuses SSH session pool — same authentication and session reuse as the ssh tool.
+remote_root from a profile/call/connection_id anchors relative remote paths and is shared with SSH. Generated paths inside local/remote roots display relatively.
 Operations: upload (local to remote), download (remote to local), ls, stat, mkdir, rm, chmod, rename.
 Batch upload: upload_many accepts up to 100 local_path/remote_path items over one SFTP session.
 Async operations: upload_async, download_async (returns transfer_id immediately), status (check progress), cancel.

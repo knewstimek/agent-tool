@@ -331,7 +331,7 @@ func textOf(r *mcp.CallToolResult) string {
 func Register(server *mcp.Server) {
 	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name:        "ssh",
-		Description: `Execute SSH commands with password, key, agent, IPv6, and ProxyJump support. Prefer a local connection_profile or reuse connection_id; matching sessions pool for 30 minutes. Output is bounded. For long-running commands use start/background, then wait/status/tail/cancel with job_id. On Windows use powershell_script to upload, execute, and clean up a temporary script via SSH stdin. Long standalone EncodedCommand invocations are staged automatically.`,
+		Description: `Execute SSH commands with password, key, agent, IPv6, and ProxyJump support. Prefer a local connection_profile or reuse connection_id; matching sessions pool for 30 minutes. remote_root persists with that ID for SSH/SFTP; commands start there. Windows CMD+remote_root requires PowerShell. Command echo defaults off; stdout/stderr stay unchanged. Output is bounded. For long-running commands use start/background, then wait/status/tail/cancel with job_id. On Windows use powershell_script to upload, execute, and clean up a temporary script via SSH stdin. Long standalone EncodedCommand invocations are staged automatically.`,
 	}, Handle)
 }
 

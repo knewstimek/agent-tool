@@ -508,6 +508,13 @@ read 진단, multiread 헤더, edit·copy 결과의 로컬 경로는 작업공�
 {"operation":"upload","connection_profile":"dev","local_path":"build/app","remote_path":"bin/app"}
 ```
 
+프로필을 수정하지 않으려면 최초 호출에 루트를 지정하고 반환된 ID를 재사용합니다.
+
+```json
+{"connection_profile":"dev","remote_root":"/srv/app","command":"git status"}
+{"operation":"ls","connection_id":"<returned-id>","remote_path":"logs"}
+```
+
 ### 로컬 SSH 개인키 변환
 
 `ssh_key`는 개인키 내용을 네트워크로 보내거나 응답에 노출하지 않고 로컬 파일을
