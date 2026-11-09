@@ -21,6 +21,8 @@ const (
 // ConnectionProfile is the non-command portion of an SSH/SFTP request. Local
 // profile files may contain secrets and must not be checked into source control.
 type ConnectionProfile struct {
+	RemoteRoot     string      `json:"remote_root,omitempty"`
+	RemoteShell    string      `json:"remote_shell,omitempty"`
 	Host           string      `json:"host"`
 	Port           interface{} `json:"port,omitempty"`
 	User           string      `json:"user"`
@@ -101,11 +103,14 @@ func ResolveConnection(input *SSHInput) (string, error) {
 		base.Trusted = false
 	}
 	applyProfileDefaults(input, base)
+	if err := normalizeRemoteRoot(input); err != nil {
+		return "", err
+	}
 	if base.Trusted {
 		input.TrustedProfile = true
 	}
 
-	if handleID == "" {
+	if handleID == "" || input.RemoteRoot != base.RemoteRoot || input.RemoteShell != base.RemoteShell {
 		handleID, err = rememberConnection(*input)
 		if err != nil {
 			return "", err
@@ -207,6 +212,7 @@ func pruneConnectionHandlesLocked(now time.Time) {
 
 func profileFromInput(input SSHInput) ConnectionProfile {
 	return ConnectionProfile{
+		RemoteRoot: input.RemoteRoot, RemoteShell: input.RemoteShell,
 		Host: input.Host, Port: input.Port, User: input.User, Password: input.Password,
 		KeyFile: input.KeyFile, Passphrase: input.Passphrase, UseAgent: input.UseAgent,
 		HostKeyCheck: input.HostKeyCheck, JumpHost: input.JumpHost, JumpPort: input.JumpPort,
@@ -217,6 +223,12 @@ func profileFromInput(input SSHInput) ConnectionProfile {
 }
 
 func applyProfileDefaults(input *SSHInput, profile ConnectionProfile) {
+	if input.RemoteRoot == "" {
+		input.RemoteRoot = profile.RemoteRoot
+	}
+	if input.RemoteShell == "" {
+		input.RemoteShell = profile.RemoteShell
+	}
 	if input.Host == "" {
 		input.Host = profile.Host
 	}

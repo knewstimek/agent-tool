@@ -15,6 +15,7 @@ type operationShape struct {
 }
 
 var connectionFields = []string{
+	"remote_root", "remote_shell",
 	"connection_profile", "connection_id", "host", "port", "user", "password",
 	"key_file", "passphrase", "use_agent", "host_key_check", "jump_host",
 	"jump_port", "jump_user", "jump_password", "jump_key_file", "jump_passphrase",

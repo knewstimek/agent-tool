@@ -462,7 +462,8 @@ key, jump host 필드 반복을 없앨 수 있습니다. 프로필은 OS 사용�
       "user": "builder",
       "key_file": "/local/path/to/id_ed25519",
       "host_key_check": "strict",
-      "trusted": true
+      "trusted": true,
+      "remote_root": "/srv/app"
     }
   }
 }
@@ -475,6 +476,31 @@ cloud metadata 보호는 그대로 유지합니다. SSH는 `quiet`,
 `echo_command`, `result_only`도 지원하며 마지막 옵션은 `stdout`, `stderr`, `exit_code`
 중심의 compact JSON을 반환합니다. SFTP는 `quiet`, `result_only`, 최대 100개 파일의
 `upload_many`를 지원합니다.
+
+접속 프로필이나 최초 SSH/SFTP 호출에 절대경로 `remote_root`를 지정하면, 반환된
+`connection_id`로 원격 작업 디렉터리도 재사용합니다. SSH는 일반·백그라운드 명령과
+PowerShell 스크립트 실행마다 해당 디렉터리로 이동하며, 이동에 실패하면 실행하지
+않습니다. SFTP의 상대 `remote_path`, 이름 변경의 `new_path`, 일괄 업로드 대상도 이
+루트를 기준으로 해석합니다. 명시적인 절대경로는 유지하며, 접근 범위를 제한하는
+샌드박스는 아닙니다. 기존 ID에 다른 루트를 지정하면 원래 ID를 바꾸지 않고 새 ID를 반환합니다.
+
+`remote_shell`은 SSH 서버의 기본 셸을 뜻하며 `posix`, `cmd`, `powershell`을 지원합니다.
+생략하면 Windows 드라이브 루트(`D:/app`)에는 `cmd`, 나머지에는 `posix`를 적용합니다.
+서버의 기본 셸이 다르면 명시적으로 지정하세요. Windows 루트는 드라이브 절대경로여야
+하며, cmd에서 확장되거나 셸 구문으로 해석되는 특수문자가 있는 루트는 거부합니다.
+`powershell_script`는 SSH 기본 셸과 별도로 PowerShell의 작업 디렉터리 설정을 사용합니다.
+
+read 진단, multiread 헤더, edit·copy 결과의 로컬 경로는 작업공간 내부일 때 상대경로로
+표시합니다. SFTP는 로컬 경로를 작업공간 기준, 원격 경로를 `remote_root` 기준으로
+표시하며 비동기 전송 상태에도 적용합니다. 루트 밖의 경로는 그대로 표시합니다.
+파일 내용과 SSH stdout·stderr는 바꾸지 않습니다. SSH 명령 재출력은 기본으로 끄며,
+원래 명령을 표시하려면 `echo_command:true`를 지정합니다. 호출마다 루트 안내나 별칭
+목록을 추가하지 않습니다.
+
+```json
+{"connection_profile":"dev","command":"git status"}
+{"operation":"upload","connection_profile":"dev","local_path":"build/app","remote_path":"bin/app"}
+```
 
 ### 로컬 SSH 개인키 변환
 

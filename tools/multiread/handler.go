@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"agent-tool/common"
@@ -158,6 +157,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MultiReadInput)
 	}
 
 	var sb strings.Builder
+	displayRoot := common.RequestWorkspace(ctx, req)
 	var errorCount int
 	var totalBytesRead int64
 	filesRead := 0
@@ -212,9 +212,10 @@ readLoop:
 			continue
 		}
 		filePath = resolvedPath
+		displayPath := common.DisplayPath(displayRoot, filePath)
 
 		// Header for each file
-		header := fmt.Sprintf("=== %s (%s) ===\n", filepath.Base(filePath), filePath)
+		header := fmt.Sprintf("=== %s ===\n", displayPath)
 		var headerCut bool
 		header, headerCut = common.TruncateRunes(header, max(contentBudget-usedChars-64, 32), "… ===\n")
 		truncated = truncated || headerCut
@@ -228,7 +229,7 @@ readLoop:
 		if err != nil {
 			message := ""
 			if os.IsNotExist(err) {
-				message = fmt.Sprintf("ERROR: file not found: %s\n", filePath)
+				message = fmt.Sprintf("ERROR: file not found: %s\n", displayPath)
 			} else {
 				message = fmt.Sprintf("ERROR: cannot access file: %v\n", err)
 			}
@@ -238,7 +239,7 @@ readLoop:
 			continue
 		}
 		if fi.IsDir() {
-			if !appendError(fmt.Sprintf("ERROR: path is a directory, not a file: %s\n", filePath)) {
+			if !appendError(fmt.Sprintf("ERROR: path is a directory, not a file: %s\n", displayPath)) {
 				break
 			}
 			continue

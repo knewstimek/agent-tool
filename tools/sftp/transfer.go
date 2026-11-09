@@ -169,8 +169,8 @@ func startAsyncUpload(input SFTPInput) (string, error) {
 
 	entry := &transferEntry{
 		Operation:  "upload",
-		LocalPath:  input.LocalPath,
-		RemotePath: input.RemotePath,
+		LocalPath:  input.displayLocal(),
+		RemotePath: input.displayRemote(input.RemotePath),
 		TotalSize:  localInfo.Size(),
 		Status:     "running",
 		StartedAt:  time.Now(),
@@ -234,8 +234,8 @@ func startAsyncDownload(input SFTPInput) (string, error) {
 
 	entry := &transferEntry{
 		Operation:  "download",
-		LocalPath:  input.LocalPath,
-		RemotePath: input.RemotePath,
+		LocalPath:  input.displayLocal(),
+		RemotePath: input.displayRemote(input.RemotePath),
 		TotalSize:  remoteInfo.Size(),
 		Status:     "running",
 		StartedAt:  time.Now(),

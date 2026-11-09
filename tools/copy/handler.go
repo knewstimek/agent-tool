@@ -78,7 +78,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input CopyInput) (*mc
 	srcInfo, err := os.Lstat(srcCleaned)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return errorResult(fmt.Sprintf("source not found: %s", srcCleaned))
+			return errorResult(fmt.Sprintf("source not found: %s", common.DisplayRequestPath(ctx, req, srcCleaned)))
 		}
 		return errorResult(fmt.Sprintf("cannot access source: %v", err))
 	}
@@ -98,18 +98,22 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input CopyInput) (*mc
 	// Check destination
 	if !overwrite {
 		if _, err := os.Stat(dstCleaned); err == nil {
-			return errorResult(fmt.Sprintf("destination already exists: %s (use overwrite=true to replace)", dstCleaned))
+			return errorResult(fmt.Sprintf("destination already exists: %s (use overwrite=true to replace)", common.DisplayRequestPath(ctx, req, dstCleaned)))
 		}
 	}
 
 	if srcInfo.IsDir() {
-		return handleDirCopy(srcCleaned, dstCleaned, dryRun, overwrite)
+		return handleDirCopy(srcCleaned, dstCleaned, dryRun, overwrite, common.RequestWorkspace(ctx, req))
 	}
-	return handleFileCopy(srcCleaned, dstCleaned, srcInfo, dryRun)
+	return handleFileCopy(srcCleaned, dstCleaned, srcInfo, dryRun, common.RequestWorkspace(ctx, req))
 }
 
 // handleDirCopy copies a directory recursively.
-func handleDirCopy(src, dst string, dryRun, overwrite bool) (*mcp.CallToolResult, CopyOutput, error) {
+func handleDirCopy(src, dst string, dryRun, overwrite bool, displayRoot ...string) (*mcp.CallToolResult, CopyOutput, error) {
+	root := ""
+	if len(displayRoot) > 0 {
+		root = displayRoot[0]
+	}
 	// Prevent copying a directory into itself (either direction).
 	// Windows NTFS is case-insensitive, so normalize case before comparison
 	// to prevent bypassing via "C:\Foo" vs "C:\foo".
@@ -162,7 +166,7 @@ func handleDirCopy(src, dst string, dryRun, overwrite bool) (*mcp.CallToolResult
 
 	if dryRun {
 		msg := fmt.Sprintf("[DRY RUN] would copy directory: %s → %s\nFiles: %d, Total size: %s",
-			src, dst, fileCount, formatSize(totalSize))
+			common.DisplayPath(root, src), common.DisplayPath(root, dst), fileCount, formatSize(totalSize))
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 		}, CopyOutput{Result: msg}, nil
@@ -210,17 +214,21 @@ func handleDirCopy(src, dst string, dryRun, overwrite bool) (*mcp.CallToolResult
 	}
 
 	msg := fmt.Sprintf("OK: copied directory %s → %s (%d files, %s)",
-		src, dst, copiedFiles, formatSize(totalSize))
+		common.DisplayPath(root, src), common.DisplayPath(root, dst), copiedFiles, formatSize(totalSize))
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 	}, CopyOutput{Result: msg}, nil
 }
 
 // handleFileCopy copies a single file.
-func handleFileCopy(src, dst string, srcInfo os.FileInfo, dryRun bool) (*mcp.CallToolResult, CopyOutput, error) {
+func handleFileCopy(src, dst string, srcInfo os.FileInfo, dryRun bool, displayRoot ...string) (*mcp.CallToolResult, CopyOutput, error) {
+	root := ""
+	if len(displayRoot) > 0 {
+		root = displayRoot[0]
+	}
 	if dryRun {
 		msg := fmt.Sprintf("[DRY RUN] would copy file: %s → %s\nSize: %s",
-			src, dst, formatSize(srcInfo.Size()))
+			common.DisplayPath(root, src), common.DisplayPath(root, dst), formatSize(srcInfo.Size()))
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 		}, CopyOutput{Result: msg}, nil
@@ -237,9 +245,9 @@ func handleFileCopy(src, dst string, srcInfo os.FileInfo, dryRun bool) (*mcp.Cal
 		return errorResult(fmt.Sprintf("copy failed: %v", err))
 	}
 
-	msg := fmt.Sprintf("OK: copied file %s → %s (%s)", src, dst, formatSize(srcInfo.Size()))
+	msg := fmt.Sprintf("OK: copied file %s → %s (%s)", common.DisplayPath(root, src), common.DisplayPath(root, dst), formatSize(srcInfo.Size()))
 	if cr.RenamedOld != "" {
-		msg += fmt.Sprintf("\nWARNING: destination was locked (in use). Old file renamed to: %s", cr.RenamedOld)
+		msg += fmt.Sprintf("\nWARNING: destination was locked (in use). Old file renamed to: %s", common.DisplayPath(root, cr.RenamedOld))
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: msg}},

@@ -47,6 +47,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 		return errorResult(fmt.Sprintf("cannot resolve file_path: %v", err))
 	}
 	input.FilePath = resolvedPath
+	displayPath := common.DisplayRequestPath(ctx, req, input.FilePath)
 	// Accept old_content/new_content as aliases for old_string/new_string
 	if input.OldString == "" && input.OldContent != "" {
 		input.OldString = input.OldContent
@@ -64,7 +65,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 	// Check file existence
 	if _, err := os.Stat(input.FilePath); err != nil {
 		if os.IsNotExist(err) {
-			return errorResult(fmt.Sprintf("file not found: %s", input.FilePath))
+			return errorResult(fmt.Sprintf("file not found: %s", displayPath))
 		}
 		return errorResult(fmt.Sprintf("cannot access file: %v", err))
 	}
@@ -105,8 +106,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 
 	// If dry-run, return preview without writing
 	if common.FlexBool(input.DryRun) {
-		preview := dryRunPreview(content, result.Content, input.FilePath)
-		msg := fmt.Sprintf("[DRY RUN] would %s (%s, encoding=%s)\n\n%s", result.Message, input.FilePath, encInfo.Charset, preview)
+		preview := dryRunPreview(content, result.Content, displayPath)
+		msg := fmt.Sprintf("[DRY RUN] would %s (%s, encoding=%s)\n\n%s", result.Message, displayPath, encInfo.Charset, preview)
 		// Corruption is worth more before the write than after it. The echo is
 		// skipped -- the preview already shows the text.
 		if warning := common.ReplacementCharWarning(input.NewString); warning != "" {
@@ -122,7 +123,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input EditInput) (*mc
 		return errorResult(fmt.Sprintf("failed to write file: %v", err))
 	}
 
-	msg := fmt.Sprintf("OK: %s (%s, encoding=%s)", result.Message, input.FilePath, encInfo.Charset)
+	msg := fmt.Sprintf("OK: %s (%s, encoding=%s)", result.Message, displayPath, encInfo.Charset)
 
 	// Echo back what was written, in the text an agent can actually inspect:
 	// a string composed as \uXXXX escapes hides its own typos until rendered.

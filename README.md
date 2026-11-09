@@ -468,7 +468,8 @@ ignored if it is placed inside a workspace.
       "user": "builder",
       "key_file": "/local/path/to/id_ed25519",
       "host_key_check": "strict",
-      "trusted": true
+      "trusted": true,
+      "remote_root": "/srv/app"
     }
   }
 }
@@ -480,6 +481,32 @@ private-address warning on every call instead of once per pooled connection. Thi
 only display; SSRF blocking and cloud metadata protection are unchanged. SSH also supports `quiet`, `echo_command`, and
 `result_only`; the last returns compact JSON centered on `stdout`, `stderr`, and
 `exit_code`. SFTP supports `quiet`, `result_only`, and `upload_many` (up to 100 files).
+
+Set `remote_root` in a connection profile or an initial SSH/SFTP call to reuse an
+absolute remote working directory through the returned `connection_id`. SSH changes
+to that directory for every foreground/background command or PowerShell script;
+a failed directory change prevents execution. SFTP resolves relative `remote_path`,
+rename `new_path`, and batch upload destinations against it. Explicit absolute paths
+keep their meaning; this is a working directory, not a filesystem sandbox. Changing
+the root with an existing ID returns a new ID without changing the original one.
+
+`remote_shell` describes the server's SSH default shell: `posix` (default), `cmd`
+(default for Windows drive roots such as `D:/app`), or `powershell`. Set it explicitly
+if the SSH server uses a different default. Windows roots must be drive-based;
+cmd roots containing shell expansion/metacharacters are rejected. `powershell_script`
+uses PowerShell location handling independently of the SSH default shell.
+
+Tool-generated local paths in read diagnostics, multiread headers, edit and copy
+results use workspace-relative paths when inside the workspace. SFTP reports local
+paths relative to the workspace and remote paths relative to `remote_root`, including
+transfer status. Outside paths remain explicit. File contents and SSH stdout/stderr
+are never rewritten. SSH no longer echoes commands by default; use `echo_command:true`
+to display the original command. No root banner or alias list is added per call.
+
+```json
+{"connection_profile":"dev","command":"git status"}
+{"operation":"upload","connection_profile":"dev","local_path":"build/app","remote_path":"bin/app"}
+```
 
 For Windows PowerShell, pass script text in `powershell_script` instead of `command`.
 SSH uploads a unique UTF-8 temporary `.ps1` through a short PowerShell command's

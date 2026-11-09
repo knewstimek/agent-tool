@@ -15,6 +15,9 @@ import (
 )
 
 type SFTPInput struct {
+	RemoteRoot  string `json:"remote_root,omitempty" jsonschema:"Absolute remote working directory; inherited from connection_profile/connection_id. Relative remote paths resolve here"`
+	RemoteShell string `json:"remote_shell,omitempty" jsonschema:"SSH default shell saved with remote_root for SSH reuse: posix, cmd, powershell"`
+	localRoot   string
 	// SSH connection parameters (same as ssh tool, minus Command/Disconnect/TimeoutSec)
 	Host         string      `json:"host,omitempty" jsonschema:"SSH server hostname or IP address (IPv4 or IPv6). Required unless connection_profile or connection_id is used"`
 	Port         interface{} `json:"port,omitempty" jsonschema:"SSH port number. Default: 22"`
@@ -114,6 +117,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mc
 		return errorResult(err.Error())
 	}
 	applyResolvedConnection(&input, sshInput)
+	input.localRoot = common.RequestWorkspace(ctx, req)
+	input.resolveRemotePaths()
 
 	// SSRF policy: cloud metadata is always blocked. Private addresses are
 	// allowed only by policy, and trusted local profiles warn once per session.
@@ -166,7 +171,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mc
 		if err != nil {
 			return errorResult(fmt.Sprintf("upload_async failed: %v", err))
 		}
-		msg := fmt.Sprintf("Upload started in background.\nTransfer ID: %s\nLocal: %s\nRemote: %s\n\nUse operation=status with transfer_id=%q to check progress.\nUse operation=cancel with transfer_id=%q to cancel.", id, input.LocalPath, input.RemotePath, id, id)
+		msg := fmt.Sprintf("Upload started in background.\nTransfer ID: %s\nLocal: %s\nRemote: %s\n\nUse operation=status with transfer_id=%q to check progress.\nUse operation=cancel with transfer_id=%q to cancel.", id, input.displayLocal(), input.displayRemote(input.RemotePath), id, id)
 		if !input.Quiet && !input.ResultOnly {
 			msg = fmt.Sprintf("connection_id: %s\n%s", connectionID, msg)
 		}
@@ -182,7 +187,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SFTPInput) (*mc
 		if err != nil {
 			return errorResult(fmt.Sprintf("download_async failed: %v", err))
 		}
-		msg := fmt.Sprintf("Download started in background.\nTransfer ID: %s\nRemote: %s\nLocal: %s\n\nUse operation=status with transfer_id=%q to check progress.\nUse operation=cancel with transfer_id=%q to cancel.", id, input.RemotePath, input.LocalPath, id, id)
+		msg := fmt.Sprintf("Download started in background.\nTransfer ID: %s\nRemote: %s\nLocal: %s\n\nUse operation=status with transfer_id=%q to check progress.\nUse operation=cancel with transfer_id=%q to cancel.", id, input.displayRemote(input.RemotePath), input.displayLocal(), id, id)
 		if !input.Quiet && !input.ResultOnly {
 			msg = fmt.Sprintf("connection_id: %s\n%s", connectionID, msg)
 		}
@@ -286,6 +291,8 @@ Recursive delete is limited to 10,000 items for safety.`,
 // toSSHInput converts SFTP connection parameters to ssh.SSHInput for pool reuse.
 func toSSHInput(input SFTPInput) ssh.SSHInput {
 	return ssh.SSHInput{
+		RemoteRoot:        input.RemoteRoot,
+		RemoteShell:       input.RemoteShell,
 		Host:              input.Host,
 		Port:              input.Port,
 		User:              input.User,
@@ -306,6 +313,8 @@ func toSSHInput(input SFTPInput) ssh.SSHInput {
 }
 
 func applyResolvedConnection(input *SFTPInput, resolved ssh.SSHInput) {
+	input.RemoteRoot = resolved.RemoteRoot
+	input.RemoteShell = resolved.RemoteShell
 	input.Host = resolved.Host
 	input.Port = resolved.Port
 	input.User = resolved.User

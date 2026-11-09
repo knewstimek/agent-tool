@@ -40,7 +40,7 @@ func opUpload(client *sftp.Client, input SFTPInput) (string, error) {
 	// Check overwrite
 	if !common.FlexBool(input.Overwrite) {
 		if _, err := client.Stat(input.RemotePath); err == nil {
-			return "", fmt.Errorf("remote file already exists: %s (use overwrite=true to replace)", input.RemotePath)
+			return "", fmt.Errorf("remote file already exists: %s (use overwrite=true to replace)", input.displayRemote(input.RemotePath))
 		}
 	}
 
@@ -66,7 +66,7 @@ func opUpload(client *sftp.Client, input SFTPInput) (string, error) {
 		return "", fmt.Errorf("upload failed: %w", err)
 	}
 
-	return fmt.Sprintf("Uploaded %s -> %s (%s)", input.LocalPath, input.RemotePath, formatSize(written)), nil
+	return fmt.Sprintf("Uploaded %s -> %s (%s)", input.displayLocal(), input.displayRemote(input.RemotePath), formatSize(written)), nil
 }
 
 // opUploadMany transfers several files over one SFTP/SSH session. Completed
@@ -121,7 +121,7 @@ func opDownload(client *sftp.Client, input SFTPInput) (string, error) {
 	// Check overwrite
 	if !common.FlexBool(input.Overwrite) {
 		if _, err := os.Stat(input.LocalPath); err == nil {
-			return "", fmt.Errorf("local file already exists: %s (use overwrite=true to replace)", input.LocalPath)
+			return "", fmt.Errorf("local file already exists: %s (use overwrite=true to replace)", input.displayLocal())
 		}
 	}
 
@@ -156,7 +156,7 @@ func opDownload(client *sftp.Client, input SFTPInput) (string, error) {
 		return "", fmt.Errorf("download failed (close): %w", closeErr)
 	}
 
-	return fmt.Sprintf("Downloaded %s -> %s (%s)", input.RemotePath, input.LocalPath, formatSize(written)), nil
+	return fmt.Sprintf("Downloaded %s -> %s (%s)", input.displayRemote(input.RemotePath), input.displayLocal(), formatSize(written)), nil
 }
 
 // opLs lists the contents of a remote directory.
@@ -187,7 +187,7 @@ func opLs(client *sftp.Client, input SFTPInput) (string, error) {
 		truncated = true
 	}
 
-	sb.WriteString(fmt.Sprintf("Directory: %s (%d entries)\n", input.RemotePath, total))
+	sb.WriteString(fmt.Sprintf("Directory: %s (%d entries)\n", input.displayRemote(input.RemotePath), total))
 
 	for _, entry := range entries {
 		name := entry.Name()
@@ -228,12 +228,12 @@ func opStat(client *sftp.Client, input SFTPInput) (string, error) {
 		fileType = "symlink"
 		// Resolve symlink target
 		if target, err := client.ReadLink(input.RemotePath); err == nil {
-			fileType = fmt.Sprintf("symlink -> %s", target)
+			fileType = fmt.Sprintf("symlink -> %s", input.displayRemote(target))
 		}
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Path: %s\n", input.RemotePath))
+	sb.WriteString(fmt.Sprintf("Path: %s\n", input.displayRemote(input.RemotePath)))
 	sb.WriteString(fmt.Sprintf("Type: %s\n", fileType))
 	sb.WriteString(fmt.Sprintf("Size: %s (%d bytes)\n", formatSize(info.Size()), info.Size()))
 	sb.WriteString(fmt.Sprintf("Mode: %s (%04o)\n", info.Mode().String(), info.Mode().Perm()))
@@ -258,7 +258,7 @@ func opMkdir(client *sftp.Client, input SFTPInput) (string, error) {
 		}
 	}
 
-	return fmt.Sprintf("Created directory: %s", input.RemotePath), nil
+	return fmt.Sprintf("Created directory: %s", input.displayRemote(input.RemotePath)), nil
 }
 
 // opRm removes a remote file or directory.
@@ -272,7 +272,7 @@ func opRm(client *sftp.Client, input SFTPInput) (string, error) {
 		if err := client.Remove(input.RemotePath); err != nil {
 			return "", fmt.Errorf("remove: %w", err)
 		}
-		return fmt.Sprintf("Removed: %s", input.RemotePath), nil
+		return fmt.Sprintf("Removed: %s", input.displayRemote(input.RemotePath)), nil
 	}
 
 	// Recursive delete
@@ -290,7 +290,7 @@ func opRm(client *sftp.Client, input SFTPInput) (string, error) {
 		if err := client.Remove(input.RemotePath); err != nil {
 			return "", fmt.Errorf("remove: %w", err)
 		}
-		return fmt.Sprintf("Removed: %s", input.RemotePath), nil
+		return fmt.Sprintf("Removed: %s", input.displayRemote(input.RemotePath)), nil
 	}
 
 	// Walk and collect all entries (depth-first, files before directories)
@@ -321,7 +321,7 @@ func opRm(client *sftp.Client, input SFTPInput) (string, error) {
 	totalDeleted++
 
 	return fmt.Sprintf("Removed directory tree: %s (%d files, %d dirs)",
-		input.RemotePath, len(files), len(dirs)+1), nil
+		input.displayRemote(input.RemotePath), len(files), len(dirs)+1), nil
 }
 
 const maxRecurseDepth = 100
@@ -394,7 +394,7 @@ func opChmod(client *sftp.Client, input SFTPInput) (string, error) {
 		return "", fmt.Errorf("chmod: %w", err)
 	}
 
-	return fmt.Sprintf("Changed mode of %s to %04o", input.RemotePath, parsed), nil
+	return fmt.Sprintf("Changed mode of %s to %04o", input.displayRemote(input.RemotePath), parsed), nil
 }
 
 // opRename renames or moves a remote file or directory.
@@ -422,5 +422,5 @@ func opRename(client *sftp.Client, input SFTPInput) (string, error) {
 		return "", fmt.Errorf("rename: %w", err)
 	}
 
-	return fmt.Sprintf("Renamed: %s -> %s", input.RemotePath, input.NewPath), nil
+	return fmt.Sprintf("Renamed: %s -> %s", input.displayRemote(input.RemotePath), input.displayRemote(input.NewPath)), nil
 }

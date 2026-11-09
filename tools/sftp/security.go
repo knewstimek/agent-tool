@@ -19,21 +19,21 @@ const (
 
 // dangerousRemotePaths lists remote paths that should never be recursively deleted.
 var dangerousRemotePaths = map[string]bool{
-	"/":     true,
-	"/home": true,
-	"/root": true,
-	"/etc":  true,
-	"/var":  true,
-	"/usr":  true,
-	"/bin":  true,
-	"/sbin": true,
-	"/boot": true,
-	"/dev":  true,
-	"/proc": true,
-	"/sys":  true,
-	"/tmp":  true,
-	"/opt":  true,
-	"/lib":  true,
+	"/":      true,
+	"/home":  true,
+	"/root":  true,
+	"/etc":   true,
+	"/var":   true,
+	"/usr":   true,
+	"/bin":   true,
+	"/sbin":  true,
+	"/boot":  true,
+	"/dev":   true,
+	"/proc":  true,
+	"/sys":   true,
+	"/tmp":   true,
+	"/opt":   true,
+	"/lib":   true,
 	"/lib64": true,
 }
 
@@ -50,33 +50,33 @@ func validateRemotePath(path string) error {
 
 // sensitiveLocalDirs lists directory basenames that should be protected from SFTP writes.
 var sensitiveLocalDirs = map[string]bool{
-	".ssh":        true,
-	".gnupg":      true,
-	".config":     true,
-	".kube":       true,
-	".docker":     true,
-	".aws":        true,
-	".azure":      true,
-	".gcloud":     true,
-	".npmrc":      true,
-	".pypirc":     true,
-	".gem":        true,
-	".cargo":      true,
+	".ssh":    true,
+	".gnupg":  true,
+	".config": true,
+	".kube":   true,
+	".docker": true,
+	".aws":    true,
+	".azure":  true,
+	".gcloud": true,
+	".npmrc":  true,
+	".pypirc": true,
+	".gem":    true,
+	".cargo":  true,
 }
 
 // sensitiveLocalFiles lists filenames that should be protected from SFTP writes.
 var sensitiveLocalFiles = map[string]bool{
-	".bashrc":       true,
-	".bash_profile": true,
-	".zshrc":        true,
-	".profile":      true,
-	".gitconfig":    true,
-	".netrc":        true,
-	".env":          true,
-	"id_rsa":        true,
-	"id_ed25519":    true,
+	".bashrc":         true,
+	".bash_profile":   true,
+	".zshrc":          true,
+	".profile":        true,
+	".gitconfig":      true,
+	".netrc":          true,
+	".env":            true,
+	"id_rsa":          true,
+	"id_ed25519":      true,
 	"authorized_keys": true,
-	"known_hosts":   true,
+	"known_hosts":     true,
 }
 
 // validateLocalPath checks that a local path is safe for file transfer.
@@ -123,6 +123,11 @@ func isSensitiveLocalPath(path string) error {
 
 // isDangerousPath checks if a remote path is too dangerous for recursive delete.
 func isDangerousPath(remotePath string) bool {
+	// A configured Windows drive root must be as protected as POSIX /.
+	windowsPath := strings.ReplaceAll(remotePath, "\\", "/")
+	if len(windowsPath) >= 3 && windowsPath[1] == ':' && strings.HasPrefix(windowsPath[2:], "/") && posixClean(windowsPath[2:]) == "/" {
+		return true
+	}
 	cleaned := posixClean(remotePath)
 	return dangerousRemotePaths[cleaned]
 }

@@ -193,12 +193,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input ReadInput) (*mc
 	fi, err := os.Stat(input.FilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return errorResult(fmt.Sprintf("file not found: %s", input.FilePath))
+			return errorResult(fmt.Sprintf("file not found: %s", common.DisplayRequestPath(ctx, req, input.FilePath)))
 		}
 		return errorResult(fmt.Sprintf("cannot access file: %v", err))
 	}
 	if fi.IsDir() {
-		return errorResult(fmt.Sprintf("path is a directory, not a file: %s", input.FilePath))
+		return errorResult(fmt.Sprintf("path is a directory, not a file: %s", common.DisplayRequestPath(ctx, req, input.FilePath)))
 	}
 
 	// Image files: return as MCP ImageContent (base64-encoded)

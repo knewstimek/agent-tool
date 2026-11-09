@@ -26,6 +26,8 @@ const (
 )
 
 type SSHInput struct {
+	RemoteRoot  string `json:"remote_root,omitempty" jsonschema:"Absolute remote working directory; saved in returned connection_id and reusable by SSH/SFTP. May also be set in connection_profile"`
+	RemoteShell string `json:"remote_shell,omitempty" jsonschema:"SSH default shell for remote_root: posix, cmd, powershell. Default: cmd for Windows drive roots, posix otherwise"`
 	// Resolved int values set by validateInput after FlexInt conversion.
 	// Not exported in JSON; used internally after validation.
 	PortInt       int `json:"-"`
@@ -65,7 +67,7 @@ type SSHInput struct {
 	ConnectionProfile string      `json:"connection_profile,omitempty" jsonschema:"Named connection from the local ignored profile file; replaces repeated host/user/key fields"`
 	ConnectionID      string      `json:"connection_id,omitempty" jsonschema:"Opaque session-local connection handle returned by an earlier SSH/SFTP call"`
 	Quiet             bool        `json:"quiet,omitempty" jsonschema:"Suppress connection/session banners: true or false. Default: false"`
-	EchoCommand       interface{} `json:"echo_command,omitempty" jsonschema:"Echo the remote command in normal output: true or false. Default: true"`
+	EchoCommand       interface{} `json:"echo_command,omitempty" jsonschema:"Echo the original remote command in normal output: true or false. Default: false"`
 	ResultOnly        bool        `json:"result_only,omitempty" jsonschema:"Return only compact stdout, stderr, and exit_code JSON: true or false. Default: false"`
 
 	TrustedProfile       bool   `json:"-"`
@@ -111,9 +113,20 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 		return errorResult(err.Error())
 	}
 
+	originalCommand := input.Command
+	// Validate the original command/script combination before adding the cwd.
 	plan, err := planPowerShell(input)
 	if err != nil {
 		return errorResult(err.Error())
+	}
+	if plan != nil {
+		rooted := input
+		rooted.Command = ""
+		rooted.PowerShellScript = plan.script
+		applyRemoteRoot(&rooted)
+		plan.script = rooted.PowerShellScript
+	} else if input.Command != "" {
+		applyRemoteRoot(&input)
 	}
 
 	// SSRF policy: cloud metadata always blocked. Private IPs allowed by default
@@ -253,8 +266,8 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input SSHInput) (*mcp
 			sb.WriteString("[Reusing existing session]\n")
 		}
 		sb.WriteString(fmt.Sprintf("[connection_id: %s]\n", connectionID))
-		if input.EchoCommand == nil || common.FlexBool(input.EchoCommand) {
-			displayCommand, _ := common.TruncateRunes(input.Command, 500, "… [command abbreviated]")
+		if common.FlexBool(input.EchoCommand) {
+			displayCommand, _ := common.TruncateRunes(originalCommand, 500, "… [command abbreviated]")
 			if input.PowerShellScript != "" {
 				displayCommand = "[PowerShell script via temporary file]"
 			}

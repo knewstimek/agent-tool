@@ -50,6 +50,23 @@ func ResolveRequestPath(ctx context.Context, req *mcp.CallToolRequest, path stri
 	return filepath.Abs(filepath.Join(RequestWorkspace(ctx, req), path))
 }
 
+// DisplayPath shortens paths inside root without disguising paths outside it.
+// It only changes presentation; callers must keep using the resolved I/O path.
+func DisplayPath(root, path string) string {
+	if root == "" || path == "" || !filepath.IsAbs(path) {
+		return path
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return path
+	}
+	return filepath.ToSlash(rel)
+}
+
+func DisplayRequestPath(ctx context.Context, req *mcp.CallToolRequest, path string) string {
+	return DisplayPath(RequestWorkspace(ctx, req), path)
+}
+
 // FileURIPath converts an MCP file:// root URI into a native filesystem path.
 func FileURIPath(uri string) (string, error) {
 	u, err := url.Parse(uri)
