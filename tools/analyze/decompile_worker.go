@@ -632,6 +632,8 @@ func loadDecompileTargetWithIL2CPP(path, pdbPath string, pdbForce bool, script s
 	if err != nil {
 		return nil, err
 	}
+	// Gosleigh shares Section.Data across engines. Keep these bytes immutable
+	// for the Program lifetime; a changed binary must load a new Program.
 	if t.prog, err = decomp.Load(spec, sections); err != nil {
 		return nil, err
 	}
