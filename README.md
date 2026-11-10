@@ -90,7 +90,7 @@ Local relative paths resolve against an explicit workspace, then the MCP client 
 
 ## Decompilation
 
-Loaded workers are reused between requests for the same binary and analysis options. Up to two idle workers are retained, and each exits after five minutes without use. Binary or metadata changes invalidate reuse.
+Loaded workers are reused between requests for the same binary and analysis options. Up to two idle workers are retained, and each exits after ten minutes without use. Binary or metadata changes invalidate reuse.
 
 The Gosleigh v0.1.16 enhanced preset is applied automatically. It improves inferred stack and floating-point arguments, indirect-call arguments, and reused stack locals while keeping pointers distinct from floating-point values. No additional options are needed; supplied debug or IL2CPP prototypes retain precedence over inference.
 
