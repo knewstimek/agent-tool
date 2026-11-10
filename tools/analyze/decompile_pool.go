@@ -22,7 +22,7 @@ const (
 )
 
 // decompileIdle retires a worker no request has used for this long.
-var decompileIdle = 2 * time.Minute
+var decompileIdle = 5 * time.Minute
 
 // decompWorker is a running worker process serving requests one at a time.
 type decompWorker struct {
