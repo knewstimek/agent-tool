@@ -1274,10 +1274,12 @@ Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompi
   binaries built by the Go toolchain use Go's register ABI (Ghidra's golang spec).
   The architecture, image layout and calling convention are detected from the file.
 
-  The first call on a binary loads it (seconds for a large image with its PDB);
-  later calls on the same file reuse the loaded worker and return in well under a
-  second, so decompile functions one after another rather than re-planning around
-  the load. An idle worker exits after 2 minutes; a changed file is reloaded.
+  The first call on a binary loads it (seconds for a large image with its PDB).
+  Later calls with the same file and analysis options reuse an available loaded
+  worker, skipping that load. Callee translation and return-analysis caches also
+  survive between requests; each requested function still needs decompilation.
+  Up to two idle workers are retained, each exiting after 10 minutes without use.
+  A changed binary or signature source is reloaded. Function runtimes still vary.
   Whole-binary scans (linear sweep, call sites) are cached under the user cache
   directory, so a later session loads the same file faster
   (AGENT_TOOL_NO_ANALYSIS_CACHE=1 disables this). Those scans use
