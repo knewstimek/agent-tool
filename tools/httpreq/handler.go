@@ -222,8 +222,7 @@ func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name: "httpreq",
 		Description: `Execute HTTP requests with any method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS).
-Ideal for testing APIs, webhooks, and web services during development.
-Features: ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) enabled by default.
+ECH and DNS over HTTPS are on by default (no_ech / no_doh turn them off).
 Supports custom headers, request body, and HTTP/SOCKS5 proxies.
 SSRF protection blocks private/internal IPs. Response body is truncated at max_response_kb.
 For downloading files, use download.`,

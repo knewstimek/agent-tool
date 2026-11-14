@@ -1240,7 +1240,7 @@ func cgOpenPE(path string, withPDB bool) (*cgBinary, error) {
 	}
 	merge(pads)
 
-	symbols := peSymbolMap(f, imageBase)
+	symbols := peSymbolMap(f, imageBase, path)
 	if withPDB {
 		mergePDBNames(symbols, path, "", false, f, imageBase)
 	}
@@ -1257,7 +1257,7 @@ func cgOpenPE(path string, withPDB bool) (*cgBinary, error) {
 		innerStarts:    innerStarts,
 		layoutStarts:   layoutStarts,
 		path:           path,
-		imports:        peImports(f, imageBase),
+		imports:        peImports(f, imageBase, path),
 		closer:         func() { f.Close() },
 	}, nil
 }

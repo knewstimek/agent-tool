@@ -581,7 +581,7 @@ func disasmResolvePE(filePath string, va uint64) (*disasmResolved, error) {
 		r.rangeStartFileOff = int64(begin)
 	}
 
-	r.symbols = peSymbolMap(f, imageBase)
+	r.symbols = peSymbolMap(f, imageBase, filePath)
 	mergePDBNames(r.symbols, filePath, "", false, f, imageBase)
 	return r, nil
 }

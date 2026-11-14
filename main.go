@@ -83,6 +83,7 @@ func main() {
 	if len(args) > 0 && (args[0] == "install" || args[0] == "uninstall" || args[0] == "reinstall") {
 		target := ""
 		approveLevel := install.ApproveFull // default: mcp__agent-tool__*
+		withSkills := false
 		remaining := args[1:]
 		for _, a := range remaining {
 			switch a {
@@ -90,6 +91,8 @@ func main() {
 				approveLevel = install.ApproveNone
 			case "--safe-approve":
 				approveLevel = install.ApproveSafe
+			case "--skills":
+				withSkills = true
 			default:
 				if target == "" {
 					target = a
@@ -99,13 +102,13 @@ func main() {
 		var err error
 		switch args[0] {
 		case "install":
-			err = install.Run(target, approveLevel)
+			err = install.Run(target, approveLevel, withSkills)
 		case "uninstall":
-			err = install.Uninstall(target)
+			err = install.Uninstall(target, false)
 		case "reinstall":
 			// ignore uninstall errors (may not be installed yet)
-			install.Uninstall(target)
-			err = install.Run(target, approveLevel)
+			install.Uninstall(target, true)
+			err = install.Run(target, approveLevel, withSkills)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -178,7 +181,36 @@ Groups: core, file, coding, system, remote, data, analysis, windows. Use agent_t
 		},
 	)
 
-	specs := []toolbox.Spec{
+	specs := toolSpecs(server)
+	toolManager := toolbox.NewManager(server, specs, Version)
+	if err := toolManager.EnableProfile(profile); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	toolManager.RegisterTool()
+
+	// Monitor parent process -- exit if parent dies to prevent orphan processes.
+	// When the parent (IDE/CLI) is killed, stdin pipe may not close properly
+	// (especially on Windows), leaving this process alive consuming memory.
+	go monitorParent()
+
+	// Neither watchdog fires when the client is alive but finished with us: a
+	// "cmd /c agent-tool" wrapper waits for us while we wait for it, and the
+	// client above them holds the pipe open, so no EOF and no parent death ever
+	// arrive. Exiting on that guess would kill a session that merely paused, so
+	// the server gives its memory back instead.
+	common.StartIdleMemoryRelease(common.IdleReleaseAfter)
+
+	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// toolSpecs lists every tool with its profile group. It is separate from
+// main so a test can register the same set and hold the descriptions agents
+// pay for on every session to a budget.
+func toolSpecs(server *mcp.Server) []toolbox.Spec {
+	return []toolbox.Spec{
 		{Name: "edit", Group: "core", Register: func() { edit.Register(server) }},
 		{Name: "multiedit", Group: "core", Register: func() { multiedit.Register(server) }},
 		{Name: "read", Group: "core", Register: func() { read.Register(server) }},
@@ -224,27 +256,5 @@ Groups: core, file, coding, system, remote, data, analysis, windows. Use agent_t
 		{Name: "codegraph", Group: "analysis", Register: func() { codegraph.Register(server) }},
 		{Name: "memtool", Group: "analysis", Register: func() { memtool.Register(server) }},
 		{Name: "wintool", Group: "windows", Register: func() { wintool.Register(server) }},
-	}
-	toolManager := toolbox.NewManager(server, specs, Version)
-	if err := toolManager.EnableProfile(profile); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	toolManager.RegisterTool()
-
-	// Monitor parent process -- exit if parent dies to prevent orphan processes.
-	// When the parent (IDE/CLI) is killed, stdin pipe may not close properly
-	// (especially on Windows), leaving this process alive consuming memory.
-	go monitorParent()
-
-	// Neither watchdog fires when the client is alive but finished with us: a
-	// "cmd /c agent-tool" wrapper waits for us while we wait for it, and the
-	// client above them holds the pipe open, so no EOF and no parent death ever
-	// arrive. Exiting on that guess would kill a session that merely paused, so
-	// the server gives its memory back instead.
-	common.StartIdleMemoryRelease(common.IdleReleaseAfter)
-
-	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
-		log.Fatal(err)
 	}
 }

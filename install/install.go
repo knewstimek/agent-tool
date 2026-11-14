@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"agent-tool/skills"
 )
 
 type agentConfig struct {
@@ -15,6 +17,7 @@ type agentConfig struct {
 	configPath string
 	format     string // "json" or "toml"
 	jsonKey    string // MCP servers key in JSON config
+	skillsDir  string // user skills directory; empty when the agent has no skills
 }
 
 // getAgents returns the list of supported agents with their config paths.
@@ -29,6 +32,7 @@ func getAgents() (map[string]agentConfig, error) {
 			configPath: filepath.Join(home, ".claude", "settings.json"),
 			format:     "json",
 			jsonKey:    "mcpServers",
+			skillsDir:  filepath.Join(home, ".claude", "skills"),
 		},
 		"cursor": {
 			name:       "Cursor",
@@ -46,6 +50,7 @@ func getAgents() (map[string]agentConfig, error) {
 			name:       "Codex CLI",
 			configPath: filepath.Join(home, ".codex", "config.toml"),
 			format:     "toml",
+			skillsDir:  filepath.Join(home, ".codex", "skills"),
 		},
 	}, nil
 }
@@ -62,10 +67,17 @@ const (
 // approveLevel is set by Run() and used by permission functions.
 var currentApproveLevel ApproveLevel
 
+// installSkills is set by Run(): --skills was passed.
+var installSkills bool
+
 // Run executes the install command.
 // If target is empty, registers with all detected agents.
-func Run(target string, level ApproveLevel) error {
+// withSkills also installs the shipped agent skills. They are opt-in because a
+// skill's description is loaded into every session of that agent, a cost only
+// users who do that kind of work should pay.
+func Run(target string, level ApproveLevel, withSkills bool) error {
 	currentApproveLevel = level
+	installSkills = withSkills
 	agents, err := getAgents()
 	if err != nil {
 		return err
@@ -110,7 +122,9 @@ func Run(target string, level ApproveLevel) error {
 }
 
 // Uninstall removes agent-tool from the specified agent (or all agents).
-func Uninstall(target string) error {
+// keepSkills leaves installed skills in place; reinstall uses it so that the
+// following Run refreshes them instead of silently dropping them.
+func Uninstall(target string, keepSkills bool) error {
 	agents, err := getAgents()
 	if err != nil {
 		return err
@@ -121,7 +135,7 @@ func Uninstall(target string) error {
 		if !ok {
 			return fmt.Errorf("unknown agent: %s (supported: claude, cursor, windsurf, codex)", target)
 		}
-		return uninstallFromAgent(agent)
+		return uninstallFromAgent(agent, keepSkills)
 	}
 
 	// Try to uninstall from all agents
@@ -130,7 +144,7 @@ func Uninstall(target string) error {
 		if _, err := os.Stat(agent.configPath); os.IsNotExist(err) {
 			continue
 		}
-		if err := uninstallFromAgent(agent); err != nil {
+		if err := uninstallFromAgent(agent, keepSkills); err != nil {
 			fmt.Fprintf(os.Stderr, "[%s] failed: %v\n", agent.name, err)
 		} else {
 			removed++
@@ -143,7 +157,16 @@ func Uninstall(target string) error {
 	return nil
 }
 
-func uninstallFromAgent(agent agentConfig) error {
+func uninstallFromAgent(agent agentConfig, keepSkills bool) error {
+	if agent.skillsDir != "" && !keepSkills {
+		removed, err := skills.Remove(agent.skillsDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[%s] Failed to remove skills: %v\n", agent.name, err)
+		} else if len(removed) > 0 {
+			fmt.Printf("[%s] Skills removed: %s\n", agent.name, strings.Join(removed, ", "))
+		}
+	}
+
 	// Claude Code: try 'claude mcp remove' first
 	if agent.name == "Claude Code" {
 		removeClaudePermission()
@@ -264,6 +287,28 @@ func uninstallTOML(agent agentConfig) error {
 }
 
 func installForAgent(agent agentConfig, exePath string) error {
+	if err := registerAgent(agent, exePath); err != nil {
+		return err
+	}
+	if agent.skillsDir == "" {
+		return nil
+	}
+	// Skills already present are refreshed on every install so they stay in
+	// step with the binary they describe.
+	if !installSkills && !skills.Present(agent.skillsDir) {
+		fmt.Printf("[%s] Optional skills not installed (%s). Add --skills to install them.\n", agent.name, strings.Join(skills.Names(), ", "))
+		return nil
+	}
+	names, err := skills.Install(agent.skillsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[%s] Failed to install skills: %v\n", agent.name, err)
+		return nil
+	}
+	fmt.Printf("[%s] Skills installed in %s: %s\n", agent.name, agent.skillsDir, strings.Join(names, ", "))
+	return nil
+}
+
+func registerAgent(agent agentConfig, exePath string) error {
 	// Claude Code: try 'claude mcp add' first (supports both CLI and VSCode extension)
 	if agent.name == "Claude Code" {
 		if err := installClaudeMCPAdd(exePath); err == nil {

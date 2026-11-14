@@ -19,7 +19,8 @@ const (
 
 // CodeGraphInput defines parameters for the codegraph tool.
 type CodeGraphInput struct {
-	Operation      string      `json:"operation" jsonschema:"Operation: index, find, callers, callees, symbols, methods, inherits, stats, importers, unused, call_tree,required"`
+	Operation      string      `json:"operation,omitempty" jsonschema:"Operation (required): index, find, callers, callees, symbols, methods, inherits, stats, importers, unused, call_tree"`
+	Op             string      `json:"op,omitempty" jsonschema:"Alias for operation"`
 	Path           string      `json:"path,omitempty" jsonschema:"Project/file path. Relative paths use workspace/MCP root"`
 	Roots          []string    `json:"roots,omitempty" jsonschema:"Optional source roots for one workspace index. When set, path stores the shared .codegraph.db and only these roots are scanned"`
 	Name           string      `json:"name,omitempty" jsonschema:"Symbol name to search for (for find, callers, callees, methods, inherits, call_tree)"`
@@ -53,6 +54,11 @@ var validOperations = map[string]bool{
 
 // Handle dispatches to the appropriate codegraph operation.
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input CodeGraphInput) (*mcp.CallToolResult, CodeGraphOutput, error) {
+	// The built-in help taught op= for many releases, so agents still send it;
+	// the schema rejects unknown fields, which made every such call fail.
+	if input.Operation == "" {
+		input.Operation = input.Op
+	}
 	op := strings.ToLower(strings.TrimSpace(input.Operation))
 	allOps := "index, find, callers, callees, symbols, methods, inherits, stats, importers, unused, call_tree"
 	if op == "" {
@@ -139,12 +145,7 @@ func normalizeCodeGraphLimits(input *CodeGraphInput) error {
 func Register(server *mcp.Server) {
 	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name: "codegraph",
-		Description: `Fully embedded semantic code graph and symbol lookup tool.
-Parses Go with the standard library AST and other languages with lazy compressed
-tree-sitter WASM. No compiler, language server, or external binary is required.
-Stores stable declaration/definition identities, return/receiver data flow,
-aliases, transitive includes, build conditions, calibrated candidate evidence,
-dynamic dispatch, and calls in a local SQLite index (.codegraph.db).
+		Description: `Semantic code graph and symbol lookup over a local index. No compiler or language server is needed.
 Operations:
   index(path, roots?) - Build/update one project or a multi-root workspace index.
   find(name) - Find symbol definitions by name (function, class, method).
@@ -158,13 +159,10 @@ Operations:
   unused(path) - Find symbols defined but never called (dead code).
   call_tree(name, depth, direction) - Recursive call hierarchy (up=callers, down=callees).
 Supports: C/C++, Python, Go, C#, Rust, Java.
-Index is stored at project root as .codegraph.db (add to .gitignore).
+The index is .codegraph.db at the project root (add it to .gitignore).
 Respects .gitignore (including nested) and skips non-source dirs (venv, vendor, third_party, etc.).
-No LLM calls, no embeddings -- pure data lookup, zero token cost.
-Tip: Run index once at the start of a session, then use find/callers/call_tree to navigate.
-Large symbols/callees results are bounded by max_output_chars and include the next offset.
-Re-run index after bulk edits to update changed files (incremental, fast).
-Powered by Go's standard parser and tree-sitter (MIT) via wazero.`,
+Run index once at the start of a session, then find/callers/call_tree; re-run it after bulk edits (incremental).
+Large symbols/callees results are bounded by max_output_chars and include the next offset.`,
 	}, Handle)
 }
 

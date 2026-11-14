@@ -258,8 +258,7 @@ func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name: "redis",
 		Description: `Execute Redis commands on a Redis server.
-Supports all Redis commands (GET, SET, HGETALL, LPUSH, etc.).
-Results are formatted by type: strings, integers, arrays, and nil values.
+Any command: pass its name in command and the rest in args.
 Connection is closed after each call (no session pooling).
 Supports verified TLS encryption for secure connections.
 Defaults: 200 characters per value and 32768 total output characters.

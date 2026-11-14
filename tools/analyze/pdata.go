@@ -260,8 +260,20 @@ func opFunctionAt(input AnalyzeInput) (string, error) {
 	}
 
 	entry := entries[idx]
+	leaf := false
 	if queryRVA < entry.BeginAddress || queryRVA >= entry.EndAddress {
-		// Not inside this function -- provide nearest entries and actionable guidance
+		// x64 leaf functions have no unwind data, so .pdata misses them; the
+		// call-graph table (which xref names functions from) has them.
+		if cg, cgErr := cgOpenBinaryPDB(input.FilePath, false); cgErr == nil {
+			fn := findFunc(cg.funcTable, queryRVA)
+			cg.closer()
+			if fn != nil && !fn.exact && queryRVA < fn.end {
+				entry, leaf = runtimeFunction{BeginAddress: fn.entry(), EndAddress: fn.end}, true
+			}
+		}
+	}
+	if !leaf && (queryRVA < entry.BeginAddress || queryRVA >= entry.EndAddress) {
+		// Not inside any function -- provide nearest entries and actionable guidance
 		msg := fmt.Sprintf("address 0x%x is between .pdata functions", va)
 		msg += fmt.Sprintf(" (prev: 0x%x-0x%x",
 			imageBase+uint64(entry.BeginAddress), imageBase+uint64(entry.EndAddress))
@@ -287,11 +299,20 @@ func opFunctionAt(input AnalyzeInput) (string, error) {
 	sb.WriteString(fmt.Sprintf("  Start:  0x%x (RVA: 0x%x)\n", funcStartVA, entry.BeginAddress))
 	sb.WriteString(fmt.Sprintf("  End:    0x%x (RVA: 0x%x)\n", funcEndVA, entry.EndAddress))
 	sb.WriteString(fmt.Sprintf("  Size:   %d bytes\n", funcSize))
-	sb.WriteString(fmt.Sprintf("  Unwind: RVA 0x%x\n", entry.UnwindData))
-	sb.WriteString(fmt.Sprintf("  .pdata: %d total entries\n", len(entries)))
-	// .pdata bounds come from the Exception Table -- authoritative, not guessed.
-	sb.WriteString("  start_source: pdata\n")
-	sb.WriteString("  confidence:   exact\n")
+	if leaf {
+		// The start is where control flow of the previous body ended and
+		// padding stopped; the end is the next function's start, so it can
+		// include trailing padding.
+		sb.WriteString("  Note:   leaf function without unwind data; End is the next function's start and may include padding\n")
+		sb.WriteString("  start_source: layout\n")
+		sb.WriteString("  confidence:   high\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("  Unwind: RVA 0x%x\n", entry.UnwindData))
+		sb.WriteString(fmt.Sprintf("  .pdata: %d total entries\n", len(entries)))
+		// .pdata bounds come from the Exception Table -- authoritative, not guessed.
+		sb.WriteString("  start_source: pdata\n")
+		sb.WriteString("  confidence:   exact\n")
+	}
 
 	// Auto-disassemble the function
 	count := input.Count
@@ -311,6 +332,10 @@ func opFunctionAt(input AnalyzeInput) (string, error) {
 			Mode:     64,
 			Arch:     "x86",
 			VA:       fmt.Sprintf("0x%x", funcStartVA),
+		}
+		if leaf {
+			// No .pdata extent bounds the disassembly of a leaf function.
+			disasmInput.StopAtRet = true
 		}
 
 		disasm, disErr := opDisassemble(disasmInput)

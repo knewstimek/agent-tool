@@ -5,6 +5,7 @@ import (
 	"debug/pe"
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -130,7 +131,7 @@ func opPEInfo(input AnalyzeInput) (string, error) {
 	}
 
 	// Imports with IAT VA -- parse Import Directory for per-function IAT slot addresses
-	parseImportsWithIAT(f, imageBase, &sb, input.ResultOffset, input.MaxResults, input.MaxOutputChars)
+	parseImportsWithIAT(f, imageBase, &sb, input.ResultOffset, input.MaxResults, input.MaxOutputChars, input.FilePath)
 
 	// Exports (manually parse export directory for DLLs)
 	exports := parseExports(f)
@@ -152,7 +153,7 @@ func opPEInfo(input AnalyzeInput) (string, error) {
 	}
 
 	// Delay imports -- DLLs loaded on first call, not at startup
-	parseDelayImports(f, &sb)
+	parseDelayImports(f, &sb, input.FilePath)
 
 	// TLS callbacks -- code that runs before main(), often used for anti-debug
 	parseTLSCallbacks(f, imageBase, &sb)
@@ -855,76 +856,45 @@ func peSubsystemName(ss uint16) string {
 	return fmt.Sprintf("0x%x", ss)
 }
 
-// parseDelayImports extracts delay-loaded DLL names from DataDirectory[13].
-// Delay imports are resolved on first call rather than at load time.
-func parseDelayImports(f *pe.File, sb *strings.Builder) {
-	var delayDir pe.DataDirectory
-	switch oh := f.OptionalHeader.(type) {
-	case *pe.OptionalHeader32:
-		if len(oh.DataDirectory) > 13 {
-			delayDir = oh.DataDirectory[13]
-		}
-	case *pe.OptionalHeader64:
-		if len(oh.DataDirectory) > 13 {
-			delayDir = oh.DataDirectory[13]
+// parseDelayImports lists delay-loaded functions with their IAT slot VAs:
+// code calls those slots like any import, and xref needs the slot.
+func parseDelayImports(f *pe.File, sb *strings.Builder, binPath string) {
+	type slot struct {
+		va   uint64
+		name string
+	}
+	byDLL := map[string][]slot{}
+	total := 0
+	for va, ref := range peImports(f, peImageBase(f), binPath) {
+		if ref.delay {
+			byDLL[ref.dll] = append(byDLL[ref.dll], slot{va, ref.display()})
+			total++
 		}
 	}
-
-	if delayDir.VirtualAddress == 0 || delayDir.Size == 0 {
+	if total == 0 {
 		return
 	}
-
-	// Find section containing delay import directory
-	var sec *pe.Section
-	for _, s := range f.Sections {
-		if delayDir.VirtualAddress >= s.VirtualAddress &&
-			delayDir.VirtualAddress < s.VirtualAddress+s.VirtualSize {
-			sec = s
-			break
-		}
+	dlls := make([]string, 0, len(byDLL))
+	for dll, slots := range byDLL {
+		sort.Slice(slots, func(i, j int) bool { return slots[i].va < slots[j].va })
+		dlls = append(dlls, dll)
 	}
-	if sec == nil {
-		return
-	}
+	// Directory order is lost in the map; slot order is stable and close to it.
+	sort.Slice(dlls, func(i, j int) bool { return byDLL[dlls[i]][0].va < byDLL[dlls[j]][0].va })
 
-	secData, err := sec.Data()
-	if err != nil {
-		return
-	}
-
-	dirOff := delayDir.VirtualAddress - sec.VirtualAddress
-
-	// Each ImgDelayDescr is 32 bytes, terminated by all-zero entry
-	var dlls []string
-	for i := 0; i < 100; i++ { // safety limit
-		off := int(dirOff) + i*32
-		if off+32 > len(secData) {
-			break
-		}
-
-		// grAttrs at offset 0, rvaDLLName at offset 4
-		attrs := binary.LittleEndian.Uint32(secData[off:])
-		dllNameRVA := binary.LittleEndian.Uint32(secData[off+4:])
-
-		// All-zero entry terminates the list
-		if attrs == 0 && dllNameRVA == 0 {
-			break
-		}
-
-		// Read DLL name (RVA to string)
-		dllName := readPEString(f, dllNameRVA)
-		if dllName == "" {
-			dllName = fmt.Sprintf("(RVA: 0x%x)", dllNameRVA)
-		}
-		dlls = append(dlls, dllName)
-	}
-
-	if len(dlls) == 0 {
-		return
-	}
-	sb.WriteString(fmt.Sprintf("\nDelay Imports (%d DLLs):\n", len(dlls)))
+	// Large SDKs are delay-loaded by the thousand; the rest resolve by name.
+	const perDLL = 30
+	fmt.Fprintf(sb, "\nDelay Imports (%d DLLs, %d functions; bound on first call):\n", len(dlls), total)
 	for _, dll := range dlls {
-		sb.WriteString(fmt.Sprintf("  %s\n", dll))
+		slots := byDLL[dll]
+		fmt.Fprintf(sb, "  %s (%d)\n", dll, len(slots))
+		for i, s := range slots {
+			if i == perDLL {
+				fmt.Fprintf(sb, "    ... %d more; pass a function name as xref target_va to find its slot and callers\n", len(slots)-perDLL)
+				break
+			}
+			fmt.Fprintf(sb, "    0x%x  %s\n", s.va, s.name)
+		}
 	}
 }
 
@@ -1140,7 +1110,7 @@ func fileOffsetToRVA(f *pe.File, fileOff uint32) (uint32, bool) {
 // parseImportsWithIAT parses the Import Directory to show per-function IAT slot VAs.
 // IAT VAs are what FF 15/25 [rip+disp32] instructions reference, making them
 // essential for xref cross-referencing.
-func parseImportsWithIAT(f *pe.File, imageBase uint64, sb *strings.Builder, resultOffset, maxResults, maxOutputChars int) {
+func parseImportsWithIAT(f *pe.File, imageBase uint64, sb *strings.Builder, resultOffset, maxResults, maxOutputChars int, binPath string) {
 	// opPEInfo is also exercised directly by package tests, so retain safe
 	// defaults even when the MCP handler's normalization was bypassed.
 	if maxResults <= 0 {
@@ -1301,6 +1271,9 @@ func parseImportsWithIAT(f *pe.File, imageBase uint64, sb *strings.Builder, resu
 			}
 			if thunkVal&ordinalFlag != 0 {
 				funcName = fmt.Sprintf("Ordinal_%d", thunkVal&0xFFFF)
+				if n := importOrdinalName(binPath, f.FileHeader.Machine, dll.name, uint32(thunkVal&0xFFFF)); n != "" {
+					funcName = fmt.Sprintf("%s (ordinal %d)", n, thunkVal&0xFFFF)
+				}
 			} else {
 				// IMAGE_IMPORT_BY_NAME: 2-byte hint + name string
 				nameRVA := uint32(thunkVal)
@@ -1359,6 +1332,7 @@ type importRef struct {
 	dll     string
 	name    string
 	ordinal uint32
+	delay   bool // imported through the delay-load directory
 }
 
 func (r importRef) display() string {
@@ -1368,8 +1342,10 @@ func (r importRef) display() string {
 	return fmt.Sprintf("Ordinal_%d", r.ordinal)
 }
 
-// peImports maps each IAT slot VA to the function imported into it.
-func peImports(f *pe.File, imageBase uint64) map[uint64]importRef {
+// peImports maps each IAT slot VA to the function imported into it, from the
+// import directory and the delay-load directory (both are called the same
+// way). With binPath, an import by ordinal is named from its DLL's exports.
+func peImports(f *pe.File, imageBase uint64, binPath string) map[uint64]importRef {
 	secCache := map[*pe.Section][]byte{}
 	out := make(map[uint64]importRef)
 
@@ -1378,74 +1354,47 @@ func peImports(f *pe.File, imageBase uint64) map[uint64]importRef {
 		is64 = true
 	}
 	ptrSize := uint32(4)
+	ordFlag := uint64(1) << 31
 	if is64 {
 		ptrSize = 8
+		ordFlag = uint64(1) << 63
 	}
 
-	var importDir pe.DataDirectory
-	switch oh := f.OptionalHeader.(type) {
-	case *pe.OptionalHeader32:
-		if len(oh.DataDirectory) > 1 {
-			importDir = oh.DataDirectory[1]
-		}
-	case *pe.OptionalHeader64:
-		if len(oh.DataDirectory) > 1 {
-			importDir = oh.DataDirectory[1]
-		}
-	}
-	if importDir.VirtualAddress == 0 || importDir.Size == 0 {
-		return out
-	}
-	var sec *pe.Section
-	for _, s := range f.Sections {
-		if importDir.VirtualAddress >= s.VirtualAddress &&
-			importDir.VirtualAddress < s.VirtualAddress+s.VirtualSize {
-			sec = s
-			break
-		}
-	}
-	if sec == nil {
-		return out
-	}
-	secData, err := sec.Data()
-	if err != nil {
-		return out
-	}
-	dirOff := importDir.VirtualAddress - sec.VirtualAddress
-	for i := 0; i < 500; i++ {
-		off := int(dirOff) + i*20
-		if off+20 > len(secData) {
-			break
-		}
-		origThunk := binary.LittleEndian.Uint32(secData[off:])
-		nameRVA := binary.LittleEndian.Uint32(secData[off+12:])
-		firstThunk := binary.LittleEndian.Uint32(secData[off+16:])
-		if origThunk == 0 && nameRVA == 0 && firstThunk == 0 {
-			break
-		}
-		dll := readPEString(f, nameRVA)
-		lookupThunk := origThunk
-		if lookupThunk == 0 {
-			lookupThunk = firstThunk
-		}
-		// Read thunk array (section data cached: one read per section,
-		// not per imported DLL)
-		var thunkData []byte
+	// at returns the file bytes from rva to the end of its section (section
+	// data cached: one read per section, not per imported DLL).
+	at := func(rva uint32) []byte {
 		for _, s := range f.Sections {
-			if lookupThunk >= s.VirtualAddress &&
-				lookupThunk < s.VirtualAddress+s.VirtualSize {
+			if rva >= s.VirtualAddress && rva < s.VirtualAddress+s.VirtualSize {
 				sd, ok := secCache[s]
 				if !ok {
 					sd, _ = s.Data()
 					secCache[s] = sd
 				}
-				if off := lookupThunk - s.VirtualAddress; int(off) < len(sd) {
-					thunkData = sd[off:]
+				if off := rva - s.VirtualAddress; int(off) < len(sd) {
+					return sd[off:]
 				}
-				break
+				return nil
 			}
 		}
-		iatRVA := firstThunk
+		return nil
+	}
+	dataDir := func(index int) []byte {
+		var dirs []pe.DataDirectory
+		switch oh := f.OptionalHeader.(type) {
+		case *pe.OptionalHeader32:
+			dirs = oh.DataDirectory[:]
+		case *pe.OptionalHeader64:
+			dirs = oh.DataDirectory[:]
+		}
+		if index >= len(dirs) || dirs[index].VirtualAddress == 0 || dirs[index].Size == 0 {
+			return nil
+		}
+		return at(dirs[index].VirtualAddress)
+	}
+	// walk assigns the names in the lookup table to the slots from iatRVA on;
+	// rebase turns name pointers stored as VAs into RVAs.
+	walk := func(dll string, lookupRVA, iatRVA, rebase uint32, delay bool) {
+		thunkData := at(lookupRVA)
 		for j := 0; len(thunkData) >= int(ptrSize) && j < 2000; j++ {
 			var tv uint64
 			if is64 {
@@ -1456,15 +1405,12 @@ func peImports(f *pe.File, imageBase uint64) map[uint64]importRef {
 			if tv == 0 {
 				break
 			}
-			ordFlag := uint64(1) << 63
-			if !is64 {
-				ordFlag = uint64(1) << 31
-			}
-			ref := importRef{dll: dll}
+			ref := importRef{dll: dll, delay: delay}
 			if tv&ordFlag != 0 {
 				ref.ordinal = uint32(tv & 0xFFFF)
+				ref.name = importOrdinalName(binPath, f.FileHeader.Machine, dll, ref.ordinal)
 			} else {
-				ref.name = readPEString(f, uint32(tv)+2)
+				ref.name = readPEString(f, uint32(tv)-rebase+2)
 			}
 			if ref.name != "" || ref.ordinal != 0 {
 				out[imageBase+uint64(iatRVA)] = ref
@@ -1473,13 +1419,56 @@ func peImports(f *pe.File, imageBase uint64) map[uint64]importRef {
 			iatRVA += ptrSize
 		}
 	}
+
+	// Import directory: IMAGE_IMPORT_DESCRIPTOR, 20 bytes each.
+	if dir := dataDir(1); dir != nil {
+		for i := 0; i < 500 && (i+1)*20 <= len(dir); i++ {
+			d := dir[i*20:]
+			origThunk := binary.LittleEndian.Uint32(d)
+			nameRVA := binary.LittleEndian.Uint32(d[12:])
+			firstThunk := binary.LittleEndian.Uint32(d[16:])
+			if origThunk == 0 && nameRVA == 0 && firstThunk == 0 {
+				break
+			}
+			lookupThunk := origThunk
+			if lookupThunk == 0 {
+				lookupThunk = firstThunk
+			}
+			walk(readPEString(f, nameRVA), lookupThunk, firstThunk, 0, false)
+		}
+	}
+
+	// Delay-load directory: ImgDelayDescr, 32 bytes each. Only its name table
+	// names the functions; the IAT holds delay-load thunk pointers until use.
+	if dir := dataDir(13); dir != nil {
+		for i := 0; i < 500 && (i+1)*32 <= len(dir); i++ {
+			d := dir[i*32:]
+			attrs := binary.LittleEndian.Uint32(d)
+			nameRVA := binary.LittleEndian.Uint32(d[4:])
+			iat := binary.LittleEndian.Uint32(d[12:])
+			nameTable := binary.LittleEndian.Uint32(d[16:])
+			if nameRVA == 0 && iat == 0 {
+				break
+			}
+			// Without dlattrRva (linkers before VC7, 32-bit only) every
+			// field is a VA.
+			rebase := uint32(0)
+			if attrs&1 == 0 {
+				rebase = uint32(imageBase)
+			}
+			if nameTable == 0 || iat == 0 {
+				continue
+			}
+			walk(readPEString(f, nameRVA-rebase), nameTable-rebase, iat-rebase, rebase, true)
+		}
+	}
 	return out
 }
 
-func peSymbolMap(f *pe.File, imageBase uint64) map[uint64]string {
+func peSymbolMap(f *pe.File, imageBase uint64, binPath string) map[uint64]string {
 	syms := make(map[uint64]string)
 	// Imports: map IAT slot VA -> function name
-	for va, ref := range peImports(f, imageBase) {
+	for va, ref := range peImports(f, imageBase, binPath) {
 		syms[va] = ref.display()
 	}
 

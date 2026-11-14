@@ -2,9 +2,7 @@ package analyze
 
 import (
 	"debug/pe"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,24 +66,12 @@ var dllImages sync.Map // resolved path -> *dllImage (nil when unusable)
 // pre-Windows 8 DLLs (kernel32), which forward to the set again.
 func dllCandidates(dir, dll string) []*dllImage {
 	lower := strings.ToLower(dll)
-	if !strings.HasSuffix(lower, ".dll") {
-		lower += ".dll"
-	}
-	var candidates []string
-	if dir != "" {
-		candidates = append(candidates, filepath.Join(dir, lower))
-	}
-	if runtime.GOOS == "windows" {
-		root := os.Getenv("SystemRoot")
-		if root == "" {
-			root = `C:\Windows`
-		}
-		sys32 := filepath.Join(root, "SysWOW64") // 32-bit DLLs on 64-bit Windows
-		if _, err := os.Stat(sys32); err != nil {
-			sys32 = filepath.Join(root, "System32")
-		}
-		candidates = append(candidates, filepath.Join(sys32, lower))
+	candidates := dllSearchPaths(dir, dll, 0x14c)
+	if sys32 := systemDLLDir(0x14c); sys32 != "" {
 		if strings.HasPrefix(lower, "api-ms-win-") || strings.HasPrefix(lower, "ext-ms-win-") {
+			if filepath.Ext(lower) == "" {
+				lower += ".dll"
+			}
 			impl := "kernelbase.dll"
 			if strings.HasPrefix(lower, "api-ms-win-crt-") {
 				impl = "ucrtbase.dll"
@@ -127,7 +113,9 @@ func readDLL32(path string) *dllImage {
 			img.forwards[e.rva] = readPEString(f, e.rva)
 		}
 	}
-	img.imports = peImports(f, img.imageBase)
+	// No path: only the names of this DLL's own imports are followed, and
+	// naming its ordinal imports would open further DLLs for nothing.
+	img.imports = peImports(f, img.imageBase, "")
 	for _, s := range f.Sections {
 		if s.Characteristics&0x20000000 != 0 {
 			if d, err := s.Data(); err == nil {

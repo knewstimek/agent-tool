@@ -217,7 +217,7 @@ func Register(server *mcp.Server) {
 		Name: "download",
 		Description: `Download a file from a URL and save it to disk.
 Supports binary and text files. For an API call or a page body inline, use httpreq.
-Features: ECH (Encrypted Client Hello) and DoH (DNS over HTTPS) enabled by default.
+ECH and DNS over HTTPS are on by default (no_ech / no_doh turn them off).
 Supports HTTP and SOCKS5 proxies. SSRF protection blocks private/internal IPs.
 Max download size: 100 MB (adjustable via max_size_mb, hard limit 2 GB).`,
 	}, Handle)

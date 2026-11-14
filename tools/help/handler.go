@@ -3,6 +3,7 @@ package help
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"agent-tool/common"
@@ -11,44 +12,132 @@ import (
 )
 
 type HelpInput struct {
-	Topic string `json:"topic,omitempty" jsonschema:"Help topic. Available: overview, encoding, indentation, tools, debug, analyze, memtool, wintool, codegraph, troubleshooting. Empty = overview"`
+	Topic string `json:"topic,omitempty" jsonschema:"Help topic: overview (default), encoding, indentation, tools, debug, analyze, memtool, wintool, codegraph, troubleshooting. tools and analyze return an index; append /section for detail, e.g. analyze/decompile or tools/ssh,sftp"`
 }
 
 type HelpOutput struct {
 	Content string `json:"content"`
 }
 
-func Handle(ctx context.Context, req *mcp.CallToolRequest, input HelpInput) (*mcp.CallToolResult, HelpOutput, error) {
-	topic := strings.ToLower(strings.TrimSpace(input.Topic))
-	if topic == "" {
-		topic = "overview"
+// topic is one help document. Text before the first "## " heading is its intro;
+// each "## " heading opens a section that can be requested alone as
+// "<topic>/<heading>" (a heading "a / b" answers to either name).
+type topic struct {
+	names []string // names[0] is canonical, the rest are aliases
+	doc   func() string
+	// indexed topics answer a bare request with the intro plus one summary line
+	// per section. A reference that covers many independent tools/operations
+	// costs thousands of tokens whole, while the caller needs one part of it.
+	indexed bool
+}
+
+var topics = []topic{
+	{names: []string{"overview"}, doc: helpOverview},
+	{names: []string{"encoding"}, doc: helpEncoding},
+	{names: []string{"indentation", "indent"}, doc: helpIndentation},
+	{names: []string{"tools"}, doc: helpTools, indexed: true},
+	{names: []string{"debug", "debugger", "dap"}, doc: helpDebug},
+	{names: []string{"analyze", "binary", "disassemble", "pe"}, doc: helpAnalyze, indexed: true},
+	{names: []string{"memtool", "memscan", "memory", "scan"}, doc: helpMemtool},
+	{names: []string{"wintool", "window", "win", "gui"}, doc: helpWintool},
+	{names: []string{"codegraph", "code-graph", "graph", "ast"}, doc: helpCodegraph},
+	{names: []string{"troubleshooting", "trouble"}, doc: helpTroubleshooting},
+}
+
+type section struct {
+	heading string
+	body    string
+}
+
+func (s section) names() []string {
+	names := strings.Split(strings.ToLower(s.heading), " / ")
+	for i := range names {
+		names[i] = strings.TrimSpace(names[i])
+	}
+	return names
+}
+
+func splitSections(doc string) (intro string, sections []section) {
+	parts := strings.Split(doc, "\n## ")
+	for _, p := range parts[1:] {
+		heading, body, _ := strings.Cut(p, "\n")
+		sections = append(sections, section{strings.TrimSpace(heading), strings.Trim(body, "\n")})
+	}
+	return strings.TrimRight(parts[0], "\n"), sections
+}
+
+// render returns the whole document, its index, or the requested sections.
+// want is the comma-separated part after "<topic>/", already lowercased.
+func render(t topic, want string) string {
+	doc := t.doc()
+	var wanted []string
+	for _, name := range strings.Split(want, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			wanted = append(wanted, name)
+		}
+	}
+	if len(wanted) == 0 && !t.indexed {
+		return doc
 	}
 
-	text := ""
-	switch topic {
-	case "overview":
-		text = helpOverview()
-	case "encoding":
-		text = helpEncoding()
-	case "indentation", "indent":
-		text = helpIndentation()
-	case "tools":
-		text = helpTools()
-	case "debug", "debugger", "dap":
-		text = helpDebug()
-	case "analyze", "binary", "disassemble", "pe":
-		text = helpAnalyze()
-	case "memtool", "memscan", "memory", "scan":
-		text = helpMemtool()
-	case "wintool", "window", "win", "gui":
-		text = helpWintool()
-	case "codegraph", "code-graph", "graph", "ast":
-		text = helpCodegraph()
-	case "troubleshooting", "trouble":
-		text = helpTroubleshooting()
-	default:
-		text = "Unknown topic: " + topic + "\n\n" +
-			"Available topics: overview, encoding, indentation, tools, debug, analyze, memtool, wintool, codegraph, troubleshooting"
+	intro, sections := splitSections(doc)
+	var b strings.Builder
+	if len(wanted) == 0 {
+		b.WriteString(intro)
+		b.WriteString("\n\n## Sections\n")
+		for _, s := range sections {
+			summary, _, _ := strings.Cut(s.body, "\n")
+			fmt.Fprintf(&b, "- %s: %s\n", s.heading, summary)
+		}
+		fmt.Fprintf(&b, "\nFull text of a section: agent_tool_help(topic=\"%[1]s/<section>\"); several at once: topic=\"%[1]s/a,b\".", t.names[0])
+		return b.String()
+	}
+
+	shown := make([]bool, len(sections))
+	var unknown []string
+	for _, name := range wanted {
+		found := false
+		for i, s := range sections {
+			if !slices.Contains(s.names(), name) {
+				continue
+			}
+			found = true
+			if !shown[i] {
+				shown[i] = true
+				fmt.Fprintf(&b, "## %s\n%s\n\n", s.heading, s.body)
+			}
+		}
+		if !found {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		var available []string
+		for _, s := range sections {
+			available = append(available, s.names()...)
+		}
+		fmt.Fprintf(&b, "No section named %s in topic %q. Available: %s",
+			strings.Join(unknown, ", "), t.names[0], strings.Join(available, ", "))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func Handle(ctx context.Context, req *mcp.CallToolRequest, input HelpInput) (*mcp.CallToolResult, HelpOutput, error) {
+	name, want, _ := strings.Cut(strings.ToLower(strings.TrimSpace(input.Topic)), "/")
+	if name = strings.TrimSpace(name); name == "" {
+		name = "overview"
+	}
+
+	var text string
+	if i := slices.IndexFunc(topics, func(t topic) bool { return slices.Contains(t.names, name) }); i >= 0 {
+		text = render(topics[i], want)
+	} else {
+		var available []string
+		for _, t := range topics {
+			available = append(available, t.names[0])
+		}
+		text = "Unknown topic: " + name + "\n\n" +
+			"Available topics: " + strings.Join(available, ", ")
 	}
 
 	return &mcp.CallToolResult{
@@ -61,12 +150,13 @@ func Register(server *mcp.Server) {
 		Name: "agent_tool_help",
 		Description: `Returns usage guide for agent-tool.
 Call this when you encounter encoding warnings, garbled text, or need to understand agent-tool features.
-Topics: overview, encoding, indentation, tools, debug, analyze, troubleshooting.`,
+Topics: overview, encoding, indentation, tools, debug, analyze, memtool, wintool, codegraph, troubleshooting.
+tools and analyze return a short index; request one part with topic="analyze/decompile" or topic="tools/ssh,sftp".`,
 	}, Handle)
 }
 
 func helpOverview() string {
-	return `# agent-tool — MCP Tool Server for AI Coding Agents
+	return `# agent-tool -- MCP Tool Server for AI Coding Agents
 
 agent-tool provides encoding-aware and indentation-aware file tools.
 It auto-detects file encoding and indentation style, preserving them across edits.
@@ -92,7 +182,7 @@ directory_alias (through toolbox) registers session-only @name/subpath reference
 - grep: Encoding-aware regex content search
 - glob: File pattern matching with ** recursive support
 - listdir: Bounded/pageable directory listing with type, name, and counts-only filters
-- convert_encoding: Convert file encoding (EUC-KR/CP949 ↔ UTF-8, BOM, GBK/GB18030, etc.)
+- convert_encoding: Convert file encoding (EUC-KR/CP949 <-> UTF-8, BOM, GBK/GB18030, etc.)
 - checksum: Compute file hash (md5, sha1, sha256)
 - file_info: File metadata (size, encoding, mixed line-ending counts, indentation, line count)
 - diff: Compare two files (unified diff output)
@@ -114,11 +204,11 @@ directory_alias (through toolbox) registers session-only @name/subpath reference
 - regexreplace: Regex find-and-replace across files or directories (capture groups, encoding-aware, dry_run)
 - query: Read one value from a JSON/YAML/TOML file by dot-notation path (format from extension; saves tokens)
 - netcheck: Network diagnostics: external_ip, dns (A/AAAA/MX/CNAME/TXT/NS/SOA, DoH), tls (certificate expiry, issuer, SANs, protocol, cipher), port (TCP open/closed)
-- mysql: Execute MySQL/MariaDB queries (SELECT → table format, DML → affected rows)
+- mysql: Execute MySQL/MariaDB queries (SELECT -> table format, DML -> affected rows)
 - redis: Execute Redis commands (any command, result formatting)
 - sloc: Count source lines of code (SLOC) with per-language summary
 - debug: Interactive debugger via DAP (breakpoints, stepping, variables, stack traces)
-- analyze: Static binary analysis (29 operations: SQLite user annotations (annotation_set/list/delete/batch/suggest), decompile to C (x86/x64 PE/ELF), type_info (PDB/DWARF types), disassemble, semantic instruction search/value tracing, PE/ELF/Mach-O parsing, imphash, Rich header, resources, DWARF, strings, hexdump, pattern search, entropy, overlay, binary diff, xref, function_at, call_graph, follow_ptr, rtti_dump, struct_layout, vtable_scan)
+- analyze: Static binary analysis of PE/ELF/Mach-O: decompile to C, disassemble, xref, call graph, headers, strings, saved annotations (topic='analyze' lists all 29 operations)
 - set_config: Change runtime settings (encoding, file size, SSRF policy, DoH/ECH toggle)
 - directory_alias: Set/list/delete session directory aliases; local workspace or remote connection scope
 - agent_tool_help: This help tool
@@ -142,11 +232,8 @@ Priority order:
 2. Per-call encoding override (read/multiread/edit/multiedit/write/patch/file_info), then inherited .editorconfig 'charset'
 3. BOM-less UTF-16 (detected from NUL-byte layout; chardet does not report it)
 4. Valid UTF-8 -- verified, not guessed, so it outranks chardet and never warns
-5. chardet auto-detection (confidence >= 50%; up to 64 KiB after the ASCII preamble)
+5. chardet auto-detection (confidence >= 50%)
 6. Fallback encoding (currently: ` + common.GetFallbackEncoding() + `)
-
-Step 4 matters for plain ASCII: chardet cannot tell it from Latin-1 and reports
-~11-33% confidence, which would otherwise warn on most files in a typical repo.
 
 ## Retry a file without changing project settings
 Pass encoding="EUC-KR", encoding="CP949", or encoding="Shift_JIS" to
@@ -182,9 +269,9 @@ UTF-8, UTF-8 BOM, EUC-KR, Shift_JIS, ISO-8859-1, UTF-16BE, UTF-16LE, and more.
 - "Encoding detection failed (low confidence)": chardet couldn't identify the encoding.
   The file is not valid UTF-8 either, so this one is real -- short non-UTF-8
   files are the common case, since chardet needs a decent sample.
-  → Add charset to .editorconfig or set --fallback-encoding.
+  -> Add charset to .editorconfig or set --fallback-encoding.
 - "Encoding detected as X (confidence: N%)": chardet is unsure about the result.
-  → If text looks correct, no action needed. If garbled, add charset to .editorconfig.
+  -> If text looks correct, no action needed. If garbled, add charset to .editorconfig.
 
 ## Disabling warnings
 To suppress encoding warning messages:
@@ -202,30 +289,16 @@ Priority order:
 
 ## Smart indentation conversion
 LLMs typically output spaces. agent-tool auto-converts to match the file's style:
-- Spaces → Tabs (when file uses tabs)
-- Tabs → Spaces (when file uses spaces)
-- Spaces 2 → Spaces 4 (different indent sizes)
-- Unique line and block matches use actual local indentation and prefix mappings,
-  preserving minority styles, alignment and indented blank lines. Block nesting
-  must agree; a different nesting shape is not silently reinterpreted
-- Lexical block-opening evidence takes priority over raw indent/dedent frequencies.
-  Common comments, strings/raw/triple-quoted literals and bracketed continuations
-  do not supply structural width votes. Inconclusive scans retain the old fallback
-- Unique-anchor recovery uses nearest block-width evidence within 32 lines/16 KiB
-  for new space-indented levels. Lexical state is scanned from the file start within
-  the 8 MiB sample; anchors beyond it keep the fallback. This is a heuristic, not a
-  language parser. Direct exact matches and explicit styles keep their behavior
-- C++/header and Python recovery lazily reuse embedded Tree-sitter WASM: direct
-  statements in the actual enclosing block supply space-width evidence. No CGO,
-  external compiler/Python installation or index is needed
-- Successfully parsed replacement snippets preserve actual inline-token column
-  alignment and multiline literal/comment interiors; hanging indentation keeps
-  level rescaling even when the first argument appears on the opener's line
-- Syntax assistance falls back on errors/inconclusive blocks/timeouts or sources
-  over 8 MiB. Each parse has a 2-second budget; snippets are limited to 64 KiB/512
-  lines. A syntax tree is not a semantic-equivalence guarantee
-- Frequency ties prefer the smaller observed unit. Equally plausible depth matches
-  need more context
+- Spaces -> Tabs (when file uses tabs)
+- Tabs -> Spaces (when file uses spaces)
+- Spaces 2 -> Spaces 4 (different indent sizes)
+- The style around the match wins over the file's majority style, so a block
+  indented differently from the rest of the file keeps its own style, alignment
+  and indented blank lines
+- Column alignment inside a line and the interior of multi-line strings/comments
+  in new_string are kept as written
+- The nesting of old_string must agree with the file. When several depths fit
+  equally well, add surrounding lines to old_string or pass indent_style
 
 ## Explicit override
 The edit tool supports an 'indent_style' parameter:
@@ -250,6 +323,9 @@ The edit tool supports an 'indent_style' parameter:
 
 func helpTools() string {
 	return `# Tool Reference
+
+memtool, wintool and codegraph have their own topics; analyze and debug have
+longer guides under topic="analyze" and topic="debug".
 
 ## edit
 Replace text in a file with smart indentation and encoding preservation.
@@ -315,8 +391,8 @@ output_format (compact default or classic), context, before, after,
 max_line_chars, max_output_chars, cursor, relative_paths, include_hidden, include_ignored
 
 ## glob
-Find files by pattern. Supports ** for recursive matching. Results are sorted and
-paged with limit/next_cursor; has_more and truncation are never silent. Root
+Find files by glob pattern; ** matches recursively.
+Results are sorted and paged with limit/next_cursor; has_more and truncation are never silent. Root
 .gitignore/.ignore matches and generated/hidden paths are skipped by default.
 Parameters: pattern, path, relative_paths, limit, max_output_chars, cursor,
 include_hidden, include_ignored
@@ -369,8 +445,8 @@ take the ending of the line they replace.
 Parameters: file_path, patch, dry_run, encoding, expected_hash
 
 ## delete
-Delete one file/directory, or up to 100 targets with file_paths. Do not combine
-file_paths with file_path/path. Batch output aggregates successes, errors, file
+Delete one file/directory, or up to 100 targets with file_paths.
+Do not combine file_paths with file_path/path. Batch output aggregates successes, errors, file
 and directory counts, and bytes; at most 10 error details are shown.
 Directory deletion requires recursive=true.
 Recursive deletion is limited to 10,000 items and 100 directory levels. It
@@ -457,8 +533,8 @@ Non-zero remote exits return IsError=true. For long-running commands, use backgr
 	jump_key_file, jump_passphrase, connection_profile, connection_id, remote_root, remote_shell, quiet, echo_command, result_only
 
 ## ssh_key
-Convert a local SSH private-key file. Input is auto-detected as PPK, PEM, PKCS#8,
-or OpenSSH. Output formats: ppk (PuTTY PPK v3), pem (traditional key-specific PEM),
+Convert a local SSH private-key file between PPK, PEM, PKCS#8 and OpenSSH.
+The input format is auto-detected. Output formats: ppk (PuTTY PPK v3), pem (traditional key-specific PEM),
 openssh (modern OpenSSH), or pkcs8. RSA, ECDSA, Ed25519, and DSA are supported where
 the target format permits them. output_passphrase is supported for ppk and openssh;
 legacy encrypted PEM is intentionally not generated. The tool never returns key
@@ -468,13 +544,13 @@ Parameters: operation (convert), input_path, output_path, output_format,
 
 ## sftp
 Transfer files and manage remote filesystems over SSH (SFTP protocol).
-Reuses SSH session pool — same authentication, session reuse, and idle timeout (30 min) as ssh tool.
+Reuses SSH session pool -- same authentication, session reuse, and idle timeout (30 min) as ssh tool.
 remote_root (from profile, connection_id, or call) anchors relative remote_path,
 rename new_path and batch destinations. Generated path metadata is relative to
 the local workspace / remote root. Absolute outside paths keep their meaning;
 remote_root is a working directory, not a filesystem sandbox.
-	Sync operations: upload (local→remote), upload_many (up to 100 files over one session),
-	download (remote→local), ls, stat, mkdir, rm, chmod, rename.
+	Sync operations: upload (local->remote), upload_many (up to 100 files over one session),
+	download (remote->local), ls, stat, mkdir, rm, chmod, rename.
 Async operations: upload_async, download_async (returns transfer_id), status (check progress), cancel.
 Status/cancel is restricted to the originating MCP session; status rechecks current aliases and shows exact remote paths when aliases no longer match.
 Max transfer size: 2 GB. Recursive delete limited to 10,000 items. Dangerous paths (/, /home, /etc, etc.) protected.
@@ -507,7 +583,6 @@ Parameters: url, output_path, headers, overwrite, timeout_sec (default 60, max 6
 
 ## httpreq
 Execute HTTP requests with any method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS).
-Ideal for testing APIs, webhooks, and web services during development.
 ECH and DoH enabled by default. Cloud metadata SSRF protection. HTTP and SOCKS5 proxy support.
 DLP: POST/PUT/PATCH bodies are scanned for sensitive data (PEM keys, AWS keys, tokens, .env dumps) and blocked before transmission.
 Response body is truncated at max_response_kb. Binary responses show Content-Type and size only.
@@ -536,7 +611,7 @@ Parameters: source, destination, overwrite (default false), dry_run (default fal
 
 ## mkdir
 Create a directory. Creates parent directories by default (like mkdir -p).
-Supports permission mode in octal (e.g. 0755, 0700) — applied on Unix/Linux.
+Supports permission mode in octal (e.g. 0755, 0700) -- applied on Unix/Linux.
 Use dry_run=true to preview what would be created.
 Parameters: path, recursive (default true), mode (octal, default 0755), dry_run
 
@@ -586,12 +661,15 @@ Returns the value with its type; objects and arrays print as JSON, TOML datetime
 Parameters: file_path, query, format, max_output_chars
 
 ## netcheck
-Network diagnostics, one operation per call:
+Network diagnostics: external IP, DNS records, TLS certificate and TCP port checks.
+One operation per call:
 - external_ip: public IPv4 and IPv6 (several detection services with fallback)
 - dns: records for host; record_type A, AAAA, MX, CNAME, TXT, NS, SOA (default A);
   DNS over HTTPS by default (use_doh=false for the system resolver, doh_endpoint to override)
 - tls: certificate Subject, Issuer, NotBefore/NotAfter, days to expiry, SANs, TLS version, cipher
   for host:port (default 443, timeout_sec default 10, max 30)
+- port: whether TCP port on host is OPEN or CLOSED, with response time or the failure
+  (refused, timeout, DNS); port required, timeout_sec default 5, max 30
 Parameters: operation, host, record_type, use_doh, doh_endpoint, port, timeout_sec
 
 ## mysql
@@ -639,38 +717,8 @@ Parameters: session_id, operation, adapter_command, adapter_args, address, launc
   max_output_chars, variable_filter, start_module, module_count
 
 ## analyze
-Static binary analysis tool with 29 operations:
-- decompile: Decompile x86/x64 PE/ELF functions to C (Ghidra-equivalent Gosleigh core; va = hex address or symbol, up to 16 comma-separated; timeout_sec; a matching PDB or embedded DWARF supplies names, prototypes, types, globals and locals, and the structs/enums the C names follow each function; Go binaries use Go's ABI; pdb_path to override)
-- type_info: Print PDB/DWARF struct/class/union/enum definitions by name (type_name): members with offsets, bitfields, base classes, union alternatives, enum values
-- annotation_set/list/delete: SQLite user labels/comments; annotations_path selects a separate DB
-- disassemble: x86/x64/ARM/ARM64 disassembly (stop_at_ret for function-scoped; show_bytes adds the hex encoding column; in-code switch tables print as one data line), with saved user notes
-- instruction_search: Semantic x86/x64 mnemonic/register/immediate/displacement search with exhaustive executable-offset recovery, CFG confidence, function names, target/result filters, and bounded value tracing to call/tail-call arguments
-- pe_info: PE header parsing with RWX section warnings
-- elf_info: ELF header/sections/segments/symbols with RWX warnings
-- macho_info: Mach-O header/segments/sections/symbols (fat binary support)
-- strings: Extract printable strings (ASCII and UTF-8)
-- hexdump: Hex + ASCII dump of file regions
-- pattern_search: Hex byte pattern matching with ?? wildcards (shows section names)
-- entropy: Shannon entropy per section (detects packed/encrypted regions)
-- bin_diff: Two-file byte comparison
-- resource_info: PE resource directory and version info extraction
-- imphash: PE import hash (MD5) for malware classification
-- rich_header: PE Rich header -- build tool fingerprinting
-- overlay_detect: Detect data appended after last section
-- dwarf_info: DWARF debug info (compilation units, functions, types)
-- xref: Code and data references to an address/range, to the strings containing a text, or to a struct field; each located in its function (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
-- function_at: Find function boundaries (PDB procedure records when a matching PDB is present, else .pdata or heuristic)
-- call_graph: Static call graph from root function (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
-- follow_ptr: Follow pointer chain with symbol annotation (PE). Detects circular pointer references
-- rtti_dump: Parse MSVC RTTI from vtable (class name + base classes). Includes demangled class names, pSelf cross-validation for x64, and section data caching
-- struct_layout: Lay a debug type over image memory (PE): the PDB/DWARF global at va, or type_name over any va, member by member with values; without a type, pointer-sized slots with symbol annotations. type_info prints a type's definition
-- vtable_scan: Scan PE .rdata for all MSVC vtables with RTTI (auto-discovers C++ classes)
-Parameters: operation, file_path, offset, count, mode, arch (x86/arm),
-  base_addr, min_length, max_results, length, section, pattern, mnemonic,
-  register, immediate, trace_values, file_path_b, va, target_va,
-  target_end_va, stop_at_ret, show_bytes, result_offset, max_output_chars, timeout_sec, pdb_path,
-  noreturn_verify, il2cpp_signatures, il2cpp_script, type_name
-Use topic='analyze' for detailed guide with examples.
+Static binary analysis of PE/ELF/Mach-O files: decompile to C, disassemble, xref, call graph, headers, strings, user annotations.
+Per-operation guide: topic="analyze" (index), then topic="analyze/<operation>".
 
 ## set_config
 Change agent-tool runtime configuration.
@@ -681,794 +729,6 @@ Call with no arguments to view current config.
 Parameters: fallback_encoding, encoding_warnings, max_file_size_mb, allow_symlinks, workspace, allow_http_private, allow_mysql_private, allow_redis_private, allow_ssh_private, enable_doh, enable_ech`
 }
 
-func helpAnalyze() string {
-	return `# Static Binary Analysis Tool
-
-## Overview
-The analyze tool provides static binary analysis without executing the target file.
-Uses a single tool with operation parameter (like debug/sftp).
-Pure Go implementation — no CGO, no external dependencies for disassembly.
-
-## Operations
-
-### annotation_batch / annotation_suggest
-  analyze(operation="annotation_batch", file_path="/path/to/sample.exe",
-          annotations_path="/path/to/notes.annotations.sqlite",
-          batch=[{"operation":"set","rva":"0x1234","comment":"User pointer",
-                  "provenance":"manual analysis",
-                  "evidence":[{"kind":"static","va":"0x140001230",
-                               "source":"lookup_user call","detail":"Return used as context"}]},
-                 {"operation":"delete","annotation_id":"<id>","expected_revision":"1"}])
-  1..32 set/delete items share one binary and DB; paths cannot vary by item.
-  DB open/hash happens once. Each item independently commits with indexed
-  success/revision/conflict receipts. No all-or-nothing transaction.
-  Output budget >=768*item_count+256 is checked before changes. Default supports
-  32 items. DB-open errors fail the envelope; cancellation retains completed
-  items and marks unprocessed items failed.
-
-  evidence: up to 16 user observations; kind=static/runtime/user, optional
-  exact-string va, source (max 512 bytes), required detail (max 1024 bytes).
-  provenance: judgment origin, max 512 bytes. These are user assertions, not
-  automatically fetched or verified. They render with notes and are searchable.
-  ID updates preserve them; annotation_patch evidence=[]/provenance="" clears.
-  anchor_text: optional exact raw C line (max 2048 bytes) stored with a C note.
-  Include it when saving line annotations for later reattachment suggestions.
-
-  analyze(operation="annotation_suggest", file_path="/path/to/sample.exe",
-          annotation_id="<C-note ID>", annotations_path="/path/to/notes.annotations.sqlite")
-  Read-only: returns current code_hash, expected_revision, requires_confirmation,
-  and up to 3 line/anchor_text/score/reason candidates in the same function.
-  Unchanged snapshot uses original line; otherwise raw-text/token matches propose
-  unverified candidates. Equal top scores are ambiguous. Missing/generic anchors
-  may require manual selection. Old notes without anchor_text cannot be matched
-  automatically after changed C. The query never moves the note.
-  After reviewing, call annotation_set with ID/expected_revision and
-  annotation_patch={"line":N,"code_hash":"<current hash>","anchor_text":"<raw C line>"}.
-  Conflicts still require rereading before applying.
-
-### annotation_set / annotation_list / annotation_delete
-Durable user labels and comments stored in a separate SQLite database.
-  analyze(operation="annotation_set", file_path="/path/to/sample.exe",
-          rva="0x1234", subject="rax", comment="User pointer returned here",
-          annotation_status="hypothesis", annotations_path="/path/to/notes.annotations.sqlite")
-  analyze(operation="annotation_list", file_path="/path/to/sample.exe",
-          query="User", annotations_path="/path/to/notes.annotations.sqlite")
-  analyze(operation="annotation_delete", file_path="/path/to/sample.exe",
-          annotation_id="<id from set/list>", expected_revision="<revision string>",
-          annotations_path="/path/to/notes.annotations.sqlite")
-
-  annotations_path selects the SAME database for all annotation operations and for
-  disassemble/decompile reads. Relative paths follow the workspace/MCP root.
-  Omit it for <user config dir>/agent-tool/analysis-annotations.sqlite (Windows:
-  %APPDATA%/agent-tool/analysis-annotations.sqlite). It is not the codegraph DB or
-  an evictable cache. Reads never create a DB; annotation_set creates it.
-  Keep private notes outside tracked/public files.
-
-  annotation_kind: instruction (default), function (use entry VA), or decompile.
-  Address: va=hex or file/debug symbol; PE rva=module-relative offset also works.
-  VA and RVA are alternatives, not file offsets or live ASLR addresses.
-  subject optionally names a register/operand/variable; meaning applies only at
-  that address/line. label/comment are user metadata, not engine rename/type
-  overrides. label or comment is required (256/8192 UTF-8 bytes); subject max 256.
-  annotation_status: hypothesis (default on creation), confirmed, rejected; user assessment.
-  Automatic symbols/types remain separate; displayed user notes carry status/ID/revision.
-
-  C-line example:
-    analyze(operation="decompile", file_path="/path/to/sample.exe",
-            va="handler", line_numbers=true, annotations_path="/path/to/notes.annotations.sqlite")
-    analyze(operation="annotation_set", file_path="/path/to/sample.exe",
-            va="handler", annotation_kind="decompile", line=3,
-            code_hash="<64 hex chars from decompile>", comment="Checks user flags",
-            annotations_path="/path/to/notes.annotations.sqlite")
-  L numbers count only the raw C body (not headers, notes, or trailing type
-  definitions). C-line comments render before their line. The exact C snapshot
-  hash prevents a changed PDB/decompiler result from moving a note to another
-  line: it is retained as needs_review at the function header until re-anchored.
-  Function comments render at the header. Instruction notes render inline in
-  disassembly; at a function entry they also appear in decompile as entry notes.
-  Interior instruction notes are gathered using exact PDB/.pdata or sized ELF
-  symbol ranges (max 16 ranges/function), with original VAs. Unavailable/limited
-  ranges are reported. Notes are not guessed onto individual C lines.
-
-  Set without ID creates an anchor; an occupied anchor is rejected.
-  Update/delete require annotation_id and expected_revision from set/list.
-  Revisions are exact positive decimal strings; stale revisions are rejected.
-  ID updates preserve omitted fields. Nonempty top-level fields are partial
-  updates. annotation_patch supports explicit empty text or line=0; supplied
-  patch values override top-level values. Allowed patch fields: label, comment,
-  subject, annotation_status, annotation_kind, va, rva, line, code_hash,
-  evidence, provenance, anchor_text.
-  The merged note must retain label or comment and a valid anchor.
-    analyze(operation="annotation_set", file_path="/path/to/sample.exe",
-            annotation_id="<id>", expected_revision="1",
-            annotation_patch={"comment":"Confirmed user pointer","label":""},
-            annotations_path="/path/to/notes.annotations.sqlite")
-  A conflict requires a new read before retrying; it never overwrites the record.
-  IDs, addresses and SHA-256 values are exact strings. The full binary SHA-256,
-  not its path or timestamp, scopes records: moving/copying identical bytes
-  keeps notes; modified binaries do not inherit notes. There is no automatic
-  cross-build migration. Nonempty selected databases must be annotation DBs.
-  List filters: annotation_id, va/rva, annotation_kind, subject, annotation_status,
-  query (literal label/comment/subject substring; ASCII case folding).
-  max_results defaults to 50, max 200; result_offset is a row index, and JSON
-  next_result_offset continues the list. max_output_chars may shorten a page;
-  raise it if a single listed note cannot fit. Writes require max_output_chars
-  >=256, checked before changes. A successful write returns a short receipt if
-  full details exceed the cap: saved=true, annotation_id, revision (or deleted),
-  details_omitted=true. Output limits never turn a committed write into failure.
-  Rendering shows at most 500 records; list reads the remainder.
-  Annotation DB load errors appear as warnings alongside disassembly/decompile;
-  CRUD DB errors remain errors. Legacy v1/v2 remains readable without changes;
-  the first write atomically migrates to v3 with missing revision/metadata
-  columns. Existing revisions survive (v1 starts at 1). v1/v2-only tool builds
-  cannot read a v3 DB.
-  Disassembly/decompile result_offset pages by character instead.
-
-### disassemble
-Disassemble machine code. Supports x86 (16/32/64-bit) and ARM (32/64-bit).
-  analyze(operation="disassemble", file_path="/path/to/binary",
-          offset=4096, count=50, mode=64, arch="x86", base_addr="0x140001000")
-
-  # ARM64 example:
-  analyze(operation="disassemble", file_path="/path/to/arm_binary",
-          offset=0, count=50, mode=64, arch="arm")
-
-  Parameters:
-    arch: CPU architecture -- "x86" (default) or "arm"
-    offset: Byte offset in the file to start from (default: 0)
-    va: Virtual address (hex) -- auto-converts to file offset using PE headers.
-        Also auto-sets base_addr to ImageBase and mode from PE Machine field.
-        Example: va="0x140001000" (PE only)
-    count: Number of instructions to decode (default: 50, max: 1000)
-    stop_at_ret: Stop at function return (RET/RETF + padding/prologue boundary)
-    show_bytes: Add the hex encoding column (default false: address + instruction only)
-    mode: CPU mode -- x86: 16/32/64, arm: 32/64 (default: 64)
-    base_addr: Base address mapped to file offset 0 (hex string, default: "0").
-               Displayed address = base_addr + offset + position.
-               For PE files, use ImageBase (e.g. 0x140000000), not section VA.
-
-  When using va=, disassembly auto-stops at the function boundary (via .pdata)
-  if available, preventing disassembly into the next function. A switch table
-  the compiler placed inside the code (MSVC x64: after the function body) prints
-  as one "; switch table, N x 4-byte entries" line with its case targets.
-  Import/export symbols are annotated inline (e.g. "call [rip+0x1234]  ; CreateFileW").
-
-  Output: address: hex_bytes    assembly  [; symbol] [; user:status ...]
-  annotations_path selects saved notes. max_output_chars/result_offset page long output.
-  x86 uses Intel syntax. Failed decodes show "db 0xNN" / ".word" and skip.
-
-### instruction_search
-Search decoded x86/x64 instructions by mnemonic, explicit register operand,
-immediate value and/or memory displacement without requiring a byte encoding.
-Every hit is named by its function ("; in Class::Method+0x41").
-  analyze(operation="instruction_search", file_path="/path/to/module.dll",
-          mnemonic="MOV", register="R9D", immediate="0x327")
-  analyze(operation="instruction_search", file_path="/path/to/module.dll",
-          immediate="0x327", trace_values=true, max_results=300)
-  analyze(operation="instruction_search", file_path="/path/to/module.dll",
-          immediate="0x327", call_target="DeviceApi")
-  analyze(operation="instruction_search", file_path="/path/to/module.dll",
-          displacement="0x410")          # what reads/writes [reg+0x410]
-  analyze(operation="instruction_search", file_path="/path/to/module.dll",
-          register="RSP", displacement="0xf8") # [rsp+0xf8]: stack bases only when named
-
-  The search scans every executable-section byte offset so a desynchronized linear
-  sweep cannot hide a valid instruction. A function-start-anchored CFG walk labels
-  reachable instruction starts as "confirmed", excludes decodes that begin inside
-  those instructions, and labels remaining valid executable decodes as "candidate".
-
-  With immediate set, trace_values defaults to true. Bounded function-local analysis
-  propagates small constant sets through branches and joins, x86/x64 general-purpose
-  registers, simple stack stores/loads, read-only static constant loads, MOV/MOVX, LEA,
-  CMOV, basic arithmetic, bitwise and shift operations. At CALL and confirmed
-  external tail-call instructions it reports
-  matching PE Windows x64, ELF/Mach-O SysV x64, or x86 stack arguments and resolves
-  constant-register indirect call targets. Unsupported writes invalidate facts;
-  unknown memory aliases and inter-procedural return values are not guessed.
-  States are run to a fixpoint before reporting: "confirmed" holds on every path
-  and loop iteration, "possible" on some (including values seen only before a
-  loop widened them). x86 callees that end in ret N pop their own arguments
-  (stdcall/thiscall), so stale arguments of earlier calls are not reported.
-  For x86 imports the size comes from the 32-bit DLL itself (beside the binary,
-  then SysWOW64), through forwarders and API set names; import calls are shown
-  as dll!Function. Without the DLL (non-Windows hosts) the callee is assumed to
-  leave its arguments.
-  Switch dispatches are followed into their case blocks: MSVC x64 (image-base
-  RVA tables), GCC/Clang x64 (table-relative offsets) and x86 jmp [idx*4+table],
-  bounded by the preceding cmp; so code and values inside cases are confirmed.
-  By default only the functions that hold the value (as an immediate or a
-  read-only constant they load) are traced; trace_scope=all traces every
-  function and also finds values computed from other constants (40*25, loop
-  counters), several times slower. Functions are analyzed in parallel
-  (AGENT_TOOL_ANALYZE_THREADS), and the last binary's function table and
-  reached code stay cached until the file changes or the server goes idle:
-  on a 78 MB x64 image a first search takes about 4 s, the next ones under 1 s.
-
-  Parameters:
-    mnemonic: Optional mnemonic such as MOV, ADD, or CALL (case-insensitive)
-    register: Optional explicit GPR operand such as R9D, EAX, or RCX
-    immediate: Optional hex or decimal value such as 0x327 or 807
-    displacement: Optional memory displacement such as 0x410: operands
-                  [reg+0x410] (stack-pointer and RIP-relative bases excluded)
-    call_target: Optional case-insensitive target symbol/address substring; when set,
-                 findings defaults to call to keep results compact
-    findings: all (default), call, or producer
-    trace_values: Trace immediate values into computed results and call arguments
-                  (default true when immediate is supplied)
-    trace_scope: seeded (default) or all
-    max_results: Maximum direct and trace results (default 200, max 1000)
-
-### pe_info
-Parse PE (Portable Executable) headers -- Windows EXE, DLL, .node files.
-  analyze(operation="pe_info", file_path="/path/to/file.dll")
-  analyze(operation="pe_info", file_path="/path/to/file.dll", section=".text")
-
-  Import output is paged with result_offset + max_results (default 500,
-  max 100000) and bounded by max_output_chars (default 32768, max 131072).
-
-  Output includes:
-    - Machine type, image base, entry point, number of sections
-    - Section table: Name, VirtualAddress, VirtualSize, RawOffset, RawSize, Permissions
-    - Section permissions (R/W/X, CODE/DATA) with ⚠ W+X warnings for suspicious sections
-    - Imports: grouped by DLL with IAT slot VAs (for xref cross-referencing)
-    - Exports: function names with RVAs (if present)
-    - RVA->FileOffset conversion table for each section
-
-  Parameters:
-    section: Filter to show only a specific section (e.g. ".text", ".rdata")
-             Use section=".pdata" to show all RUNTIME_FUNCTION entries as a
-             function table with Start VA, End VA, Size, and Unwind RVA.
-             Use section=".text" to auto-disassemble from the entry point.
-    rva: Convert an RVA to file offset (hex string, e.g. "0x36A20")
-
-  Use the RVA->FileOffset table to convert runtime addresses to file offsets
-  for targeted disassembly or hexdump.
-
-### elf_info
-Parse ELF (Executable and Linkable Format) binaries — Linux shared objects, executables.
-  analyze(operation="elf_info", file_path="/path/to/binary")
-
-  Output includes:
-    - Class, OS/ABI, type, machine, entry point
-    - Section table with permissions and ⚠ W+X warnings
-    - Program headers (segments) with R/W/X flags and ⚠ W+X warnings
-    - Imported libraries and symbols
-    - Exported (dynamic) symbols
-
-  Parameters:
-    section: Filter to show only a specific section
-
-### macho_info
-Parse Mach-O binaries — macOS/iOS executables, dylibs, frameworks.
-  analyze(operation="macho_info", file_path="/path/to/binary")
-
-  Output includes:
-    - CPU type, binary type, flags (PIE, DYLDLINK, etc.)
-    - Load commands
-    - Section table
-    - Segments with MaxProt/InitProt and ⚠ W+X warnings
-    - Imported libraries and symbols
-
-  Supports Universal (Fat) binaries — shows all architectures.
-
-  Parameters:
-    section: Filter to show only a specific section
-
-### strings
-Extract printable strings from a binary file.
-  analyze(operation="strings", file_path="/path/to/binary",
-          min_length=6, max_results=100)
-
-  Two extraction modes:
-    encoding="ascii" (default): ASCII strings (bytes 0x20-0x7E)
-    encoding="utf8": UTF-8 strings (multi-byte aware, filters non-printable runes)
-
-  Parameters:
-    min_length: Minimum string length (default: 4)
-    max_results: Maximum number of results (default: 500, max: 2000)
-    encoding: String encoding -- "ascii" (default) or "utf8"
-
-  Output: offset: "string content"
-  For PE files, VA is shown alongside file offset: offset (VA): "string"
-
-### hexdump
-Display raw bytes in hex + ASCII format.
-  analyze(operation="hexdump", file_path="/path/to/binary",
-          offset=8192, length=512)
-
-  Standard hexdump format: offset  hex hex hex ... |ASCII...|
-  16 bytes per line. Non-printable bytes shown as '.' in ASCII column.
-
-  Parameters:
-    offset: Byte offset to start from (default: 0)
-    length: Number of bytes to dump (default: 256, max: 4096)
-
-### pattern_search
-Search for hex byte patterns with wildcard support.
-  analyze(operation="pattern_search", file_path="/path/to/binary",
-          pattern="4D 5A ?? ?? 50 45")
-
-  Pattern format: hex bytes separated by spaces, "??" for any byte wildcard.
-  Example: "48 89 5C 24 ??" matches MOV [rsp+??], rbx with any offset.
-
-  Parameters:
-    pattern: Hex byte pattern (e.g. "4D 5A ?? ?? 50 45")
-    max_results: Maximum matches to return (default: 100, max: 500)
-
-  For PE files, VA is shown alongside file offset in results.
-  Uses chunked file reading with overlap -- handles multi-GB files efficiently.
-
-### entropy
-Calculate Shannon entropy per section.
-  analyze(operation="entropy", file_path="/path/to/binary")
-
-  Shows overall file entropy (0-8 bits/byte) and per-section breakdown.
-  Auto-detects PE, ELF, and Mach-O formats for section boundaries.
-  Falls back to 4KB block-based analysis for unknown formats.
-
-  Entropy interpretation:
-    < 1.0: Very low (padding, zeroes)
-    1-3: Low (structured data, headers)
-    3-5: Medium (code, text)
-    5-7: High (compiled code)
-    > 7: Very high (compressed, encrypted, or random data)
-
-  High-entropy sections in otherwise normal binaries suggest packing or encryption.
-
-### bin_diff
-Compare two binary files byte-by-byte and report differences.
-  analyze(operation="bin_diff", file_path="/path/to/file_a",
-          file_path_b="/path/to/file_b", max_results=50)
-
-  Reports:
-    - File sizes and size difference
-    - Per-byte differences: offset, value in file A, value in file B
-    - Total count of differing bytes
-
-  Useful for: finding patched bytes, comparing versions, detecting tampering.
-
-  Parameters:
-    file_path_b: Second file to compare (required for bin_diff)
-    max_results: Maximum differences to show (default: 100, max: 500)
-
-### resource_info
-Extract PE resource directory and version information.
-  analyze(operation="resource_info", file_path="/path/to/file.exe")
-
-  Output includes:
-    - Resource type counts (RT_ICON, RT_VERSION, RT_MANIFEST, etc.)
-    - Individual entries with type, ID, language, size
-    - Version strings (CompanyName, ProductName, FileVersion, etc.)
-
-### imphash
-Compute the PE import hash (MD5 of normalized import table).
-  analyze(operation="imphash", file_path="/path/to/file.exe")
-
-  Imphash is a standard for malware classification — binaries built from
-  the same source share the same imphash. Used by VirusTotal, MISP, Mandiant.
-
-  Output: hash value + first 20 normalized imports (dll.function format).
-
-### rich_header
-Parse the PE Rich header (undocumented Microsoft build tool fingerprint).
-  analyze(operation="rich_header", file_path="/path/to/file.exe")
-
-  Shows which compiler/linker/assembler versions built each object file.
-  Useful for attribution and build environment identification.
-  Includes Rich header MD5 hash for clustering.
-
-### overlay_detect
-Check for data appended after the last section of a binary.
-  analyze(operation="overlay_detect", file_path="/path/to/file.exe")
-
-  Detects overlays in PE, ELF, and Mach-O files.
-  Reports overlay size, percentage, hex preview, and signature identification
-  (ZIP, GZIP, RAR, 7z, embedded PE/ELF/Mach-O).
-
-  Common in: packed executables, droppers, self-extracting archives.
-
-### dwarf_info
-Extract DWARF debug information from PE, ELF, or Mach-O binaries.
-  analyze(operation="dwarf_info", file_path="/path/to/binary")
-
-  Output includes:
-    - Compilation units (source files)
-    - Functions with addresses (low PC / high PC)
-    - Variable/parameter and type counts
-    - "Binary appears stripped" if no DWARF data found
-
-### xref
-Find the code and data that reference an address, an address range, the strings
-containing a text, or a structure field (PE, ELF, Mach-O).
-  analyze(operation="xref", file_path="/path/to/binary", target_va="0x140001000")
-  analyze(operation="xref", file_path="/path/to/binary",
-          target_va="0x140020000", target_end_va="0x140020fff")
-  analyze(operation="xref", file_path="/path/to/binary", target_text="Login failed")
-  analyze(operation="xref", file_path="/path/to/binary", field="Player::health")
-
-  Every reference line names the function it sits in ("; in World::Tick+0x42"),
-  using PDB bounds when available and otherwise the call_graph function table
-  (.pdata, exports, call targets, and functions found from the code layout).
-  The summary counts how many functions the references come from.
-
-  What is found:
-    Code: CALL/JMP/Jcc relative, RIP-relative operands (x64), absolute operands
-      and immediates (mov reg, imm; push imm; mov rax, imm64; x86 [abs32]),
-      ARM64 BL/B/B.cond/ADRP pairs, ARM32 BL/B. A lea/mov of the target followed
-      by call/jmp through that register is reported as a CALL ("then call rax").
-    Computed: x64 MSVC tables and arrays read through the image base
-      (lea r, [__ImageBase]; [r+index*scale+RVA]) as DATA, and a switch case
-      block reports the dispatch jump whose table leads to it (JMP, "switch case N").
-    Data (PTR): stored pointers in data sections -- vtable slots (with the slot
-      index), function-pointer and callback tables. PE images check each slot
-      against the relocation table; ELF PIE pointers come from RELATIVE relocs.
-
-  target_text: finds up to 16 stored strings (UTF-8/ASCII and UTF-16LE)
-    containing the text, widens each to the whole string, and lists the
-    references to each; max_results is shared across them.
-  field: Class::member (Go: pkg.Type::field); the class as decompile prints it
-    (Rect) or qualified (geo::Rect). The offset comes from the PDB or DWARF,
-    inherited members included. Candidate functions are those with a
-    [reg+offset] operand anywhere in the binary (offsets >= 0x80 by a byte
-    search for the 4-byte displacement; smaller ones, encoded in one byte, by
-    decoding every instruction). The methods of the class and its bases and the
-    functions whose debug prototype takes the class are decompiled first. Each
-    candidate is decompiled with the debug types: functions whose C names the
-    member are confirmed accesses (with the lines); the rest share only the
-    offset. max_results = functions to decompile (default 32, max 128);
-    timeout_sec bounds the whole call (default 120).
-
-  Parameters:
-    target_va / target_end_va: Address or inclusive range (hex)
-    target_text: Text to find in stored strings (instead of target_va)
-    field: Class::member (instead of target_va)
-    max_results: Maximum references (default 200, max 1000); for field, functions
-    pdb_path / pdb_force: As for decompile (names, field types)
-
-  Auto-detects format (PE/ELF/Mach-O) and architecture from binary headers.
-
-### function_at
-Find function boundaries in PE files.
-  analyze(operation="function_at", file_path="/path/to/binary.exe",
-          va="0x140001000")
-
-  Detection methods (automatic, best source wins):
-  0. A matching PDB (found via the image's RSDS record, or pdb_path) -- exact
-     procedure start, length and name, also for x86 (start_source: pdb)
-  1. .pdata (Exception Table) -- reliable, x64 PE with unwind info
-  2. Export table + call-graph discovery -- exports are authoritative starts;
-     from them the call graph is walked to discover direct-call targets, and
-     vtable/callback function pointers (padding-validated) add functions reached
-     only indirectly. The containing function is proven by a CFG-respecting
-     traversal, so the answer is sound even for ordinal-only DLLs (Diablo II's
-     D2*.dll), internal (non-exported), and virtual-only functions.
-  3. Heuristic (prologue/epilogue pattern scan) -- last resort for code not
-     reachable from any export (e.g. indirectly-called callbacks).
-
-  Also auto-disassembles the function (use count to control instruction limit).
-
-  Parameters:
-    va: Virtual address inside the function (hex, required)
-    count: Max instructions to disassemble (default: 50, max: 200)
-
-  Output metadata (READ THESE before trusting the result):
-    start_source: pdata | export | call-target | prologue | heuristic | heuristic-misaligned
-    confidence:   exact (.pdata / named export) | high (direct-call target)
-                | medium (strong prologue) | low (weak/uncertain)
-
-  IMPORTANT: confidence "low" with start_source "heuristic-misaligned" means the
-  reported start points INTO an instruction (a padding-like byte was mistaken for
-  a boundary) -- the start and disassembly are unreliable. Do NOT build on it.
-  Instead call function_at on a nearby exported ordinal, or disassemble backward
-  to find the real prologue. "exact" and "high" starts are trustworthy; "medium"
-  is a good guess; "low" is not authoritative.
-
-### call_graph
-Build a static call graph from a root function (PE/ELF/Mach-O, x86/x64).
-  analyze(operation="call_graph", file_path="/path/to/binary",
-          va="0x140001000")
-
-  Supports PE, ELF, and Mach-O binaries (x86, x64, ARM64, ARM32).
-  x64 PE: .pdata ranges are kept exact (a branch target inside one never
-    splits it); split-off cold blocks (chained unwind entries) belong to their
-    function. Leaf functions without .pdata are found from the code layout
-    (control flow to the end of each body, then int3 padding).
-  x86 PE: function starts come from exports, CALL targets, vtable pointers and
-    the same layout walk (switch tables after a function are skipped as data).
-    Measured against PDB bounds, the containing function is right for 100% of
-    addresses in a 78 MB x64 image and 99.5% in a 7 MB x86 one.
-  Each function's calls are collected by following its control flow -- NOT a
-    linear range scan -- so a boundary error cannot leak a neighbour's calls in.
-    With x64 .pdata the walk stays inside the function's own ranges, and a
-    direct call to an address that is no known function start (junk bytes
-    behind opaque predicates) is listed under "Not shown" instead of as a
-    callee. x86 has no such bound: obfuscated x86 code can still list junk calls.
-  ELF / Mach-O: heuristic mode -- detects functions from CALL/BL targets.
-  ARM64: scans BL imm26 targets. ARM32: scans BL imm24 targets (PC+8 offset).
-  ELF/Mach-O: also merges symbol table entries as function starts.
-  BFS traversal from the root function, showing:
-  - Callers: functions that call the root (1 level), matched at every byte
-    offset; tail jumps are marked, and callers of a thunk (a function that
-    only jumps to the root) are listed "via thunk"
-  - Referenced from data: vtable slots and pointer tables holding the root,
-    for functions only called indirectly
-  - Callees: functions called by the root (tree format, configurable depth)
-
-  Parameters:
-    va: Root function address (hex, required)
-    count: Max depth (default: 2, max: 5)
-    max_results: Max nodes to visit (default: 200, max: 500)
-
-  Cycle detection marks revisited nodes as "(already shown)".
-
-### follow_ptr
-Follow a chain of pointers in a PE file with symbol/section annotation.
-  analyze(operation="follow_ptr", file_path="/path/to/binary.exe",
-          va="0x140050000", count=6)
-
-  Reads pointer-sized values starting at VA, follows the chain, and annotates
-  each step with symbol names or section info. Stops on null, unmapped, depth limit,
-  or circular reference (revisited address).
-
-  Parameters:
-    va: Starting virtual address (hex, required)
-    count: Maximum depth (default: 4, max: 10)
-
-  Output: [0] 0x140050000 (.rdata) -> 0x140060ABC (MyClass::vtable)
-
-### rtti_dump
-Parse MSVC RTTI (Run-Time Type Information) from a vtable address.
-  analyze(operation="rtti_dump", file_path="/path/to/binary.exe",
-          va="0x140050000")
-
-  Reads vtable[-4] (x86) or vtable[-8] (x64) to find CompleteObjectLocator,
-  then parses TypeDescriptor (class name) and ClassHierarchyDescriptor (base classes).
-
-  Parameters:
-    va: Vtable virtual address (hex, required)
-
-  Output: class name (mangled + demangled, e.g. std::bad_exception), base class list
-  with displacements. Includes pSelf cross-validation for x64 and section data caching.
-  Auto-detects x86 vs x64 from PE Machine field.
-
-### struct_layout
-Lay out image memory (PE).
-  analyze(operation="struct_layout", file_path="/path/to/game.exe", va="g_world")
-  analyze(operation="struct_layout", file_path="/path/to/game.exe", va="0x140050000", type_name="Player")
-
-  With debug types (PDB, or MinGW DWARF): the global variable starting at va, or
-  type_name laid over va, is printed member by member with values -- nested
-  structures as dotted paths, bitfields extracted, enums named, pointers
-  annotated, char arrays as strings, zero-filled aggregates as {0}. Values are
-  the image's initial data (uninitialized .bss reads as zero), not a running
-  process: use memtool for live memory. A va inside a global gets a note naming
-  its start.
-
-  Otherwise pointer-sized slots, each annotated: symbol name,
-  [code]/[data]/[rdata] section, or [null] -- for vtables and untyped data.
-  type_info prints a type's definition without reading memory.
-
-  Parameters:
-    va: Starting virtual address (hex, required)
-    length: Number of bytes to dump (default: 64, max: 512)
-
-### vtable_scan
-Scan PE .rdata for all MSVC vtables with RTTI. Auto-discovers C++ classes with virtual functions.
-  analyze(operation="vtable_scan", file_path="/path/to/binary.exe")
-
-  Scans the .rdata section for pointers to RTTI CompleteObjectLocators, then parses
-  each vtable's TypeDescriptor to extract demangled class names. No parameters needed
-  (auto-detects x86/x64 from PE Machine field).
-
-  Returns vtable VAs with demangled class names. Useful for mapping class hierarchy
-  before using rtti_dump on individual vtables.
-
-  Parameters: none (auto-detects architecture)
-
-### decompile
-Decompile functions to C with the Gosleigh engine (a Go port of Ghidra's decompiler core).
-  analyze(operation="decompile", file_path="/path/to/game.exe", va="0x140001000")
-  analyze(operation="decompile", file_path="/path/to/libfoo.so", va="parse_header, 0x401230")
-
-  Supports x86 and x64 PE (Visual Studio conventions) and ELF (gcc conventions);
-  binaries built by the Go toolchain use Go's register ABI (Ghidra's golang spec).
-  The architecture, image layout and calling convention are detected from the file.
-
-  The first call on a binary loads it (seconds for a large image with its PDB).
-  Later calls with the same file and analysis options reuse an available loaded
-  worker, skipping that load. Callee translation and return-analysis caches also
-  survive between requests; each requested function still needs decompilation.
-  Up to two idle workers are retained, each exiting after 10 minutes without use.
-  A changed binary or signature source is reloaded. Function runtimes still vary.
-  Whole-binary scans (linear sweep, call sites) are cached under the user cache
-  directory, so a later session loads the same file faster
-  (AGENT_TOOL_NO_ANALYSIS_CACHE=1 disables this). Those scans use
-  AGENT_TOOL_ANALYZE_THREADS goroutines (default NumCPU/4, between 2 and 4).
-
-  Every function of a binary (a corpus) is a CLI job, not a tool call -- it takes
-  minutes on a large program. Run it in the background and read the file:
-    agent-tool decompile-all [-j workers] [-timeout sec] [-pdb path [-pdb-force]] [-il2cpp-signatures path|none] [-limit n] [-o out.jsonl] <binary>
-  One JSON object per line: {"entry","name","c","secs"} or {"entry","error"};
-  rerunning resumes an existing output file.
-
-  What the host knows comes from the file: function starts (.pdata, exports, symbol
-  tables, call targets, entry point), import names, read-only sections, and tail-call
-  jumps (the same Shared Return rule Ghidra's analysis applies).
-
-  For PE images a matching PDB adds, as Ghidra's PDB analysis does: function names
-  (Class::Method), prototypes (calling convention, this pointer, parameter names and
-  types, return type, no-return), struct/class/union/enum types with their fields,
-  and named, typed global data -- plus local variables with their names and types
-  (a structure local is one variable: r.w_ = 3), which Ghidra leaves to the
-  decompiler. x64 frames are located from the image's unwind codes. Code built
-  without full debug info is named and typed from its
-  decorated public names (MSVC demangler). The PDB is found via the image's RSDS
-  record (its path, then beside the image) and used only when its GUID matches;
-  pdb_path points to it elsewhere, pdb_path="none" turns it off. pdb_force=true
-  loads pdb_path despite a GUID mismatch or a wiped RSDS record (relinked or
-  patched image with the same code); the output then carries a warning.
-
-  Without a PDB, embedded DWARF (ELF, MinGW/Go PE) supplies the same: names,
-  prototypes, types, globals and stack locals.
-
-  IL2CPP Windows x64: il2cpp_signatures (il2cpp_script is an alias) accepts
-  methodsigs.tsv, Il2CppDumper script.json, or global-metadata.dat. Adjacent
-  sidecars take priority; otherwise standard Unity metadata locations are
-  discovered. Multiple metadata files require an explicit path; none disables.
-  Native extraction supports metadata v39, needs no .NET/external dumper, and
-  never executes the DLL. It provides direct signatures and, when the runtime
-  accessor proves the vtable offset, class/virtual-slot types. Other metadata
-  versions need external exports. Debug information retains precedence; names
-  are unchanged. Unknown/conflicting generics and hidden-return-buffer outputs
-  stay inferred. No C# dumps are generated. Extraction is reused in worker
-  memory; changed metadata invalidates reuse. decompile-all uses the same path.
-  Auto-detection needs recognizable runtime exports; stripped images require
-  an explicit path. Failed automatic extraction reports a note and preserves
-  inference; invalid explicitly selected metadata reports an error.
-
-  Non-returning functions are found as Ghidra's analyzers do: known names (exit,
-  abort, ExitProcess, _CxxThrowException, Go runtime panics, ...), debug-info
-  no-return flags, and call sites followed by padding or another function.
-
-  Bitfield members print as fields (p->mode = v; if (p->bReady == 0)) instead of
-  masks and shifts where the engine recognizes them; otherwise the mask stays and
-  the bitfield layout below decodes it.
-
-  After each function come the definitions of the structs, unions and enums its C
-  names -- by type name, or by an enumerator it compares against (MODE_AUTO) --
-  plus the enums those structs' members have: members with offsets (+0x24),
-  bitfield bit ranges, base classes, enum values in hex and decimal. Up to 6000
-  characters and 32 members per type; anything else (a type reached only through
-  a member, like Point in n->pos[0].x) is one call away:
-    analyze(operation="type_info", file_path=..., type_name="Point, geo::Rect")
-
-  va names resolve exactly, then by a scope suffix (Rect::area or area for
-  geo::Rect::area), then ignoring case -- in every address operation
-  (disassemble, function_at, call_graph, xref target_va, follow_ptr,
-  struct_layout, hexdump), which also accept globals, imports and name+0x10. A name several functions share
-  (overloads) is an error listing each with its address; an unknown name lists
-  similar ones. Output past max_output_chars ends with the result_offset that
-  continues it (the worker keeps the binary loaded, so paging is cheap).
-
-  An address inside a function is moved to its start when x64 .pdata gives exact
-  extents; otherwise the output carries a note -- confirm the start with function_at.
-
-  Each call runs in a separate worker process (same executable) with a 2 GB heap
-  limit and timeout_sec (default 60, max 600); a timeout or memory blow-up kills only
-  the worker, the result reports which functions completed, and the functions the
-  dead worker never reached continue on a fresh one.
-
-  A path into bytes that are no instruction ends in halt_baddata() as in Ghidra; the
-  rest of the function still decompiles. A flow over the instruction limit (junk
-  bytes behind opaque predicates, i.e. obfuscation) is retried inside the function's
-  exact x64 .pdata extent: flow leaving it is marked "Function flow out of bounds:
-  X flows to Y" + halt_missing() and the rest prints (Ghidra itself times out on
-  such functions). Without .pdata (x86, leaf functions) it fails at once with
-  "Flow exceeded maximum allowable instructions" and the number of paths that hit
-  undecodable bytes. Junk inside the extent can remain; static analysis cannot
-  tell it from real branches with certainty, so give the directions a runtime
-  trace established:
-    analyze(operation="decompile", file_path=..., va="0x140012340",
-            assume_branches="0x140012375=taken,0x1400123a2=fallthrough")
-  Each listed conditional jump is fixed to that side before flow is followed (as if
-  patched to jmp / nop); the other side is not decompiled, the C marks each one, and
-  addresses no decompiled flow reached are listed. A Gosleigh extension: Ghidra
-  rejects conditional-branch flow overrides.
-
-  Non-returning callees follow Ghidra: known names, PDB flags, and callees with
-  3+ call sites followed by padding or another function. A hot callee can reach
-  that vote by accident; when a callee that voted non-returning has a reachable
-  ret, the result warns, and noreturn_verify=true keeps such callees returning.
-
-  Parameters:
-    va: Function entry as hex VA or symbol name (PDB names are qualified:
-        Player::TakeDamage); up to 16, comma-separated
-    pdb_path: PDB file when not beside the image; "none" disables the PDB
-    pdb_force: Load pdb_path even if its GUID does not match (warns)
-    il2cpp_signatures: Windows x64 IL2CPP methodsigs.tsv or Il2CppDumper script.json.
-      Default: beside the binary; none disables. il2cpp_script is an alias.
-      PDB/DWARF takes precedence; names stay unchanged. The host adds this and
-      MethodInfo* to TSV managed params. Unknown types/conflicting generic aliases
-      stay inferred. val:SIZE:NAME records exact value sizes; large aggregate
-      returns stay unlocked. A binary_sha256 TSV header must match the image.
-      A sibling il2cpp-types.json can supply binary-bound class layouts/virtual slot
-      prototypes (docs/il2cpp-types.md). Slots require stable method IDs and an exact
-      runtime vtable offset; types must propagate to the call. Unknown slots and
-      hidden-buffer returns stay inferred. JSON value layouts may use il2cpp.h.
-    timeout_sec: Worker time limit (default 60, max 600)
-    assume_branches: <hex address>=taken|fallthrough, comma-separated (max 256)
-    noreturn_verify: Keep voted non-returning callees whose code reaches a ret returning
-    max_output_chars: Output cap (default 32768)
-    result_offset: Character offset to continue a truncated output
-
-### type_info
-Print debug-type definitions by name, from a PE's PDB (or its embedded DWARF)
-or an ELF's DWARF -- the types decompile names but did not print.
-  analyze(operation="type_info", file_path="/path/to/game.exe", type_name="Player, EState")
-
-  Structs/classes/unions list every member with its offset (+0x10 int w_;),
-  bitfield bit ranges, base classes (super_Base) and the union alternatives a
-  decompiled layout cannot hold (marked); enums list each value in hex and
-  decimal. Names match qualified (geo::Rect), as decompile prints them (Rect),
-  or ignoring case; a short name shared by several namespaces prints each, and
-  an unknown one lists similar names. C typedef'd tagless structs/enums
-  (typedef struct {...} Obj) are found by the typedef name.
-
-  Parameters:
-    type_name: Up to 16 names, comma-separated (required)
-    pdb_path / pdb_force: As for decompile
-    max_output_chars / result_offset: Output cap and continuation
-
-## Typical Workflow
-
-1. pe_info/elf_info/macho_info -- Get section layout, check for W+X sections
-2. entropy -- Identify packed/encrypted sections (entropy > 7.0)
-3. overlay_detect -- Check for appended payloads
-4. imphash -- Classify by import table fingerprint
-5. rich_header -- Identify build tools (PE only)
-6. strings -- Find interesting strings, API names, error messages
-7. pattern_search -- Locate specific byte sequences (signatures, opcodes)
-8. hexdump -- Examine specific data regions at file offsets
-9. disassemble -- Decode machine code (use va= for PE virtual addresses)
-   decompile -- Read a function as C once its start is known (x86/x64 PE/ELF)
-   type_info -- Members/offsets/enum values of a debug type decompile names
-10. instruction_search -- Find decoded instructions/constants and trace bounded values into call arguments
-11. function_at -- Find function boundaries (.pdata or heuristic fallback)
-12. xref -- References to an address, a string text or a struct field, each named by its function (PE/ELF/Mach-O)
-13. call_graph -- Build static call graph from a root function (PE/ELF/Mach-O, x86/x64/ARM64/ARM32)
-14. follow_ptr -- Follow pointer chains (vtable inspection, data structure traversal)
-15. rtti_dump -- Parse MSVC RTTI from vtable (identify C++ class hierarchy)
-16. vtable_scan -- Discover all C++ vtables with RTTI in PE (class mapping)
-17. struct_layout -- Dump memory as structured layout (vtable, object layout analysis)
-18. dwarf_info -- Extract debug symbols and function names
-19. bin_diff -- Compare original vs patched versions
-
-### Example: Analyzing a DLL
-  # Step 1: Get PE layout
-  analyze(operation="pe_info", file_path="C:/path/to/target.dll")
-  # Note: .text section at RawOffset=0x400, .rdata at RawOffset=0x27C00
-
-  # Step 2: Find interesting strings
-  analyze(operation="strings", file_path="C:/path/to/target.dll", min_length=8)
-
-  # Step 3: Disassemble code section
-  analyze(operation="disassemble", file_path="C:/path/to/target.dll",
-          offset=1024, count=100, mode=64, base_addr="0x180001000")
-
-  # Step 4: Examine data at specific offset
-  analyze(operation="hexdump", file_path="C:/path/to/target.dll",
-          offset=163840, length=256)
-
-## Notes
-- File size limit follows max_file_size_mb setting (default 100 MB)
-- Symlinks are rejected for security
-- x86 disassembly: golang.org/x/arch/x86/x86asm (Intel syntax)
-- ARM disassembly: golang.org/x/arch/arm/armasm + arm64/arm64asm
-- Binary parsing: Go standard library (debug/pe, debug/elf, debug/macho, debug/dwarf)
-- All 22 operations are read-only — the target file is never modified
-- Zero external dependencies beyond golang.org/x/arch`
-}
-
 func helpDebug() string {
 	return `# Debug Tool Guide (DAP)
 
@@ -1477,20 +737,19 @@ The debug tool provides interactive debugging via the Debug Adapter Protocol (DA
 It works with any language that has a DAP-compatible debug adapter.
 
 ## Tested Adapters
-- Go: dlv (Delve) — fully tested
-- Python: debugpy — fully tested
-- C/C++: codelldb (recommended, open source) — LLDB-based, reads PDB on Windows
-- C/C++: vsdbg — UNSTABLE. Handshake signing works, but vsdbg enforces a
-  secondary runtime license check that blocks non-VS Code clients.
-  Use codelldb instead unless you specifically need MSVC-native debugging.
+- Go: dlv (Delve) -- fully tested
+- Python: debugpy -- fully tested
+- C/C++: codelldb (recommended, open source) -- LLDB-based, reads PDB on Windows
+- C/C++: vsdbg -- UNSTABLE: its license check rejects non-VS Code clients even
+  after a successful handshake. Use codelldb unless you need MSVC-native debugging.
 
 ## Workflow
 
-### 1. Launch → 2. Set breakpoints → 3. Continue → 4. Inspect → 5. Step → 6. Disconnect
+### 1. Launch -> 2. Set breakpoints -> 3. Continue -> 4. Inspect -> 5. Step -> 6. Disconnect
 
-  launch → set_breakpoints → continue (blocks until hit) →
-  stack_trace → scopes → variables → evaluate →
-  next/step_in/step_out → continue → ... → disconnect
+  launch -> set_breakpoints -> continue (blocks until hit) ->
+  stack_trace -> scopes -> variables -> evaluate ->
+  next/step_in/step_out -> continue -> ... -> disconnect
 
 ## Adapter Recipes (copy-paste ready)
 
@@ -1510,17 +769,17 @@ It works with any language that has a DAP-compatible debug adapter.
 ### Python (debugpy)
   Install: pip install debugpy
 
-  Stdio mode (recommended — single step):
+  Stdio mode (recommended -- single step):
   debug(operation="launch",
         adapter_command="python", adapter_args=["-m", "debugpy.adapter"],
         launch_args='{"program":"/path/to/script.py","cwd":"/path/to/project","console":"internalConsole"}')
 
-  TCP mode (alternative — two steps):
+  TCP mode (alternative -- two steps):
   Step 1: Run in terminal: python -m debugpy.adapter --host 127.0.0.1 --port 5679
   Step 2: debug(operation="attach", address="127.0.0.1:5679",
         launch_args='{"program":"/path/to/script.py","request":"launch","console":"internalConsole"}')
 
-### C/C++ (codelldb — recommended)
+### C/C++ (codelldb -- recommended)
   Install: Download from https://github.com/vadimcn/codelldb/releases
   Or install the CodeLLDB VS Code extension.
 
@@ -1529,10 +788,9 @@ It works with any language that has a DAP-compatible debug adapter.
         adapter_args=["--port", "0"],
         launch_args='{"type":"lldb","program":"/path/to/binary","cwd":"/path/to/project","stopOnEntry":true}')
 
-### C/C++ (vsdbg — UNSTABLE, requires VS Code C++ extension installed)
-  WARNING: vsdbg may reject connections with "C/C++ Debugging is supported only
-  in Microsoft versions of VS Code" even after successful handshake signing.
-  This is a secondary license check beyond the handshake. Use codelldb instead.
+### C/C++ (vsdbg -- UNSTABLE, requires VS Code C++ extension installed)
+  A rejection reading "C/C++ Debugging is supported only in Microsoft versions
+  of VS Code" is the license check above; switch to codelldb.
 
   vsdbg requires adapterID="cppvsdbg" and clientID="vscode".
   Set "type":"cppvsdbg" and "__clientID":"vscode" in launch_args.
@@ -1551,8 +809,8 @@ It works with any language that has a DAP-compatible debug adapter.
   Core:
     set_breakpoints: source_path + breakpoints='[{"line":42},{"line":100,"condition":"x > 5"}]'
     continue/next/step_in/step_out: blocks until stopped (timeout_sec to limit wait)
-    stack_trace: returns frame IDs → use frame_id for scopes/evaluate
-    scopes: returns scope names + variablesReference IDs → use for variables
+    stack_trace: returns frame IDs -> use frame_id for scopes/evaluate
+    scopes: returns scope names + variablesReference IDs -> use for variables
     variables: returns variable names, values, and nested references
     evaluate: expression evaluation with context (repl/watch/hover)
     threads: list all threads/goroutines
@@ -1620,57 +878,39 @@ It works with any language that has a DAP-compatible debug adapter.
   Priority: dedicated parameter > __ meta field > default ("agent-tool").
 
 ### Registers
-  Registers are exposed through scopes → variables, NOT a separate operation.
+  Registers are exposed through scopes -> variables, NOT a separate operation.
   The adapter must include a "Registers" scope in the scopes response.
   - dlv: set "showRegisters":true in launch_args
   - codelldb/lldb-dap: registers shown by default
   - debugpy: not applicable (Python has no CPU registers)
 
 ### Features vary by adapter
-  Each adapter supports different launch_args options and capabilities.
-  If a feature seems missing (no registers, no conditional breakpoints, etc.),
-  it's likely an adapter configuration issue — NOT a tool limitation.
-  Search "<adapter name> DAP launch configuration" to find available options.
+  operation=status after launch lists what the adapter supports. An unsupported
+  operation returns an error, which is normal: dlv has disassemble but not
+  modules, debugpy the reverse. A missing feature (registers, conditional
+  breakpoints) is usually a launch_args setting of that adapter, not a tool limit.
 
-### Release Builds and Debugging
-  Optimized/release builds can make debugging unreliable:
-  - Variables may show <optimized out> or wrong values
-  - set_variable may report success but not actually change the value
-  - Lines may execute out of order or be skipped
-  - Stack frames may be missing
-
-  If you see these symptoms, rebuild with debug/unoptimized settings.
-  Most languages and build systems have a "debug" vs "release" mode —
-  always use debug mode when you need reliable variable inspection.
-
-### Capabilities
-  Use operation=status after launch to see which features the adapter supports.
-  Unsupported operations will return an error — this is normal, not a bug.
-  Example: dlv supports disassemble but not modules; debugpy supports modules but not disassemble.
+### Release builds
+  Optimized builds show <optimized out> or wrong values, skip lines, drop stack
+  frames, and set_variable can report success without effect. Rebuild
+  unoptimized when variable inspection matters.
 
 ### Breakpoint Timing
   Set breakpoints AFTER launch but BEFORE the first continue.
   The tool sends configurationDone automatically on the first continue.
 
 ## Using Other Adapters
-  This tool is a standard DAP client. However, some adapters have non-standard
-  quirks (custom adapterID requirements, extra handshake steps, adapter-specific
-  launch_args fields). The recipes above document known quirks for tested adapters.
-
-  For unlisted adapters:
-  1. Search for "<language> DAP debug adapter" to find the adapter
-  2. Check the adapter's docs for launch configuration — especially:
+  Any DAP adapter works. For an unlisted one, check its docs for:
      - stdio vs TCP mode
-     - Required launch_args fields (program, cwd, request, etc.)
-     - Whether "type" must be set to a specific value (e.g. "cppvsdbg" for vsdbg)
-  3. If initialize fails with a vague error, the most common cause is a wrong
-     adapterID. Try setting "type" in launch_args to the value the adapter expects.
-  4. If launch succeeds but debugging doesn't start, check operation=status for
-     error events — some adapters have license restrictions (e.g. vsdbg).
+     - required launch_args fields (program, cwd, request, ...)
+     - the "type" value it expects (e.g. "cppvsdbg" for vsdbg)
+  initialize failing with a vague error is usually a wrong adapterID: set "type"
+  in launch_args. If launch succeeds but nothing runs, operation=status shows
+  the error events (e.g. a license restriction).
 
 ## Tips
 - If timeout occurs, use operation=status to check state and poll events
-- Variables use reference IDs — get them from scopes response
+- Variables use reference IDs -- get them from scopes response
 - References are only valid while stopped; they reset on continue
 - Max 5 concurrent debug sessions (oldest evicted at capacity)
 - Sessions auto-expire after 30 minutes of inactivity
@@ -1680,7 +920,7 @@ It works with any language that has a DAP-compatible debug adapter.
 
 ### Node.js under codelldb (LLDB)
   When debugging Node.js scripts under codelldb, async operations (setTimeout,
-  setImmediate, Promise callbacks) may NOT execute — Node's event loop doesn't
+  setImmediate, Promise callbacks) may NOT execute -- Node's event loop doesn't
   tick properly under LLDB's stdio capture.
   Workaround: Use synchronous scripts only. Replace async patterns with sync
   equivalents (e.g., require() instead of dynamic import, synchronous loops
@@ -1694,19 +934,13 @@ It works with any language that has a DAP-compatible debug adapter.
   This is useful for instruction-level breakpoints when set_instruction_breakpoints
   fails (some adapters have parsing issues with hex addresses).
 
-### vsdbg handshake
-  vsdbg requires a proprietary handshake: it sends a reverse request with a
-  challenge value, and the client must sign it. This tool handles the handshake
-  automatically using a built-in signing algorithm. No external dependencies needed.
-  Note: vsdbg may still enforce additional license checks beyond the handshake
-  that restrict usage to VS Code environments.
-
 ### Reading native code / DLL internals
   Use codelldb with read_memory and disassemble for low-level inspection.
   For native addon analysis (e.g., .node files), load them in a host process
   (Node.js for .node files) and set instruction breakpoints at known RVAs.
-  PE image base for DLLs is typically 0x180000000 — add the RVA offset to
-  compute the runtime address for breakpoints.`
+  Runtime address = the module's loaded base (operation=modules, or
+  resolve_address on any address inside it) + RVA. ASLR moves DLLs, so the
+  preferred base in the PE header (often 0x180000000) is usually not it.`
 }
 
 func helpTroubleshooting() string {
@@ -1743,7 +977,7 @@ Common reasons:
 - The text was already changed
 
 ## File encoding changed after edit
-This shouldn't happen — agent-tool preserves the original encoding.
+This shouldn't happen -- agent-tool preserves the original encoding.
 If it does, check:
 1. Is .editorconfig charset set correctly?
 2. Was the file originally in the expected encoding?
@@ -1770,9 +1004,7 @@ chunk; a cancelled filter is rolled back, so the session keeps its previous matc
 is busy, other calls on it fail fast instead of queueing.
 
 ## Platform Support
-- Windows: OpenProcess + ReadProcessMemory/WriteProcessMemory + VirtualQueryEx
-- Linux: /proc/pid/maps + /proc/pid/mem (read/write)
-- macOS: Not supported (SIP)
+Windows and Linux. macOS is not supported.
 
 ## Operations
 
@@ -1784,7 +1016,7 @@ is busy, other calls on it fail fast instead of queueing.
   memtool(operation="search", pid=1234, value_type="int32", value="100")
   memtool(operation="search", pid=1234, value_type="bytes", value="4D 5A 90 00")
   memtool(operation="search", pid=1234, value_type="int32")  # unknown initial value
-  Omit 'value' for unknown initial value scan — takes a full snapshot and
+  Omit 'value' for unknown initial value scan -- takes a full snapshot and
   lets you filter by changed/unchanged/increased/decreased.
 
 ### filter - Narrow matches (requires session_id)
@@ -1820,9 +1052,7 @@ is busy, other calls on it fail fast instead of queueing.
   memtool(operation="disasm", pid=1234, address="0x7FF6A1B20000")
   memtool(operation="disasm", pid=1234, address="0x...", count=100, arch="x86", mode=64)
   memtool(operation="disasm", pid=1234, address="0x...", arch="arm", mode=64)
-  Reads memory from the process and disassembles in-place.
-  Uses the same disassembly engine as the analyze tool (x86/x64/ARM/ARM64).
-  Lines are address + instruction; show_bytes=true adds the hex encoding column.
+  x86/x64/ARM/ARM64. Lines are address + instruction; show_bytes=true adds the hex encoding column.
 
 ### struct_search - Multi-field pattern search
   memtool(operation="struct_search", pid=1234,
@@ -1837,10 +1067,10 @@ is busy, other calls on it fail fast instead of queueing.
 
 ### force_dacl - Bypass a same-user process's hardened DACL (Windows, opt-in)
   memtool(operation="read", pid=1234, address="0x...", force_dacl=true)
-  When a normal open is denied, temporarily rewrites the target's DACL via
-  owner-implicit WRITE_DAC, opens the handle, then restores the original DACL.
-  Same-user self-hardened targets only -- cannot bypass higher-integrity,
-  other-user, OWNER_RIGHTS-SID, or PPL/anti-cheat processes.
+  When a normal open is denied, temporarily rewrites the target's DACL, opens
+  the handle, then restores the original DACL. Only for same-user targets that
+  hardened their own DACL -- cannot bypass higher-integrity, other-user, or
+  PPL/anti-cheat processes.
 
 ### info / close - Session management
   memtool(operation="info", session_id="abc")
@@ -1866,9 +1096,7 @@ is busy, other calls on it fail fast instead of queueing.
 
 ## Session/Performance
   - Max 3 sessions (oldest evicted), 10min idle timeout
-  - Hybrid storage: in-memory up to 10M matches, auto disk-backed beyond (up to 100M)
-  - Parallel search (multi-core), batched filter reads (64KB groups)
-  - Disk-backed snapshots for diff (handles multi-GB processes)
+  - Up to 100M matches per session; snapshots and diff handle multi-GB processes
   - Undo stack: up to 5 levels
 
 ## Permissions
@@ -1880,7 +1108,7 @@ is busy, other calls on it fail fast instead of queueing.
 }
 
 func helpWintool() string {
-	return `# wintool — Windows GUI Automation
+	return `# wintool -- Windows GUI Automation
 
 Windows-only tool for finding, inspecting, and controlling windows.
 macOS and Linux are not supported.
@@ -1896,11 +1124,9 @@ macOS and Linux are not supported.
 
 ### Observation
   - screenshot: Capture a window as base64 PNG (works even if occluded)
-    Uses PrintWindow (PW_RENDERFULLCONTENT), falls back to BitBlt
     Max resolution: 4096x4096. Default: returns ImageContent (base64).
     Use save_path="temp" for temp file, or save_path="/path/to/file.png".
   - clipboard: Read image from system clipboard as PNG
-    Supports 24-bit and 32-bit DIBs (BI_RGB and BI_BITFIELDS).
     Use after Win+Shift+S or image copy.
     Default: returns ImageContent (base64). Use save_path for file output.
   - gettext: Read text from a window/control via WM_GETTEXT
@@ -1908,8 +1134,7 @@ macOS and Linux are not supported.
 ### Interaction
   - settext: Set text on a window/control via WM_SETTEXT
   - click: Click at client-relative coordinates (left/right/middle)
-  - type: Send keyboard characters. Auto-detects ConsoleWindowClass and uses
-    WriteConsoleInput (for cmd/PowerShell). GUI windows use WM_CHAR.
+  - type: Send keyboard characters to a GUI window or a console (cmd/PowerShell)
     Tip: type + send(msg=0x0100, wparam=0x0D) injects commands into terminals/IDEs
   - send: Raw SendMessage/PostMessage with custom msg/wParam/lParam
   - close: Send WM_CLOSE to a window
@@ -1951,57 +1176,57 @@ macOS and Linux are not supported.
 func helpCodegraph() string {
 	return `# codegraph - AST-based Code Indexing
 
-Parses source code with tree-sitter (via WASM) and stores symbols/relationships
-in a local SQLite index. Enables precise symbol lookup without grep noise.
+Indexes symbols, calls and inheritance of a project for precise lookup without
+grep noise. No compiler or language server is needed.
 
 ## Operations
 
-  codegraph(op="index", path="/project/root")
+  codegraph(operation="index", path="/project/root")
     Build or update the code index. Incremental: only re-parses changed files.
     Creates .codegraph.db at the project root (add to .gitignore).
 
-  codegraph(op="find", name="Monster", path="/project/root")
+  codegraph(operation="find", name="Monster", path="/project/root")
     Find symbol definitions by name. Searches name and qualified_name.
 
-  codegraph(op="callers", name="takeDamage", path="/project/root")
+  codegraph(operation="callers", name="takeDamage", path="/project/root")
     Find all call sites that invoke a function/method.
 
-  codegraph(op="callees", name="main", path="/project/root")
+  codegraph(operation="callees", name="main", path="/project/root")
     Find all functions called by a function (within its body).
 
-  codegraph(op="symbols", path="/path/to/file.cpp")
+  codegraph(operation="symbols", path="/path/to/file.cpp")
     List all symbols in a file (classes, functions, calls). No index needed.
     symbols and callees support offset + max_results (default 500, max 100000)
     and max_output_chars (default 32768, max 131072). Follow the returned
     next-offset hint to continue.
 
-  codegraph(op="methods", name="Monster", path="/project/root")
+  codegraph(operation="methods", name="Monster", path="/project/root")
     List all methods of a class.
 
-  codegraph(op="inherits", name="Dog", path="/project/root")
+  codegraph(operation="inherits", name="Dog", path="/project/root")
     Show inheritance hierarchy (parents and children).
 
-  codegraph(op="stats", path="/project/root")
+  codegraph(operation="stats", path="/project/root")
     Project statistics: file/class/function/method/call counts by language.
 
-  codegraph(op="importers", name="dap_server.h", path="/project/root")
+  codegraph(operation="importers", name="dap_server.h", path="/project/root")
     Find all files that import/include a given file.
 
-  codegraph(op="unused", path="/project/root")
+  codegraph(operation="unused", path="/project/root")
     Find functions/methods defined but never called (dead code detection).
 
-  codegraph(op="call_tree", name="HandleRequest", path="/project/root", depth=3, direction="up")
+  codegraph(operation="call_tree", name="HandleRequest", path="/project/root", depth=3, direction="up")
     Recursive call hierarchy. direction: up (callers) or down (callees). Default depth 3.
 
 ## Workflow
 
-  1. codegraph(op="index", path="/project/root")   -- build index (once)
-  2. codegraph(op="stats")                          -- project overview
-  3. codegraph(op="find", name="Player")            -- find definitions
-  4. codegraph(op="methods", name="Player")          -- list methods
-  5. codegraph(op="callers", name="takeDamage")      -- who calls this?
-  6. codegraph(op="call_tree", name="takeDamage", direction="up")  -- full call chain
-  7. codegraph(op="unused")                          -- dead code
+  1. codegraph(operation="index", path="/project/root")   -- build index (once)
+  2. codegraph(operation="stats")                          -- project overview
+  3. codegraph(operation="find", name="Player")            -- find definitions
+  4. codegraph(operation="methods", name="Player")          -- list methods
+  5. codegraph(operation="callers", name="takeDamage")      -- who calls this?
+  6. codegraph(operation="call_tree", name="takeDamage", direction="up")  -- full call chain
+  7. codegraph(operation="unused")                          -- dead code
   8. After editing, re-run index to update changed files
 
 ## Supported Languages
@@ -2017,12 +1242,7 @@ in a local SQLite index. Enables precise symbol lookup without grep noise.
 
 ## Key Points
 
-  - No external dependencies (tree-sitter runs as WASM inside the binary)
-  - Index is local per-project (.codegraph.db)
-  - Incremental updates (only changed files re-parsed)
-  - symbols operation works without an index (parses file on-the-fly)
-  - Pure data lookup, no LLM calls, zero token cost
-  - WASM engines are recycled periodically to limit memory usage
-  - call_tree provides recursive call hierarchy (replaces manual callers chaining)
-  - unused detects dead code (defined but never called)`
+  - symbols parses one file directly; the other lookups read the index, so run index first
+  - Index is local per-project (.codegraph.db); updates re-parse only changed files
+  - call_tree replaces chaining callers/callees calls by hand`
 }

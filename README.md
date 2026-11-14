@@ -81,142 +81,49 @@ Local relative paths resolve against an explicit workspace, then the MCP client 
 | **Redis** | Execute Redis commands with formatted output by type. TLS support. Dangerous commands (FLUSHALL, SHUTDOWN, etc.) blocked | ✅ |
 | **SLOC** | Count source lines of code per language. 70+ language detection, per-file/language breakdown, blank line stats, max_depth control | ✅ |
 | **Debug** | Interactive debugger via DAP (Debug Adapter Protocol). Full DAP coverage with bounded values/output and paging for variables, completions, modules, and loaded sources. Tested with dlv (Go), debugpy (Python), codelldb (C/C++/Rust). Works with any DAP-compatible adapter. Stdio and TCP modes. Note: vsdbg (Microsoft) requires VS Code licensing and is not usable standalone — use codelldb or netcoredbg as open-source alternatives | ✅ |
-| **Analyze** | Static binary analysis and reverse engineering. Decompilation of x86/x64 PE/ELF functions to C (Gosleigh, a Go port of Ghidra's decompiler core, run in an isolated worker process with time/memory limits); a matching PE PDB (built-in reader, no DIA SDK; `pdb_force` loads one whose GUID differs) or embedded DWARF is read automatically for function names, prototypes, struct/enum types, global data, bitfields and local variables (names and types) in decompilation (the structs/enums a function names are printed after it with member offsets and enum values; `type_info` prints any other by name), and for names and exact function bounds in disassemble, call_graph and function_at; MSVC decorated names are demangled; Go binaries use the Go ABI; non-returning functions are detected as in Ghidra (`noreturn_verify` keeps a callee whose code reaches a `ret` returning when its call sites alone voted it non-returning); undecodable bytes end only their path (`halt_baddata()`); a runaway flow (junk-byte obfuscation, where Ghidra times out) is decompiled inside the function's x64 `.pdata` extent with each exit marked (`halt_missing()`), and `assume_branches` fixes conditional jumps a runtime trace resolved; `agent-tool decompile-all` dumps a whole binary to a JSONL corpus; x86/x64/ARM/ARM64 disassembly (address + instruction by default, `show_bytes` adds the hex encoding; switch tables inside the code print as data lines with their case targets); semantic x86/x64 instruction search (mnemonic, register, immediate, memory displacement) with exhaustive executable-offset recovery, CFG confidence, function names, target/result filters, and parallel fixpoint register/stack/read-only constant tracing into ABI-aware calls and tail calls (stdcall argument cleanup modeled, read from the imported DLLs for x86 imports); PE/ELF/Mach-O parsing with bounded, pageable PE import output; xref to an address, the strings containing a text, or a struct field (Class::member, confirmed by decompiling), covering code, immediates and data pointers (vtable slots), each reference named by its containing function; function discovery/call graphs (function bounds without a PDB matched PDB bounds for 100% of addresses on a large x64 image, 99.5% on x86; callers through thunks and tail jumps, vtable references), pointer/RTTI/vtable/struct analysis, imphash, Rich header, DWARF, strings, hexdump, pattern search, entropy, overlay detection, and binary diff. No global file size limit | ✅ |
-| **Memtool** | CheatEngine-style process memory tool — search/filter/read/write memory values, read_chain (resolve base+offset pointer chains, batched in one call), live disassembly (x86/x64/ARM/ARM64), undo, struct pattern search, pointer scan, memory diff. Disk-backed snapshots for large scans. Session management with idle timeout. Windows (ReadProcessMemory) and Linux (/proc/pid/mem). Windows auto-enables SeDebugPrivilege when elevated; opt-in `force_dacl` bypasses a same-user process's self-hardened DACL (original restored after). Long scans yield a `job_id` and stop promptly on cancel (a cancelled filter is rolled back) | ✅ |
-| **Wintool** | Windows GUI automation — find/enumerate windows and child controls, capture screenshots (ImageContent PNG via PrintWindow), read clipboard images, read/set text, click, type, send raw messages, show/hide/minimize/maximize, move/resize, close, focus. screenshot/clipboard return ImageContent by default (save_path option for file output). Enables AI agents to "see" and interact with GUI applications. Windows only | ✅ |
-| **CodeGraph** | Fully embedded semantic code graph: Go standard-library AST plus lazy compressed tree-sitter WASM for C/C++, Python, C#, Rust, and Java. Adds declaration/definition identity, return-chain and generic/alias propagation, transitive includes, calibrated overload evidence, virtual/interface dispatch, macro/callback edges, build-condition provenance, and multi-root workspaces. No compiler, language server, external binary, LLM call, or token cost | ✅ |
+| **Analyze** | Static binary analysis and reverse engineering of PE/ELF/Mach-O files. Decompiles x86/x64 PE/ELF functions to C with names and types from a matching PDB, embedded DWARF or IL2CPP metadata ([details](#decompilation)); x86/x64/ARM/ARM64 disassembly; semantic instruction search that traces constants into call arguments; xrefs to addresses, strings and struct fields; function bounds and call graphs; RTTI, vtable, pointer and struct-layout inspection; header parsing, imphash, Rich header, DWARF, strings, hexdump, pattern search, entropy, overlay detection and binary diff; persistent user annotations. Only `strings`, `entropy` and `bin_diff` are bound by `max_file_size_mb` | ✅ |
+| **Memtool** | CheatEngine-style process memory tool — search/filter/read/write memory values, read_chain (resolve base+offset pointer chains, batched in one call), live disassembly (x86/x64/ARM/ARM64), undo, struct pattern search, pointer scan, memory diff. Disk-backed snapshots for large scans. Session management with idle timeout. Windows and Linux. Windows auto-enables SeDebugPrivilege when elevated; opt-in `force_dacl` bypasses a same-user process's self-hardened DACL (original restored after). Long scans yield a `job_id` and stop promptly on cancel (a cancelled filter is rolled back) | ✅ |
+| **Wintool** | Windows GUI automation — find/enumerate windows and child controls, capture screenshots (ImageContent PNG), read clipboard images, read/set text, click, type, send raw messages, show/hide/minimize/maximize, move/resize, close, focus. screenshot/clipboard return ImageContent by default (save_path option for file output). Enables AI agents to "see" and interact with GUI applications. Windows only | ✅ |
+| **CodeGraph** | Semantic code graph for C/C++, Python, Go, C#, Rust and Java: symbol definitions, callers/callees, call trees, class methods and inheritance, importers and unused symbols, across single projects or multi-root workspaces. Resolves overloads, virtual/interface dispatch, aliases and transitive includes. Fully embedded: no compiler, language server or external binary | ✅ |
 | **SetConfig** | Change runtime settings (encoding, file size limit, symlinks, workspace, etc.) | ✅ |
-| **Help** | Built-in usage guide for agents (encoding, indentation, troubleshooting) | ✅ |
+| **Help** | Built-in usage guide for agents. The large `tools` and `analyze` references return an index and are read one section at a time (`analyze/decompile`) | ✅ |
 
 ## Decompilation
 
-Loaded workers are reused between requests for the same binary and analysis options. Up to two idle workers are retained, and each exits after ten minutes without use. Binary or metadata changes invalidate reuse.
+`analyze(operation="decompile")` turns x86/x64 PE and ELF functions into C with Gosleigh (currently v0.1.18), a Go port of Ghidra's decompiler core.
 
-The Gosleigh v0.1.17 enhanced preset is applied automatically. It improves inferred stack and floating-point arguments, indirect-call arguments, and reused stack locals while keeping pointers distinct from floating-point values. Locals inherited from callee parameter names are renamed when they conflict with the current function's parameters. Loaded workers also retain callee translation and return-analysis caches between requests. No additional options are needed; supplied debug or IL2CPP prototypes retain precedence over inference.
+```json
+{"operation":"decompile","file_path":"game.exe","va":"Player::TakeDamage, 0x140001000"}
+```
 
-## IL2CPP prototypes and native metadata extraction
+- A matching PDB or embedded DWARF is applied automatically: function names, prototypes, struct/enum types, globals and locals. The types a function names are printed after its C; `type_info` prints any other.
+- Obfuscated or damaged functions still print. An undecodable path ends in `halt_baddata()`, runaway flow is cut at the function's `.pdata` extent, and `assume_branches` fixes conditional jumps that a runtime trace resolved.
+- Each call runs in a worker process with time and memory limits. A loaded worker is reused for ten minutes, so follow-up calls on the same binary skip the load.
+- `agent-tool decompile-all <binary>` dumps every function to a JSONL corpus.
 
-For Windows x64 IL2CPP images without PDB/DWARF, `analyze(operation="decompile")` accepts `il2cpp_signatures` (`il2cpp_script` is an alias). Pass `global-metadata.dat`, an Il2CppDumper `script.json`, or an exported `methodsigs.tsv`. Adjacent signature sidecars take priority; otherwise standard Unity metadata locations are discovered, including `<application>_Data/il2cpp_data/Metadata/global-metadata.dat`. Multiple matches require an explicit path; `none` disables this source. `decompile-all` uses the same extraction and accepts `-il2cpp-signatures`.
+Per-operation guide for agents: `agent_tool_help` topic `analyze/decompile`.
 
-Native extraction currently supports **metadata v39 and Windows x64 PE**. It reads the binary and metadata directly in Go, without running the DLL or requiring .NET, LibCpp2IL, or an external dumper. It resolves method addresses, shared-generic aliases, signatures, instance fields, and virtual slots. Class decoration requires a recognized runtime accessor proving the vtable offset; otherwise direct signatures remain available. Extraction is retained in the existing worker's memory, with metadata changes invalidating worker reuse. It creates no metadata dump or C# declaration files. Other metadata versions and binary formats require external signature exports.
+## IL2CPP prototypes
 
-Automatic native extraction requires recognizable IL2CPP runtime exports and a bounded adjacent-directory search; use an explicit metadata path for stripped images or other layouts. Failed automatic extraction reports a note and preserves ordinary inferred decompilation. Explicit invalid metadata paths report an error.
+For Windows x64 IL2CPP images without PDB/DWARF, `decompile` takes prototypes from `il2cpp_signatures`: `global-metadata.dat` (metadata v39 is read natively, without running the DLL or an external dumper), an Il2CppDumper `script.json`, or an exported `methodsigs.tsv`. Sidecars beside the binary and the standard Unity metadata locations are found automatically; `none` disables the source. Debug information keeps precedence and names are never changed.
 
-TSV columns are `VA<TAB>static<TAB>ret<TAB>params<TAB>name`: absolute VA, static `0/1`, return type, comma-separated managed parameter types, and a diagnostic name. Types include `bool`, `int32`, `uint64`, `float32`, `float64`, `ref:Type`, `ptr:Type`, and `val:12:Type` (exact value-type payload size). Escape commas in type names as `%2C`. The host supplies an instance `this` and trailing `MethodInfo*`; do not include them in TSV params. A `# binary_sha256=<hex>` header, when present, must match the binary.
-
-Debug information takes precedence. Names are unchanged, and unknown or conflicting shared-generic signatures remain inferred. Closed generic value layouts are not guessed. Known large aggregate returns remain unlocked because they require a hidden return buffer. JSON value types need layouts from a sibling `il2cpp.h`; unsupported layouts are skipped. For external TSV exports, a sibling, binary-bound `il2cpp-types.json` can additionally supply class layouts and typed virtual slots; see [the type export contract](docs/il2cpp-types.md). Virtual prototypes apply where the object's class type reaches the call; unknown slots and hidden-buffer returns stay inferred. No additional MCP tool is required.
+Details: [native extraction, discovery rules and the TSV format](docs/il2cpp.md), [class and virtual-slot type export](docs/il2cpp-types.md).
 
 ## Persistent analysis annotations
 
-The existing `analyze` tool can save user comments and labels in SQLite with
-`annotation_set`, search/read them with `annotation_list`, and remove them with
-`annotation_delete`. Disassembly and decompilation load saved notes automatically.
-These are user assessments, visibly separate from automatic symbols and debug types;
-labels and subjects do not rename engine symbols or override inferred types.
+`analyze` keeps your own labels and comments on instructions, functions and decompiled C lines in a SQLite file (`annotation_set`, `annotation_list`, `annotation_delete`, `annotation_batch`, `annotation_suggest`). Disassembly and decompilation show saved notes automatically and separately from engine facts: notes never rename symbols or override types.
 
 ```json
-{"operation":"annotation_set","file_path":"sample.exe","rva":"0x1234","subject":"rax","comment":"User pointer returned here","annotation_status":"hypothesis","annotations_path":"project.annotations.sqlite"}
+{"operation":"annotation_set","file_path":"sample.exe","rva":"0x1234","subject":"rax","comment":"User pointer returned here","annotations_path":"project.annotations.sqlite"}
 {"operation":"disassemble","file_path":"sample.exe","va":"0x140001234","annotations_path":"project.annotations.sqlite"}
-{"operation":"annotation_list","file_path":"sample.exe","query":"User","annotations_path":"project.annotations.sqlite"}
 ```
 
-Call through `toolbox` (`operation="call", tool="analyze", arguments={...}`); use
-`toolbox describe` or help topic `analyze` for the full schema and examples.
+- Notes are scoped by the binary's SHA-256 and a static address: copies keep their notes, modified builds do not inherit them.
+- Edits and deletes are revision-checked; a stale revision fails without changing the record.
+- C-line notes are bound to the decompiled snapshot. When the C changes they are held for review, and `annotation_suggest` proposes where they belong.
+- Keep private annotation databases out of public Git history (this repository ignores `*.annotations.sqlite*`).
 
-- `annotations_path` manually selects the SQLite file for saving **and loading**;
-  relative paths use the workspace/MCP root. The default is
-  `<user config dir>/agent-tool/analysis-annotations.sqlite` (Windows: under
-  `%APPDATA%`). Reads do not create databases; the first `annotation_set` does.
-  This is separate from the rebuildable codegraph DB and disposable analysis cache.
-- Notes are scoped by the **full binary SHA-256** and static address. Identical
-  copies keep their notes; changed binaries do not inherit them. There is no
-  automatic migration between builds. Use a static `va` (hex or file/debug symbol)
-  or PE `rva` (module-relative offset), not a live ASLR address or file offset.
-- `annotation_kind` is `instruction` (default), `function` (entry address), or
-  `decompile`. Optional `subject` identifies a register, operand, or variable at
-  that location. `annotation_status` is `hypothesis` (default), `confirmed`, or
-  `rejected`; this records the user's assessment.
-- For a C-line comment, first run `decompile` with `line_numbers=true`. Pass the
-  returned `code_hash`, the C-body `line` (L number), the function entry `va`,
-  and `annotation_kind="decompile"` to `annotation_set`. Notes render before the
-  corresponding line. A changed C snapshot keeps the note at the function header
-  as `needs_review` instead of attaching it to another line. Headers, annotations,
-  and trailing type definitions do not count toward L numbers.
-- Function notes appear above the C body. Instruction notes appear inline in
-  disassembly. Decompile also gathers instruction notes inside exact PDB/.pdata
-  or sized ELF-symbol ranges, showing each original VA above the C body. Unknown
-  ranges fall back to entry notes with a notice; at most 16 ranges per function
-  are used. These notes are not guessed onto individual C lines.
-- Set without an ID creates a new anchor; it rejects an occupied anchor instead
-  of overwriting another editor's work. Update by `annotation_id` requires the
-  exact `expected_revision` string from set/list. Omitted fields are preserved;
-  nonempty top-level fields update only those values. Use `annotation_patch` for
-  explicit empty strings or `line=0`; its supplied fields override top-level
-  values. The merged record must still have a label or comment and a valid anchor.
-  Delete requires both ID and expected revision. Stale edits/deletes fail without
-  changing the record; read it again before retrying. Revisions remain strings,
-  including in rendered notes and abbreviated receipts.
-- List supports address, kind, subject, status, ID and literal `query` filters
-  (ASCII case folding). `max_results` defaults to 50 (max 200); `result_offset`
-  is a row index and `next_result_offset` continues the JSON list. Output limits
-  can shorten a page; raise `max_output_chars` when a single listed note cannot
-  fit. Writes require at least 256 output characters, checked before any change.
-  If full write details cannot fit, success still returns a short JSON receipt
-  with `saved`, `annotation_id`, `revision` (or `deleted`) and
-  `details_omitted=true`. Disassembly/decompile page by character instead.
-  Rendered views cap notes at 500; list retrieves the rest.
-- Annotation DB load failures produce a visible warning alongside the original
-  disassembly/decompilation; annotation CRUD still reports DB errors normally.
-  Legacy v1/v2 DBs remain readable without modification. Their first write
-  atomically migrates to v3, adding missing revision/evidence/provenance/anchor
-  fields. Existing revisions are preserved (v1 starts at `"1"`). Older builds
-  that only understand v1/v2 cannot open a v3 DB.
-
-Partial edit example (use the ID and revision returned by your last read):
-
-```json
-{"operation":"annotation_set","file_path":"sample.exe","annotation_id":"<id>","expected_revision":"1","annotation_patch":{"comment":"Confirmed user pointer","annotation_status":"confirmed","label":""},"annotations_path":"project.annotations.sqlite"}
-```
-
-Batch and evidence example:
-
-```json
-{"operation":"annotation_batch","file_path":"sample.exe","annotations_path":"project.annotations.sqlite","batch":[{"operation":"set","rva":"0x1234","subject":"rax","comment":"User pointer","provenance":"manual analysis","evidence":[{"kind":"static","va":"0x140001230","source":"lookup_user call","detail":"Return value is used as a context pointer"}]},{"operation":"set","annotation_id":"<id>","expected_revision":"1","annotation_patch":{"annotation_status":"confirmed"}}]}
-```
-
-- A batch contains 1..32 `set`/`delete` items sharing one binary and DB. It opens
-  and hashes once; each item commits independently and returns an indexed receipt,
-  including conflicts. Successful items remain committed when another fails.
-  Required `max_output_chars` is at least `768 * item_count + 256`, checked before
-  any changes. The default budget supports 32 items. A DB-open error fails the
-  envelope; cancellation leaves completed items committed and marks remaining
-  items failed.
-- Optional `evidence` stores up to 16 user-supplied observations with `kind`
-  (`static`, `runtime`, `user`), optional exact-string `va`, `source`, and
-  required `detail`. `provenance` records the origin of the judgment. Neither
-  sources nor observations are fetched or automatically verified. Both appear
-  in saved/rendered notes and are searchable; sparse edits preserve them.
-  `annotation_patch` with `evidence:[]` or `provenance:""` explicitly clears them.
-- When saving a C-line note, include the exact raw line in `anchor_text`.
-  `annotation_suggest` with its `annotation_id` decompiles that function and
-  returns the current `code_hash`, revision and up to three candidate lines.
-  Unchanged snapshots use the original line; otherwise stored text or token
-  overlap proposes candidates. Equal top scores are marked `ambiguous`.
-  Generic/missing anchors may produce no candidates. Old notes without text need
-  manual selection after a snapshot change. **Suggestions never write the DB.**
-  After review, call `annotation_set` with ID, `expected_revision` and
-  `annotation_patch:{"line":N,"code_hash":"<current hash>","anchor_text":"<raw line>"}`.
-  The revision guard still applies. Source/detail/provenance limits are
-  512/1024/512 UTF-8 bytes; `anchor_text` is one C line, max 2048 bytes.
-
-```json
-{"operation":"annotation_suggest","file_path":"sample.exe","annotation_id":"<id>","annotations_path":"project.annotations.sqlite"}
-```
-
-Keep private annotation databases out of public Git history. This repository ignores
-`*.annotations.sqlite*` and the default DB filename. Custom filenames need their
-own ignore rule. Keep a backup of durable notes; clearing analysis caches does not
-remove them.
+Fields, revision rules and batch use: `agent_tool_help` topics `analyze/annotation_set` and `analyze/annotation_batch`.
 
 ## Key Improvements
 
@@ -224,14 +131,12 @@ remove them.
 LLMs typically output spaces, but many projects use tabs. AgentTool auto-converts indentation to match the file's existing style.
 
 - Inherits `indent_style`, `indent_size`, and `tab_width` per property from parent `.editorconfig` files, respecting `root = true`, `unset`, `indent_size=tab`, and common `**` path patterns
-- Falls back to a content sample of up to 8 MiB, without a fixed line-count cap. Long lines and LF, CRLF, or CR endings are supported. Lexical block-opening evidence takes priority over raw indent/dedent frequencies, reducing confusion with continuation alignment; inconclusive evidence retains the deterministic frequency fallback
-- When recovering unique anchors, new space-indented levels use the nearest block-width evidence within 32 lines and 16 KiB. Lexical state is scanned from the file start within the 8 MiB sample; anchors beyond it retain the previous fallback. Common comments, quoted/raw/triple-quoted literals, and parenthesized/bracketed continuations are excluded from structural evidence. This is a heuristic, not a language parser or semantic formatter
+- Falls back to analysing the file content (up to 8 MiB; LF, CRLF and CR endings). Block structure decides the width, not continuation alignment, comments or string literals
 - Preserves the detected space width when existing space indentation conflicts with a tab setting
 - Converts tabs/spaces and space widths such as 2 ↔ 4; converted matches stay at line boundaries, and tab-depth correction preserves relative nesting
 - Unique line and multiline block anchors use actual local indentation and prefix mappings, preserving minority styles, alignment, and indented blank lines. Block nesting must agree
-- C++/header and Python file edits lazily reuse the embedded Tree-sitter WASM engine to infer new space-indented levels from direct statements in the actual enclosing block, rather than nearby sibling blocks or argument alignment. No external compiler, Python installation, CGO, or index is required
-- For successfully parsed replacement snippets, continuation lines aligned to an actual inline token column follow the opener's indentation shift; hanging indentation retains level rescaling even when the first argument is inline, and multiline literal/comment interiors retain their supplied content. Exact matches and explicit style overrides keep their existing behavior
-- Syntax assistance falls back to the existing heuristic on unsupported files, inconclusive/error-bearing enclosing blocks, analysis failures/timeouts, or sources over 8 MiB. Each parse has a 2-second budget; replacement-snippet assistance is limited to 64 KiB/512 lines. Syntax recovery is not a guarantee of semantic equivalence
+- For C++/header and Python files the embedded Tree-sitter engine infers the indentation of new nested levels from the enclosing block
+- Alignment to an inline token column and the interiors of multi-line literals/comments in the replacement are kept as written
 - Rejects equally plausible tab-depth candidates instead of choosing one arbitrarily
 - Detection is heuristic, not a language formatter; use `dry_run=true` to review an automatic edit
 
@@ -269,14 +174,10 @@ entries are available. Narrow results with `directories_only`, `files_only`,
 Use `counts_only=true` when only matching file/directory counts are needed.
 
 ### Idle memory release
-After 30 minutes with no tool call, the server returns its heap to the OS. A
-stdio MCP server cannot tell an abandoned client from a quiet one -- the process
-that spawned it may be alive, finished with it, and still holding the pipe open,
-so no EOF ever arrives -- and exiting on that guess would break a session that
-merely paused. Releasing the memory is the safe half of that trade: an instance
-that once read a 50MB file settles back to its ~20MB baseline instead of holding
-200MB for the rest of the machine's uptime. Open shell and ssh sessions survive,
-and nothing the client can observe changes.
+After 30 minutes with no tool call the server returns its heap to the OS: an
+instance that once read a 50MB file settles back to its ~20MB baseline instead of
+holding 200MB. It never exits on idle, because a stdio server cannot tell an
+abandoned client from a quiet one. Open shell and ssh sessions survive.
 
 ## Quick Start
 
@@ -380,6 +281,9 @@ agent-tool install --no-auto-approve
 agent-tool install claude
 agent-tool install claude --safe-approve
 
+# Also install the optional agent skills (Claude Code, Codex)
+agent-tool install --skills
+
 # Uninstall (removes agent-tool entry only, preserves other settings)
 agent-tool uninstall          # from all agents
 agent-tool uninstall claude   # from specific agent
@@ -399,6 +303,16 @@ namespace while the server still starts with the token-efficient `core` profile.
 `operation=call` gateway can invoke network, shell, database, and process-control
 tools. Safe-mode users should review each toolbox approval and avoid granting it a
 permanent allow rule unless they intend to trust the full AgentTool namespace.
+
+### Agent skills (optional)
+
+The [`skills/`](skills) folder ships workflow skills that tell an agent *how to work* with the tools, while the built-in help stays the parameter reference:
+
+| Skill | Use |
+|-------|-----|
+| [`agent-tool-reversing`](skills/agent-tool-reversing/SKILL.md) | Reverse engineering with `analyze`, `memtool` and `debug`: where to start in a binary, when to decompile or disassemble, handling obfuscated functions, confirming at runtime, saving findings as annotations |
+
+`agent-tool install --skills` copies them to `~/.claude/skills` and `~/.codex/skills`; they are embedded in the binary, so no checkout is needed. Skills are opt-in because an agent loads every installed skill's description into each session. Once installed, later `install`/`reinstall` runs refresh them and `uninstall` removes them. To install by hand, copy the skill folder into the agent's skills directory.
 
 ### Manual setup
 
@@ -714,7 +628,14 @@ agent-tool includes a `agent_tool_help` tool that agents can call for usage guid
 { "tool": "agent_tool_help", "arguments": { "topic": "encoding" } }
 ```
 
-Available topics: `overview`, `encoding`, `indentation`, `tools`, `troubleshooting`
+Available topics: `overview`, `encoding`, `indentation`, `tools`, `debug`, `analyze`, `memtool`, `wintool`, `codegraph`, `troubleshooting`
+
+The two large references, `tools` and `analyze`, return a short index (about 1k tokens) instead of the whole text. One part is requested as `topic/section`, several with commas:
+
+```json
+{ "tool": "agent_tool_help", "arguments": { "topic": "analyze/decompile" } }
+{ "tool": "agent_tool_help", "arguments": { "topic": "tools/ssh,sftp" } }
+```
 
 ## Security
 

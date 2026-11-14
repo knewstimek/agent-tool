@@ -292,13 +292,11 @@ func Register(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name: "debug",
 		Description: `Interactive debugger using Debug Adapter Protocol (DAP).
-Launch and control debug sessions for any language with a DAP-compatible adapter.
-Supports breakpoints, stepping, variable inspection, expression evaluation, stack traces.
-Adapters: dlv (Go), debugpy (Python), codelldb/lldb-dap (C/C++/Rust), and more.
-Operations: launch, attach, set_breakpoints, continue, next, step_in, step_out, pause, threads, stack_trace, scopes, variables, evaluate, disconnect, status.
-Extended: breakpoint_locations, set_function_breakpoints, set_exception_breakpoints, set_data_breakpoints, data_breakpoint_info, set_instruction_breakpoints, disassemble, read_memory, write_memory, set_variable, set_expression, goto, goto_targets, step_back, reverse_continue, restart_frame, modules, loaded_sources, exception_info, completions, source, terminate, restart, cancel, step_in_targets, terminate_threads, resolve_address.
-Large results are bounded: variables, completions, and loaded_sources support start/max_results paging; modules supports start_module/module_count; max_value_chars and max_output_chars cap individual values and total output.
-Requires a DAP adapter executable installed on the system (e.g. 'dlv dap' for Go, 'python -m debugpy' for Python).`,
+Launch or attach to a program through any DAP adapter: dlv (Go), debugpy (Python), codelldb/lldb-dap (C/C++/Rust), and more.
+The adapter executable must be installed (e.g. 'dlv dap' for Go, 'python -m debugpy' for Python).
+Breakpoints (line, function, exception, data, instruction), stepping (reverse where the adapter supports it), threads, stack traces, variables, evaluate, memory read/write, disassemble, modules.
+The operation parameter lists every operation; adapter recipes: agent_tool_help topic="debug".
+Large results are bounded: variables, completions, and loaded_sources support start/max_results paging; modules supports start_module/module_count; max_value_chars and max_output_chars cap individual values and total output.`,
 	}, Handle)
 }
 

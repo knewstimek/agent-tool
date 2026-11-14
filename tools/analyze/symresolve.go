@@ -78,7 +78,7 @@ func fileSymbolNames(path, pdbPath string, pdbForce bool) map[uint64]string {
 	syms := map[uint64]string{}
 	if f, err := pe.Open(path); err == nil {
 		imageBase := peImageBase(f)
-		syms = peSymbolMap(f, imageBase)
+		syms = peSymbolMap(f, imageBase, path)
 		if pdbPath != "none" {
 			mergePDBNames(syms, path, pdbPath, pdbForce, f, imageBase)
 		}

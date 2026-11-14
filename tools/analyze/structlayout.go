@@ -54,7 +54,7 @@ func opStructLayout(input AnalyzeInput) (string, error) {
 		ptrSize = 8
 	}
 
-	symbols := peSymbolMap(f, imageBase)
+	symbols := peSymbolMap(f, imageBase, input.FilePath)
 	mergePDBNames(symbols, input.FilePath, input.PDBPath, input.PDBForce, f, imageBase)
 
 	// With debug types the layout is the type's: the global at va (or

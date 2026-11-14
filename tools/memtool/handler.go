@@ -44,7 +44,7 @@ type MemtoolInput struct {
 	Mode          interface{} `json:"mode,omitempty" jsonschema:"CPU mode for disasm: 32 or 64 (default)"`
 	Count         interface{} `json:"count,omitempty" jsonschema:"Number of instructions to disassemble (default 50, max 200)"`
 	ShowBytes     interface{} `json:"show_bytes,omitempty" jsonschema:"disasm: add each instruction's hex encoding column (for patching/signatures). Default false to save tokens"`
-	ForceDACL     interface{} `json:"force_dacl,omitempty" jsonschema:"Windows only. If a normal OpenProcess is denied, temporarily rewrite the target's DACL (via owner-implicit WRITE_DAC) to gain access, then restore it. Works only for SAME-USER targets that self-hardened their DACL; cannot bypass higher-integrity, other-user, OWNER_RIGHTS-SID, or PPL/anti-cheat targets. Invasive -- opt-in, default false."`
+	ForceDACL     interface{} `json:"force_dacl,omitempty" jsonschema:"Windows only. If a normal OpenProcess is denied, temporarily rewrite the target's DACL to gain access, then restore it. Works only for SAME-USER targets that hardened their own DACL; cannot bypass higher-integrity, other-user, or PPL/anti-cheat targets. Invasive -- opt-in, default false."`
 	Chains        string `json:"chains,omitempty" jsonschema:"read_chain: JSON array of pointer chains to resolve in ONE call. Each: {base:'0x..' (hex), offsets:['0x10','0x8','0x0'] (signed hex/dec, CE order), type:'int32' (omit for hex dump), label:'hp' (optional), length:N (for string/bytes)}. Batches many chains so you avoid one call per pointer level."`
 	Offsets       string `json:"offsets,omitempty" jsonschema:"read_chain single-chain form: offsets for one chain given via address+offsets+value_type. JSON array or comma/space separated hex (e.g. '0x10, 0x8, 0x0'). Signed offsets allowed."`
 	PtrSize       interface{} `json:"ptr_size,omitempty" jsonschema:"read_chain pointer size in bytes: 8 (64-bit, default) or 4 (32-bit process). Set 4 when the target is a 32-bit process or chains resolve to garbage."`
@@ -801,19 +801,19 @@ func Register(server *mcp.Server) {
 	common.SafeAddYieldingTool(server, &mcp.Tool{
 		Name: "memtool",
 		Description: `Process memory tool for reverse engineering and game hacking.
-CheatEngine-style workflow: search → filter → filter → find exact addresses → write.
-Supported: Windows (ReadProcessMemory/WriteProcessMemory), Linux (/proc/pid/mem). macOS: not supported (SIP).
+CheatEngine-style workflow: search -> filter -> filter -> find exact addresses -> write.
+Windows and Linux; macOS is not supported.
 Operations: regions (list memory map), search (value scan or unknown initial value scan, creates session),
 filter (narrow: exact/changed/unchanged/increased/decreased), undo (restore previous filter),
 read (hex dump), read_chain (resolve base+offset pointer chains, batched), write (modify memory),
-disasm (disassemble live memory — x86/x64/ARM/ARM64),
+disasm (disassemble live memory -- x86/x64/ARM/ARM64),
 info (session status + values), close (end session),
 struct_search (multi-field pattern), pointer_scan (find pointer chains to address),
 diff (compare memory snapshots).
 read_chain resolves many Cheat-Engine-style pointer chains (base + offset list) in ONE call --
 use it instead of chained read calls when you have several multi-level pointers to follow.
-Windows: auto-enables SeDebugPrivilege when elevated. force_dacl=true opts into a
-DACL-rewrite fallback to read a same-user self-hardened process (restored after).`,
+Windows: running elevated also opens DACL-hardened and higher-integrity processes;
+force_dacl=true reads a same-user process that hardened its own DACL (restored after).`,
 	}, Handle)
 }
 

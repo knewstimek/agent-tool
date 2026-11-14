@@ -314,8 +314,14 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input AnalyzeInput) (
 // Register adds the analyze tool to the MCP server.
 func Register(server *mcp.Server) {
 	common.SafeAddYieldingTool(server, &mcp.Tool{
-		Name:        "analyze",
-		Description: `Static PE/ELF/Mach-O analysis: disassembly, semantic instruction search, headers, strings, hex/pattern search, entropy/diff, xrefs, functions/call graphs, pointers, RTTI, layouts, vtables, and decompilation to C (x86/x64 PE/ELF; va = hex address or symbol, comma-separated for several; a matching PDB or embedded DWARF is applied automatically, and the structs/enums the C names are printed after it), type_info for any other debug type (members with offsets, enum values). Use instruction_search for mnemonic/register/value queries and pattern_search for encoded bytes. Durable SQLite user labels/comments with revision-checked partial edits and bounded success receipts: annotation_set, annotation_list (query searches), annotation_delete; optional annotations_path selects the database for writes and rendered reads. disassemble/decompile show user notes separately from engine facts; decompile line_numbers=true supplies C-line/code_hash anchors (changed snapshots need review). PE annotations also accept rva. annotation_batch writes up to 32 notes with per-item receipts. evidence/provenance record user-supplied grounds. Decompile collects instruction notes from verified function ranges. annotation_suggest proposes C-line reattachment using stored anchor_text; never moves notes automatically. Annotation load errors are reported as warnings alongside analysis results. Prefer va for PE addresses. IL2CPP Windows x64 prototypes can come from il2cpp_signatures (methodsigs.tsv, script.json, or global-metadata.dat); native v39 extraction auto-discovers standard Unity metadata without an external runtime. Unknown/conflicting signatures stay inferred and names stay unchanged. Use debug for runtime inspection.`,
+		Name: "analyze",
+		Description: `Static PE/ELF/Mach-O analysis; the file is never executed.
+Code: decompile (C, x86/x64 PE/ELF), disassemble, function_at, call_graph, xref, instruction_search (mnemonic/register/value queries; pattern_search is for encoded bytes).
+Data: type_info, struct_layout, follow_ptr, rtti_dump, vtable_scan, strings, hexdump, pattern_search.
+File: pe_info, elf_info, macho_info, entropy, overlay_detect, imphash, rich_header, resource_info, dwarf_info, bin_diff.
+Notes: annotation_set/list/delete/batch/suggest keep your labels and comments in a SQLite file and show them in disassemble/decompile output.
+va takes a hex address or a symbol name. A matching PDB, embedded DWARF or IL2CPP metadata is applied automatically.
+Per-operation guide: agent_tool_help topic="analyze/<operation>". For a running process use debug or memtool.`,
 	}, Handle)
 }
 

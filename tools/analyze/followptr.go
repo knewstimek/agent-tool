@@ -52,7 +52,7 @@ func opFollowPtr(input AnalyzeInput) (string, error) {
 		return "", fmt.Errorf("va 0x%x is below image base 0x%x", startVA, imageBase)
 	}
 
-	symbols := peSymbolMap(f, imageBase)
+	symbols := peSymbolMap(f, imageBase, input.FilePath)
 	mergePDBNames(symbols, input.FilePath, input.PDBPath, input.PDBForce, f, imageBase)
 	cache := make(secCache)
 

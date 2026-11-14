@@ -57,7 +57,7 @@ var compactOperationShapes = map[string]map[string]operationShape{
 		"bin_diff":       {fields: []string{"operation", "file_path", "file_path_b", "max_results"}, required: []string{"operation", "file_path", "file_path_b"}},
 		"xref":           {fields: []string{"operation", "file_path", "target_va", "target_end_va", "target_text", "field", "max_results", "timeout_sec", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path"}},
 		"function_at":    {fields: []string{"operation", "file_path", "va", "count", "pdb_path", "pdb_force"}, required: []string{"operation", "file_path", "va"}},
-		"decompile":      {fields: []string{"operation", "file_path", "va", "timeout_sec", "pdb_path", "pdb_force", "max_output_chars", "result_offset", "annotations_path", "line_numbers", "assume_branches", "noreturn_verify"}, required: []string{"operation", "file_path", "va"}},
+		"decompile":      {fields: []string{"operation", "file_path", "va", "timeout_sec", "pdb_path", "pdb_force", "max_output_chars", "result_offset", "annotations_path", "line_numbers", "assume_branches", "noreturn_verify", "il2cpp_signatures"}, required: []string{"operation", "file_path", "va"}},
 		"annotation_set": {
 			fields:   []string{"operation", "file_path", "annotations_path", "annotation_id", "expected_revision", "annotation_patch", "evidence", "provenance", "anchor_text", "annotation_kind", "va", "rva", "label", "comment", "subject", "annotation_status", "line", "code_hash", "pdb_path", "pdb_force", "max_output_chars"},
 			required: []string{"operation", "file_path"},

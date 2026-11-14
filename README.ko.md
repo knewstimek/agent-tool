@@ -79,143 +79,49 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
 | **Redis** | Redis 명령 실행. 타입별 포맷 출력. TLS 지원. 위험 명령(FLUSHALL, SHUTDOWN 등) 차단 | ✅ |
 | **SLOC** | 언어별 소스 코드 라인 수 집계. 70+ 언어 감지, 파일/언어별 분류, 빈 줄 통계, max_depth 제어 | ✅ |
 | **Debug** | DAP(Debug Adapter Protocol) 기반 인터랙티브 디버거. 변수값·전체 출력 제한과 variables/completions/modules/loaded_sources 페이징 지원. dlv(Go), debugpy(Python), codelldb(C/C++/Rust) 테스트 완료. 모든 DAP 호환 어댑터 사용 가능. Stdio/TCP 모드. 참고: vsdbg(Microsoft)는 VS Code 라이센스 필수로 단독 사용 불가 — codelldb 또는 netcoredbg를 대안으로 사용 | ✅ |
-| **Analyze** | 정적 바이너리 분석 및 리버스 엔지니어링. x86/x64 PE/ELF 함수의 C 디컴파일(Ghidra 디컴파일러 코어의 Go 포팅인 Gosleigh, 시간/메모리 상한을 건 별도 워커 프로세스에서 실행), GUID가 맞는 PE PDB(내장 리더, DIA SDK 불필요; `pdb_force`로 GUID가 다른 PDB도 로드) 또는 내장 DWARF 자동 적용(디컴파일에는 함수 이름·프로토타입·구조체/열거형 타입·전역 데이터·비트필드·지역변수 이름과 타입 -- 함수가 쓰는 구조체/열거형은 멤버 오프셋·열거값과 함께 함수 뒤에 출력되고, 그 밖의 타입은 `type_info`로 이름 조회, disassemble·call_graph·function_at에는 이름과 정확한 함수 경계), MSVC 데코레이션 이름 디맹글, Go 바이너리는 Go ABI 적용, Ghidra 방식의 noreturn 함수 감지(호출 지점 투표만으로 noreturn이 된 함수라도 본문에서 `ret`에 도달하면 `noreturn_verify`로 리턴 함수로 유지), 해독 불가 바이트는 그 경로만 `halt_baddata()`로 끊고, 흐름 폭주(정크 바이트 난독화, Ghidra는 타임아웃)는 함수의 x64 `.pdata` 범위 안에서 디컴파일하며 범위를 벗어나는 지점마다 표시(`halt_missing()`), 런타임 추적으로 확인한 조건 분기는 `assume_branches`로 고정, `agent-tool decompile-all`로 바이너리 전체를 JSONL 코퍼스로 추출, x86/x64/ARM/ARM64 디스어셈블리(기본은 주소+명령어, `show_bytes`로 hex 인코딩 열 추가, 코드 안의 switch 테이블은 case 대상과 함께 데이터 줄로 출력), 실행 섹션 전체 오프셋 복구·CFG 신뢰도·호출 대상/결과 필터·ABI 인식 CALL/tail-call 인자까지의 제한된 레지스터/스택/읽기 전용 상수 추적(병렬 고정점 분석, stdcall 인자 정리 반영 -- x86 import는 실제 DLL에서 읽음)을 갖춘 x86/x64 의미 기반 명령어 검색(명령어·레지스터·즉치값·메모리 오프셋, 결과마다 함수 이름), PE/ELF/Mach-O 파싱과 PE import 출력 페이징·상한, 주소·문자열 텍스트·구조체 필드(Class::member, 디컴파일로 확인) xref(코드·즉치값·데이터 포인터·vtable 칸, 참조마다 소속 함수 표시), 함수/콜그래프(PDB 없이 찾은 함수 경계가 대형 x64 이미지에서 PDB 경계와 주소 기준 100%, x86에서 99.5% 일치; 썽크·꼬리 호출을 거친 호출자, vtable 참조), 포인터/RTTI/vtable/구조체 분석, imphash, Rich 헤더, DWARF, 문자열, hexdump, 패턴 검색, 엔트로피, 오버레이, 바이너리 비교. 글로벌 파일 크기 제한 없음 | ✅ |
-| **Memtool** | CheatEngine 스타일 프로세스 메모리 도구 — 메모리 값 검색/필터/읽기/쓰기, read_chain(base+offset 포인터 체인을 한 콜에 배치로 해소), 라이브 디스어셈블리(x86/x64/ARM/ARM64), 실행 취소, 구조체 패턴 검색, 포인터 스캔, 메모리 diff. 대용량 스캔을 위한 디스크 기반 스냅샷. 세션 관리 (유휴 타임아웃). Windows (ReadProcessMemory), Linux (/proc/pid/mem). Windows는 elevated 시 SeDebugPrivilege 자동 활성화, opt-in `force_dacl`로 같은 유저의 self-harden DACL 프로세스 우회(원본 DACL 원복). 긴 스캔은 `job_id`로 yield되고 cancel 시 즉시 멈춤(취소된 filter는 롤백) | ✅ |
-| **Wintool** | Windows GUI 자동화 -- 창/자식 컨트롤 검색/열거, 스크린샷 캡처(ImageContent PNG, PrintWindow), 클립보드 이미지 읽기, 텍스트 읽기/쓰기, 클릭, 타이핑, 원시 메시지 전송, 표시/숨기기/최소화/최대화, 이동/크기 변경, 닫기, 포커스. screenshot/clipboard 기본 ImageContent 반환 (save_path 옵션으로 파일 저장). AI 에이전트가 GUI 앱을 "보고" 조작할 수 있게 함. Windows 전용 | ✅ |
-| **CodeGraph** | 완전 내장 시맨틱 코드 그래프. Go 표준 라이브러리 AST와 C/C++·Python·C#·Rust·Java용 지연 압축 tree-sitter WASM에 선언/정의 통합, 반환 체인·generic·alias 전파, 전이 include, 보정 가능한 overload 증거 점수, virtual/interface dispatch, macro/callback 간선, 빌드 조건 provenance, multi-root workspace를 더함. 컴파일러·언어 서버·외부 바이너리·LLM 호출·토큰 비용 없음 | ✅ |
+| **Analyze** | PE/ELF/Mach-O 정적 바이너리 분석·리버스 엔지니어링. x86/x64 PE·ELF 함수를 C로 디컴파일하며 일치하는 PDB, 내장 DWARF, IL2CPP 메타데이터의 이름과 타입을 적용([상세](#디컴파일)). x86/x64/ARM/ARM64 디스어셈블, 상수를 호출 인자까지 추적하는 시맨틱 명령어 검색, 주소·문자열·구조체 필드 xref, 함수 경계와 호출 그래프, RTTI·vtable·포인터·구조체 레이아웃, 헤더 파싱, imphash, Rich 헤더, DWARF, 문자열, hexdump, 패턴 검색, 엔트로피, 오버레이 탐지, 바이너리 diff, 영구 사용자 주석. `strings`·`entropy`·`bin_diff`만 `max_file_size_mb` 제한 적용 | ✅ |
+| **Memtool** | CheatEngine 스타일 프로세스 메모리 도구 — 메모리 값 검색/필터/읽기/쓰기, read_chain(base+offset 포인터 체인을 한 콜에 배치로 해소), 라이브 디스어셈블리(x86/x64/ARM/ARM64), 실행 취소, 구조체 패턴 검색, 포인터 스캔, 메모리 diff. 대용량 스캔을 위한 디스크 기반 스냅샷. 세션 관리 (유휴 타임아웃). Windows, Linux 지원. Windows는 elevated 시 SeDebugPrivilege 자동 활성화, opt-in `force_dacl`로 같은 유저의 self-harden DACL 프로세스 우회(원본 DACL 원복). 긴 스캔은 `job_id`로 yield되고 cancel 시 즉시 멈춤(취소된 filter는 롤백) | ✅ |
+| **Wintool** | Windows GUI 자동화 -- 창/자식 컨트롤 검색/열거, 스크린샷 캡처(ImageContent PNG), 클립보드 이미지 읽기, 텍스트 읽기/쓰기, 클릭, 타이핑, 원시 메시지 전송, 표시/숨기기/최소화/최대화, 이동/크기 변경, 닫기, 포커스. screenshot/clipboard 기본 ImageContent 반환 (save_path 옵션으로 파일 저장). AI 에이전트가 GUI 앱을 "보고" 조작할 수 있게 함. Windows 전용 | ✅ |
+| **CodeGraph** | C/C++·Python·Go·C#·Rust·Java용 시맨틱 코드 그래프. 심볼 정의, 호출자/피호출자, 호출 트리, 클래스 메서드와 상속, importer, 미사용 심볼을 단일 프로젝트나 multi-root workspace에서 조회. overload, virtual/interface dispatch, alias, 전이 include 해석. 완전 내장형이라 컴파일러·언어 서버·외부 바이너리 불필요 | ✅ |
 | **SetConfig** | 런타임 설정 변경 (인코딩, 파일 크기 제한, symlink, workspace 등) | ✅ |
-| **Help** | 에이전트용 사용법 안내 (인코딩, 들여쓰기, 트러블슈팅) | ✅ |
+| **Help** | 에이전트용 내장 사용법 안내. 분량이 큰 `tools`·`analyze`는 목차를 돌려주고 섹션 단위(`analyze/decompile`)로 조회 | ✅ |
 
 ## 디컴파일
 
-같은 바이너리와 분석 옵션의 요청은 로드된 워커를 재사용합니다. 유휴 워커는 최대 2개를 보관하며, 각각 마지막 사용 후 10분이 지나면 종료합니다. 바이너리나 메타데이터가 바뀌면 다시 로드합니다.
+`analyze(operation="decompile")`는 x86/x64 PE·ELF 함수를 C로 디컴파일합니다. 엔진은 Ghidra 디컴파일러 코어의 Go 포트인 Gosleigh(현재 v0.1.18)입니다.
 
-Gosleigh v0.1.17의 Enhanced 프리셋을 자동 적용합니다. 스택·부동소수점 인자와 간접 호출 인자 추론, 재사용된 스택 지역변수 복원을 개선하고 포인터가 부동소수점 타입으로 잘못 전파되는 것을 줄입니다. callee 매개변수에서 유래한 지역변수 이름이 현재 함수의 매개변수와 겹치면 구분된 이름을 사용합니다. 워커를 재사용하면 callee 번역·반환 판정 캐시도 유지됩니다. 추가 옵션은 필요 없으며, 제공된 디버그·IL2CPP 프로토타입이 추론보다 우선합니다.
+```json
+{"operation":"decompile","file_path":"game.exe","va":"Player::TakeDamage, 0x140001000"}
+```
 
-## IL2CPP 프로토타입과 내장 메타데이터 추출
+- 일치하는 PDB나 내장 DWARF를 자동 적용해 함수 이름, 프로토타입, 구조체/enum 타입, 전역, 지역변수를 복원합니다. 함수가 쓰는 타입 정의는 C 뒤에 출력하고, 그 밖의 타입은 `type_info`로 조회합니다.
+- 난독화되거나 손상된 함수도 출력합니다. 디코딩할 수 없는 경로는 `halt_baddata()`로 끝나고, 폭주하는 흐름은 함수의 `.pdata` 범위에서 잘리며, 런타임 트레이스로 확인한 조건 분기는 `assume_branches`로 고정합니다.
+- 호출마다 시간·메모리 제한이 걸린 워커 프로세스에서 실행합니다. 로드된 워커는 10분간 재사용되어 같은 바이너리의 후속 호출은 로드를 건너뜁니다.
+- `agent-tool decompile-all <binary>`는 모든 함수를 JSONL 코퍼스로 덤프합니다.
 
-PDB/DWARF가 없는 Windows x64 IL2CPP 바이너리는 `analyze(operation="decompile")`의 `il2cpp_signatures`로 `global-metadata.dat`, Il2CppDumper `script.json` 또는 내보낸 `methodsigs.tsv`를 지정할 수 있습니다. `il2cpp_script`도 같은 옵션입니다. 바이너리 옆 시그니처 파일이 우선이며, 없으면 `<application>_Data/il2cpp_data/Metadata/global-metadata.dat` 등 표준 Unity 경로를 탐색합니다. 여러 메타데이터 파일이 발견되면 경로를 직접 지정해야 하며, `none`이면 사용하지 않습니다. `decompile-all`도 같은 추출 경로와 `-il2cpp-signatures`를 지원합니다.
+에이전트용 operation별 안내: `agent_tool_help` 토픽 `analyze/decompile`.
 
-내장 추출은 **메타데이터 v39와 Windows x64 PE**를 지원합니다. Go로 바이너리와 메타데이터를 직접 읽으므로 .NET·LibCpp2IL·외부 덤퍼가 필요 없으며 DLL도 실행하지 않습니다. 메서드 주소, 공유 제네릭 별칭, 시그니처, 인스턴스 필드와 가상 슬롯을 해석합니다. 런타임 접근자 코드에서 vtable 오프셋을 확인할 수 있을 때 클래스 타입을 적용하고, 확인할 수 없으면 직접 호출 시그니처만 사용합니다. 추출 결과는 워커 메모리에서 재사용하며 메타데이터 변경 시 무효화됩니다. 메타데이터 덤프나 C# 선언 파일은 만들지 않습니다. 다른 메타데이터 버전은 외부 시그니처 파일이 필요합니다.
+## IL2CPP 프로토타입
 
-자동 추출에는 식별 가능한 IL2CPP 런타임 export가 필요하고 주변 디렉터리 탐색에도 상한이 있습니다. export가 제거됐거나 다른 폴더 구조라면 메타데이터 경로를 직접 지정합니다. 자동 추출 실패는 안내와 함께 기존 추론으로 진행하며, 명시적으로 지정한 메타데이터가 잘못됐으면 오류를 반환합니다.
+Windows x64 IL2CPP 이미지에 PDB/DWARF가 없으면 `decompile`이 `il2cpp_signatures`에서 프로토타입을 가져옵니다. `global-metadata.dat`(메타데이터 v39는 DLL 실행이나 외부 덤퍼 없이 직접 읽음), Il2CppDumper `script.json`, 내보낸 `methodsigs.tsv`를 받습니다. 바이너리 옆 사이드카와 표준 Unity 메타데이터 위치는 자동으로 찾고, `none`으로 끌 수 있습니다. 디버그 정보가 우선하며 이름은 바꾸지 않습니다.
 
-TSV 열은 `VA<TAB>static<TAB>ret<TAB>params<TAB>name`입니다. 절대 VA, static 여부(`0/1`), 반환형, 쉼표로 구분한 관리 코드 매개변수 타입, 진단용 이름을 기록합니다. 타입은 `bool`, `int32`, `uint64`, `float32`, `float64`, `ref:Type`, `ptr:Type`, `val:12:Type`(정확한 값 타입 크기) 등을 사용합니다. 타입 이름 안의 쉼표는 `%2C`로 이스케이프합니다. 인스턴스의 `this`와 마지막 `MethodInfo*`는 호스트가 추가하므로 TSV params에 넣지 않습니다. `# binary_sha256=<hex>`가 있으면 바이너리 해시와 일치해야 합니다.
-
-디버그 정보가 우선하고 이름은 바꾸지 않습니다. 모르는 타입과 시그니처가 충돌하는 공유 제네릭은 추론에 맡깁니다. 구체화된 제네릭 값 타입의 레이아웃은 추측하지 않습니다. 숨은 반환 버퍼가 필요한 큰 구조체 반환도 고정하지 않습니다. JSON의 값 타입은 옆의 `il2cpp.h`에서 크기를 알 수 있을 때만 적용합니다. 외부 TSV 시그니처를 사용할 때 같은 폴더의 바이너리 해시가 일치하는 `il2cpp-types.json`으로 클래스 레이아웃과 가상 슬롯 타입도 제공할 수 있습니다([파일 규약](docs/il2cpp-types.md)). 객체의 클래스 타입이 호출까지 전파될 때 가상 시그니처를 적용하며, 모르는 슬롯과 숨은 반환 버퍼가 필요한 반환형은 추론에 맡깁니다. 새 MCP 도구는 필요 없습니다.
+상세: [내장 추출, 탐색 규칙, TSV 형식](docs/il2cpp.ko.md), [클래스·가상 슬롯 타입 내보내기](docs/il2cpp-types.md).
 
 ## 분석 주석 저장
 
-기존 `analyze` 도구에서 `annotation_set`으로 사용자 주석·라벨을 저장하고,
-`annotation_list`로 검색·조회하며, `annotation_delete`로 삭제할 수 있습니다.
-디스어셈블리·디컴파일 결과에 저장된 주석이 자동으로 표시됩니다.
-사용자 판단은 자동 심볼·디버그 타입과 구분되며, 라벨·subject는 분석 엔진의
-심볼 이름이나 추론 타입을 변경하지 않는 메타데이터입니다.
+`analyze`는 명령어, 함수, 디컴파일된 C 줄에 붙인 사용자 라벨과 코멘트를 SQLite 파일에 보관합니다(`annotation_set`, `annotation_list`, `annotation_delete`, `annotation_batch`, `annotation_suggest`). 디스어셈블과 디컴파일 출력에 저장된 주석이 자동으로 표시되며 엔진이 낸 사실과 구분됩니다. 주석은 심볼 이름을 바꾸거나 타입을 덮어쓰지 않습니다.
 
 ```json
-{"operation":"annotation_set","file_path":"sample.exe","rva":"0x1234","subject":"rax","comment":"현재 사용자 포인터로 추정","annotation_status":"hypothesis","annotations_path":"project.annotations.sqlite"}
+{"operation":"annotation_set","file_path":"sample.exe","rva":"0x1234","subject":"rax","comment":"User pointer returned here","annotations_path":"project.annotations.sqlite"}
 {"operation":"disassemble","file_path":"sample.exe","va":"0x140001234","annotations_path":"project.annotations.sqlite"}
-{"operation":"annotation_list","file_path":"sample.exe","query":"사용자","annotations_path":"project.annotations.sqlite"}
 ```
 
-`toolbox`의 `operation="call", tool="analyze", arguments={...}`로 호출합니다.
-전체 인자·예시는 `toolbox describe` 또는 help의 `analyze` 항목에서 확인할 수 있습니다.
+- 주석은 바이너리의 SHA-256과 정적 주소로 구분합니다. 복사본은 주석을 유지하고, 수정된 빌드는 물려받지 않습니다.
+- 수정과 삭제는 revision을 확인합니다. 오래된 revision이면 레코드를 바꾸지 않고 실패합니다.
+- C 줄 주석은 디컴파일 스냅샷에 묶입니다. C가 바뀌면 검토 대상으로 남고 `annotation_suggest`가 옮길 위치를 제안합니다.
+- 비공개 주석 DB는 공개 Git 이력에 넣지 마세요(이 저장소는 `*.annotations.sqlite*`를 무시합니다).
 
-- `annotations_path`로 **저장·로드할 SQLite 파일을 직접 지정**합니다. 상대 경로는
-  workspace/MCP root 기준입니다. 생략하면
-  `<사용자 설정 폴더>/agent-tool/analysis-annotations.sqlite`를 사용합니다
-  (Windows는 `%APPDATA%` 아래). 조회는 DB를 생성하지 않고, 첫
-  `annotation_set`이 생성합니다. 코드그래프 DB·분석 캐시와 별도로 보존합니다.
-- **바이너리 전체 SHA-256**과 정적 주소로 주석을 구분합니다. 동일한 파일을
-  옮기거나 복사해도 주석을 찾고, 내용이 달라진 바이너리에는 자동 적용하지 않습니다.
-  빌드 간 자동 이관은 지원하지 않습니다. 주소는 정적 `va`(hex 또는 파일·디버그
-  심볼)나 PE의 `rva`(모듈 기준 오프셋)를 사용합니다. 실행 중 ASLR 주소나
-  파일 오프셋과는 다릅니다.
-- `annotation_kind`는 `instruction`(기본), `function`(함수 시작 주소),
-  `decompile`입니다. `subject`로 해당 위치의 레지스터·피연산자·변수를
-  지정할 수 있습니다. `annotation_status`는 `hypothesis`(추정, 기본),
-  `confirmed`(확인), `rejected`(기각)이며 사용자의 판단을 기록합니다.
-- C 라인 주석은 먼저 `decompile`에 `line_numbers=true`를 지정합니다.
-  출력의 `code_hash`, C 본문의 `line`(L 번호), 함수 시작 `va`와
-  `annotation_kind="decompile"`을 `annotation_set`에 전달합니다.
-  주석은 해당 줄 앞에 표시됩니다. C 결과가 달라지면 다른 줄에 붙이지 않고,
-  함수 머리에 `needs_review`로 남깁니다. 헤더·주석·뒤에 출력되는 타입 정의는
-  L 번호에 포함되지 않습니다.
-- 함수 주석은 C 본문 앞에 표시됩니다. 명령어 주석은 디스어셈블리에 표시되며,
-  디컴파일에서는 정확한 PDB/.pdata 또는 크기가 알려진 ELF 심볼 경계 안의
-  명령어 주석도 원래 VA와 함께 모아 표시합니다. 확인할 수 없는 경계는
-  안내와 함께 시작 주소의 주석만 표시합니다. 함수당 최대 16개 범위를 사용하며,
-  개별 C 라인에 명령어 주석을 임의로 배치하지 않습니다.
-- ID 없이 저장하면 새 주석을 생성합니다. 같은 위치에 주석이 있으면
-  다른 편집자의 내용을 덮어쓰지 않고 거부합니다. `annotation_id`로 수정할 때는
-  저장·조회 결과의 정확한 `expected_revision` 문자열이 필요합니다.
-  생략한 필드는 유지하고, 최상위의 비어 있지 않은 필드만 변경합니다.
-  빈 문자열로 지우거나 `line=0`을 지정하려면 `annotation_patch`를 사용합니다.
-  patch에 지정한 값이 최상위 값보다 우선합니다. 수정 후에도 라벨이나 코멘트,
-  올바른 위치 정보는 남아 있어야 합니다. 삭제도 ID와 revision이 모두 필요합니다.
-  오래된 revision의 수정·삭제는 거부하므로 다시 조회한 뒤 재시도합니다.
-  revision은 화면 주석과 축약 응답에서도 정확한 문자열로 반환합니다.
-- 조회는 주소·종류·subject·상태·ID·`query`(문자열 포함, ASCII 대소문자 무시)를
-  지원합니다. `max_results` 기본 50·최대 200, `result_offset`은 행 번호이며
-  JSON의 `next_result_offset`으로 이어 읽습니다. 출력 상한으로 페이지가
-  짧아질 수 있습니다. 한 주석도 조회하지 못하면 `max_output_chars`를 늘립니다.
-  쓰기의 출력 상한은 최소 256자이며 변경 전에 검사합니다. 상세 결과가 상한을
-  넘으면 실패로 바꾸지 않고 `saved`, `annotation_id`, `revision`
-  (또는 `deleted`)과 `details_omitted=true`를 담은 짧은 JSON 성공 응답을
-  반환합니다. 디스어셈블리·디컴파일의 페이지 오프셋은 문자 기준입니다.
-  결과 화면에는 최대 500개를 표시하며 나머지는 조회로 확인합니다.
-- 주석 DB를 읽지 못해도 디스어셈블리·디컴파일 결과는 경고와 함께 반환합니다.
-  주석 저장·조회·삭제 작업 자체의 DB 오류는 계속 오류로 처리합니다.
-  기존 v1·v2 DB는 변경 없이 조회하고, 첫 쓰기 때 트랜잭션 안에서
-  필요한 revision·근거·출처·원문 필드를 추가해 v3로 전환합니다.
-  기존 revision은 유지하며 v1 주석은 `"1"`에서 시작합니다.
-  v1·v2만 지원하는 과거 실행 파일은 v3 DB를 읽을 수 없습니다.
-
-부분 수정 예시입니다. 직전 조회 결과의 ID와 revision을 사용합니다.
-
-```json
-{"operation":"annotation_set","file_path":"sample.exe","annotation_id":"<id>","expected_revision":"1","annotation_patch":{"comment":"사용자 포인터로 확인","annotation_status":"confirmed","label":""},"annotations_path":"project.annotations.sqlite"}
-```
-
-배치와 근거 기록 예시입니다.
-
-```json
-{"operation":"annotation_batch","file_path":"sample.exe","annotations_path":"project.annotations.sqlite","batch":[{"operation":"set","rva":"0x1234","subject":"rax","comment":"사용자 포인터","provenance":"수동 분석","evidence":[{"kind":"static","va":"0x140001230","source":"lookup_user 호출","detail":"반환값을 컨텍스트 포인터로 사용함"}]},{"operation":"set","annotation_id":"<id>","expected_revision":"1","annotation_patch":{"annotation_status":"confirmed"}}]}
-```
-
-- 배치는 한 바이너리·DB에 대해 1~32개의 `set`·`delete` 항목을 처리합니다.
-  DB 열기와 파일 해시는 한 번만 수행하고, 항목별로 독립 반영해 순서 번호와
-  성공·충돌 결과를 반환합니다. 다른 항목이 실패해도 성공한 항목은 유지됩니다.
-  `max_output_chars`는 최소 `768 * 항목 수 + 256`이며 변경 전에 검사합니다.
-  기본 출력 예산으로 32개까지 처리합니다. DB를 열지 못하면 배치 전체가
-  시작되지 않고, 취소 시 완료한 항목은 유지하며 나머지는 실패로 표시합니다.
-- `evidence`에는 최대 16개의 사용자 관찰을 기록합니다. `kind`는
-  `static`·`runtime`·`user`, `va`는 선택적인 정확한 주소 문자열,
-  `source`는 출처, `detail`은 필수 관찰 내용입니다. `provenance`에는
-  판단의 유래를 기록합니다. 출처를 자동 조회하거나 관찰을 검증하지 않습니다.
-  저장·표시·검색할 수 있고 부분 수정에서도 유지됩니다. 명시적으로 지우려면
-  `annotation_patch`에 `evidence:[]` 또는 `provenance:""`를 전달합니다.
-- C 라인 주석을 저장할 때 정확한 원문 한 줄을 `anchor_text`에도 담습니다.
-  `annotation_suggest`에 주석 ID를 주면 해당 함수를 다시 디컴파일하고,
-  현재 `code_hash`·revision과 최대 3개의 위치 후보를 반환합니다.
-  스냅샷이 같으면 기존 줄, 달라졌으면 원문 또는 토큰 유사도로 찾습니다.
-  최고 점수가 같은 후보는 `ambiguous`로 표시합니다. 원문이 없거나 너무
-  일반적인 경우 후보가 없을 수 있으며, 원문이 없는 과거 주석은 결과가 바뀌면
-  수동으로 위치를 골라야 합니다. **후보 조회는 DB를 변경하지 않습니다.**
-  검토 후 `annotation_set`에 ID·`expected_revision`과
-  `annotation_patch:{"line":N,"code_hash":"<현재 해시>","anchor_text":"<원문>"}`를
-  전달해야 이동하며 revision 검사도 그대로 적용됩니다.
-  source·detail·provenance 상한은 각각 UTF-8 512·1024·512바이트,
-  `anchor_text`는 C 원문 한 줄·최대 2048바이트입니다.
-
-```json
-{"operation":"annotation_suggest","file_path":"sample.exe","annotation_id":"<id>","annotations_path":"project.annotations.sqlite"}
-```
-
-주석 DB에는 비공개 분석 내용이 들어갈 수 있으므로 공개 Git에 포함하지 마세요.
-이 저장소는 `*.annotations.sqlite*`와 기본 DB 파일명을 무시합니다.
-다른 파일명을 지정하면 별도 ignore 규칙이 필요합니다.
-사용자 주석은 복구 가능한 사본을 보관하며, 분석 캐시 정리로 삭제되지 않습니다.
+필드, revision 규칙, 일괄 저장 사용법은 `agent_tool_help` 토픽 `analyze/annotation_set`, `analyze/annotation_batch`에 있습니다.
 
 ## 핵심 개선사항
 
@@ -223,14 +129,12 @@ TSV 열은 `VA<TAB>static<TAB>ret<TAB>params<TAB>name`입니다. 절대 VA, stat
 LLM은 보통 공백으로 출력하지만, 많은 프로젝트가 탭을 사용합니다. AgentTool은 파일의 기존 스타일에 맞게 들여쓰기를 자동 변환합니다.
 
 - 부모 `.editorconfig`의 `indent_style`, `indent_size`, `tab_width`를 속성별로 상속. `root = true`, `unset`, `indent_size=tab`과 흔한 `**` 경로 패턴 반영
-- 설정이 없으면 줄 수 제한 없이 최대 8 MiB 범위에서 내용 기반 감지. 긴 줄과 LF·CRLF·CR 줄바꿈 지원. 단순 들여쓰기·내어쓰기 빈도보다 블록 시작의 공백 변화 근거를 우선하여 연속 줄 정렬과의 혼동을 줄이고, 근거가 불분명하면 기존의 결정적 빈도 추정 유지
-- 유일한 앵커를 복구할 때 새 공백 중첩 단계는 주변 32줄·16 KiB 이내의 가장 가까운 블록 너비 근거 활용. 문자열·주석 상태는 파일 처음부터 최대 8 MiB 표본 내에서 추적하며, 그 이후 앵커는 기존 추정 유지. 일반 주석, 따옴표·raw·삼중 따옴표 문자열과 괄호·대괄호 연속 줄은 구조 추정에서 제외. 언어 파서나 의미를 보장하는 포매터가 아닌 휴리스틱
+- 설정이 없으면 파일 내용(최대 8 MiB, LF·CRLF·CR)으로 감지. 연속 줄 정렬·주석·문자열이 아니라 블록 구조로 너비를 판정
 - 기존 공백 들여쓰기가 탭 설정과 충돌하면 파일에서 감지한 공백 너비 유지
 - 탭↔공백과 2칸↔4칸 등의 공백 너비 변환 지원. 변환한 검색 문자열도 줄 경계를 지키며, 탭 깊이 보정 시 상대 중첩 유지
 - 유일한 한 줄·여러 줄 블록의 실제 들여쓰기와 접두 공백 대응을 활용하여 혼합 파일의 소수 스타일, 정렬, 빈 줄의 들여쓰기 보존. 블록의 상대 중첩 구조는 일치해야 함
-- C++·헤더와 Python 파일 편집은 기존 내장 Tree-sitter WASM을 필요할 때만 재사용. 이웃 블록이나 인자 정렬 대신 실제로 감싸는 블록의 직접 자식 문장에서 새 공백 중첩 단계 추정. 외부 컴파일러·Python 설치·CGO·인덱스 불필요
-- 치환 조각을 정상 분석한 경우, 시작 줄의 실제 토큰 열에 맞춘 연속 줄 정렬은 시작 줄의 들여쓰기 이동량을 따르고, 단순히 한 단계 들여쓴 연속 줄은 첫 인자가 시작 줄에 있어도 중첩 단계에 맞춰 너비 변환. 여러 줄 문자열·주석 내부는 입력한 내용 보존. 정확히 일치하는 치환과 명시적 스타일 지정은 기존 동작 유지
-- 미지원 파일, 근거가 불분명하거나 오류가 포함된 해당 블록, 분석 실패·시간 초과, 8 MiB 초과 소스는 기존 휴리스틱 사용. 파싱마다 2초 제한이며 치환 조각의 구문 보조는 64 KiB·512줄 이내. 구문 분석은 의미 동등성을 보장하지 않음
+- C++·헤더와 Python 파일은 내장 Tree-sitter 엔진이 감싸는 블록을 보고 새 중첩 단계의 들여쓰기를 추정
+- 치환 문자열에서 토큰 열에 맞춘 정렬과 여러 줄 문자열·주석 내부는 입력한 그대로 보존
 - 동일하게 타당한 탭 깊이 후보가 여러 개면 임의로 선택하지 않고 오류 반환
 - 감지는 언어 포매터가 아닌 추정 방식이므로, 자동 편집 결과는 `dry_run=true`로 검토 가능
 
@@ -268,12 +172,10 @@ UTF-8로 강제 변환하지 않고, 원본 파일 인코딩을 유지합니다.
 이름이 필요 없으면 `counts_only=true`로 파일/디렉토리 개수만 반환합니다.
 
 ### 유휴 메모리 반환
-툴 호출 없이 30분이 지나면 서버가 힙을 OS 에 반환한다. stdio MCP 서버는 "버려진
-클라이언트" 와 "조용한 클라이언트" 를 구분할 수 없다 -- 서버를 띄운 프로세스가 살아있는
-채로 파이프만 쥐고 있으면 EOF 가 영영 오지 않는다 -- 그래서 추측으로 종료하면 잠시 쉬던
-세션을 죽이게 된다. 메모리 반환은 그 거래의 안전한 절반이다: 50MB 파일을 한 번 읽은
-인스턴스가 200MB 를 계속 쥐고 있는 대신 기준선인 ~20MB 로 돌아간다. 열려있는 shell/ssh
-세션은 그대로 유지되고, 클라이언트가 관찰할 수 있는 동작은 아무것도 바뀌지 않는다.
+툴 호출 없이 30분이 지나면 서버가 힙을 OS에 반환합니다. 50MB 파일을 한 번 읽은
+인스턴스가 200MB를 계속 쥐지 않고 기준선인 약 20MB로 돌아갑니다. 유휴 상태라고
+종료하지는 않습니다. stdio 서버는 버려진 클라이언트와 조용한 클라이언트를 구분할
+수 없기 때문입니다. 열려 있는 shell/ssh 세션은 그대로 유지됩니다.
 
 ## 빠른 시작
 
@@ -377,6 +279,9 @@ agent-tool install --no-auto-approve
 agent-tool install claude
 agent-tool install claude --safe-approve
 
+# 선택 사항인 에이전트 스킬도 함께 설치 (Claude Code, Codex)
+agent-tool install --skills
+
 # 제거 (agent-tool 항목만 삭제, 다른 설정은 보존)
 agent-tool uninstall          # 모든 에이전트에서 제거
 agent-tool uninstall claude   # 특정 에이전트에서만 제거
@@ -396,6 +301,16 @@ agent-tool uninstall claude   # 특정 에이전트에서만 제거
 있으므로 `--safe-approve` 자동 승인 대상에서 의도적으로 제외됩니다. Safe 모드에서는
 toolbox 승인을 매번 검토하고, 전체 AgentTool 네임스페이스를 신뢰하려는 경우가 아니면
 영구 허용하지 마세요.
+
+### 에이전트 스킬 (선택)
+
+[`skills/`](skills) 폴더에는 에이전트에게 도구를 *어떤 순서로 쓸지* 알려주는 작업 흐름 스킬이 들어 있습니다. 파라미터 레퍼런스는 내장 help가 계속 맡습니다.
+
+| 스킬 | 용도 |
+|------|------|
+| [`agent-tool-reversing`](skills/agent-tool-reversing/SKILL.md) | `analyze`, `memtool`, `debug`를 쓰는 리버스 엔지니어링: 바이너리에서 어디부터 볼지, 디컴파일과 디스어셈블을 언제 쓸지, 난독화된 함수 처리, 런타임 확인, 발견한 내용을 주석으로 저장 |
+
+`agent-tool install --skills`가 `~/.claude/skills`와 `~/.codex/skills`에 복사합니다. 스킬은 바이너리에 내장되어 있어 레포를 받을 필요가 없습니다. 에이전트는 설치된 스킬의 설명을 매 세션에 불러오므로 기본 설치에는 포함하지 않았습니다. 한 번 설치하면 이후 `install`/`reinstall`이 최신으로 갱신하고 `uninstall`이 제거합니다. 직접 설치하려면 스킬 폴더를 에이전트의 스킬 디렉터리에 복사하면 됩니다.
 
 ### 수동 설정
 
@@ -672,7 +587,14 @@ agent-tool --fallback-encoding EUC-KR
 
 agent-tool은 `agent_tool_help` 도구를 제공합니다. 에이전트가 인코딩 경고나 깨진 텍스트를 만나면 자동으로 사용법을 확인할 수 있습니다.
 
-사용 가능 토픽: `overview`, `encoding`, `indentation`, `tools`, `troubleshooting`
+사용 가능 토픽: `overview`, `encoding`, `indentation`, `tools`, `debug`, `analyze`, `memtool`, `wintool`, `codegraph`, `troubleshooting`
+
+분량이 큰 `tools`와 `analyze`는 전문 대신 짧은 목차(약 1k 토큰)를 돌려줍니다. 한 부분만 볼 때는 `topic/section`, 여러 개는 쉼표로 요청합니다:
+
+```json
+{ "tool": "agent_tool_help", "arguments": { "topic": "analyze/decompile" } }
+{ "tool": "agent_tool_help", "arguments": { "topic": "tools/ssh,sftp" } }
+```
 
 ## 보안
 
