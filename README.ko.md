@@ -88,7 +88,7 @@ SSH 실행, MySQL 쿼리, 파일 복사, Windows 스크린샷/클립보드 이�
 
 ## 디컴파일
 
-`analyze(operation="decompile")`는 x86/x64 PE·ELF 함수를 C로 디컴파일합니다. 엔진은 Ghidra 디컴파일러 코어의 Go 포트인 Gosleigh(현재 v0.1.18)입니다.
+`analyze(operation="decompile")`는 x86/x64 PE·ELF 함수를 C로 디컴파일합니다. 엔진은 Ghidra 디컴파일러 코어의 Go 포트인 Gosleigh(현재 v0.1.19)입니다.
 
 ```json
 {"operation":"decompile","file_path":"game.exe","va":"Player::TakeDamage, 0x140001000"}

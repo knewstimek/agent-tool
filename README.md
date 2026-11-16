@@ -90,7 +90,7 @@ Local relative paths resolve against an explicit workspace, then the MCP client 
 
 ## Decompilation
 
-`analyze(operation="decompile")` turns x86/x64 PE and ELF functions into C with Gosleigh (currently v0.1.18), a Go port of Ghidra's decompiler core.
+`analyze(operation="decompile")` turns x86/x64 PE and ELF functions into C with Gosleigh (currently v0.1.19), a Go port of Ghidra's decompiler core.
 
 ```json
 {"operation":"decompile","file_path":"game.exe","va":"Player::TakeDamage, 0x140001000"}
