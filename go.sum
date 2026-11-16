@@ -36,8 +36,8 @@ github.com/klauspost/cpuid/v2 v2.0.9 h1:lgaqFMSdTdQYdZ04uHyN2d/eKdOMyi2YLSvlQIBF
 github.com/klauspost/cpuid/v2 v2.0.9/go.mod h1:FInQzS24/EEf25PyTYn52gqo7WaD8xa0213Md/qVLRg=
 github.com/knewstimek/gopdb v0.1.3 h1:niEcif5DxcTl2GNPdzjHhCN1RISrG87nrq3kcPzbU04=
 github.com/knewstimek/gopdb v0.1.3/go.mod h1:0BT7EHyTBaqQue4nDJWed/EyjRE75z/UwGt94EPdY6A=
-github.com/knewstimek/gosleigh v0.1.18 h1:O75i50nU16IftWKwOcHz1Q/cj88kutnvxBrkBBSrSeg=
-github.com/knewstimek/gosleigh v0.1.18/go.mod h1:fCQ7cQx7SFpFImEWITl5zA5M/HBWxqHEPzcd6kK46RU=
+github.com/knewstimek/gosleigh v0.1.19-0.20261116131458-9fe1d181318b h1:a7sCLUHs1ZR5Nc5IuVZwJK/dKmD1lcJ2qH7VhF2VJa8=
+github.com/knewstimek/gosleigh v0.1.19-0.20261116131458-9fe1d181318b/go.mod h1:fCQ7cQx7SFpFImEWITl5zA5M/HBWxqHEPzcd6kK46RU=
 github.com/kr/fs v0.1.0 h1:Jskdu9ieNAYnjxsi0LbQp1ulIKZV1LAFgK1tWhpZgl8=
 github.com/kr/fs v0.1.0/go.mod h1:FFnZGqtBN9Gxj7eW1uZ42v5BccTP0vu6NEaFoC2HwRg=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
