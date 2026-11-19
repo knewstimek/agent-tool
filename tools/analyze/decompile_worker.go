@@ -939,11 +939,13 @@ func newPEHost(f *pe.File, bin *cgBinary, pd *pdataIndex) *decompHost {
 		}
 		h.funcs[bin.imageBase+uint64(s)] = ""
 	}
-	// peSymbolMap mixes export names (at code) with import names (at IAT
-	// slots); a slot is never a function start.
+	// peSymbolMap mixes export names (at code or, for exported variables, at
+	// data) with import names (at IAT slots); only exports in code are starts.
 	for va, name := range bin.symbols {
 		if exports[va] {
-			h.funcs[va] = name
+			if isInExecSection(bin.execSections, uint32(va-bin.imageBase)) {
+				h.funcs[va] = name
+			}
 		} else {
 			h.imports[va] = name
 		}

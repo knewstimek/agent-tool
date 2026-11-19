@@ -111,6 +111,26 @@ func exportingDLL(machine uint16, name string) []byte {
 	})
 }
 
+// An export outside the executable sections is an exported variable: the
+// decompile host neither takes it as a function start (decompile-all would
+// list it and fail) nor as an import slot.
+func TestDecompileHostSkipsDataExports(t *testing.T) {
+	f, err := pe.NewFile(bytes.NewReader(exportingDLL(0x8664, "NamedFn")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := peImageBase(f)
+	// Only the export at RVA 0x1310 lies in code.
+	bin := &cgBinary{imageBase: base, symbols: peSymbolMap(f, base, ""), execSections: []cgSection{{rva: 0x1310, data: make([]byte, 0x10)}}}
+	h := newPEHost(f, bin, nil)
+	if len(h.starts) != 1 || h.starts[0] != base+0x1310 {
+		t.Errorf("starts = %#x, want only the code export %#x", h.starts, base+0x1310)
+	}
+	if len(h.imports) != 0 {
+		t.Errorf("data exports became import slots: %v", h.imports)
+	}
+}
+
 func TestDelayLoadImportsNameTheirSlots(t *testing.T) {
 	f := delayImportPE(t)
 	base := peImageBase(f)
