@@ -19,6 +19,22 @@ func TestDecompileAllCorpus(t *testing.T) {
 	if code := RunDecompileAll([]string{"-j", "2", "-limit", "4", "-o", out, exe}, &log); code != 0 {
 		t.Fatalf("exit %d:\n%s", code, log.String())
 	}
+	// A failed entry is retried on resume, and a line cut off by a killed
+	// run is dropped instead of being joined with the next append.
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, rest, _ := bytes.Cut(data, []byte("\n"))
+	var e0 corpusEntry
+	if err := json.Unmarshal(first, &e0); err != nil {
+		t.Fatal(err)
+	}
+	failedLine, _ := json.Marshal(corpusEntry{Entry: e0.Entry, Error: "timed out after 1s"})
+	data = append(append(append(failedLine, '\n'), rest...), `{"entry":"0x14`...)
+	if err := os.WriteFile(out, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if code := RunDecompileAll([]string{"-j", "2", "-o", out, exe}, &log); code != 0 {
 		t.Fatalf("resume exit %d:\n%s", code, log.String())
 	}
@@ -40,6 +56,9 @@ func TestDecompileAllCorpus(t *testing.T) {
 			t.Errorf("%s written twice", e.Entry)
 		}
 		seen[e.Entry] = true
+		if e.Error != "" {
+			t.Errorf("%s: %s", e.Entry, e.Error)
+		}
 		if e.Name == "use_node" && strings.Contains(e.C, "use_node(Node *n, Color c)") {
 			named = true
 		}
@@ -47,8 +66,11 @@ func TestDecompileAllCorpus(t *testing.T) {
 	if len(seen) <= 4 || !named {
 		t.Errorf("%d entries, use_node found: %v\n%s", len(seen), named, log.String())
 	}
-	if !strings.Contains(log.String(), "4 already in") {
-		t.Errorf("resume did not skip the first run's functions:\n%s", log.String())
+	if !strings.Contains(log.String(), "3 already in") || !strings.Contains(log.String(), "1 failed before, retried") {
+		t.Errorf("resume did not skip the finished functions and retry the failed one:\n%s", log.String())
+	}
+	if !seen[e0.Entry] {
+		t.Errorf("failed entry %s was not retried", e0.Entry)
 	}
 }
 

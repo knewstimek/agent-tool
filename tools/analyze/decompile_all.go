@@ -33,7 +33,7 @@ type corpusEntry struct {
 func RunDecompileAll(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet(DecompileAllArg, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	out := fs.String("o", "", "output JSONL file (default <binary>.decompiled.jsonl); an existing file is resumed")
+	out := fs.String("o", "", "output JSONL file (default <binary>.decompiled.jsonl); an existing file is resumed and its failed entries retried")
 	jobs := fs.Int("j", analysisThreads(), "worker processes")
 	perFunc := fs.Int("timeout", 30, "seconds allowed per function")
 	pdbPath := fs.String("pdb", "", "PDB path, or none (PE only)")
@@ -41,7 +41,7 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 	il2cppScript := fs.String("il2cpp-signatures", "", "methodsigs.tsv, script.json, or global-metadata.dat (native v39 Windows x64; default auto-discover), or none")
 	limit := fs.Int("limit", 0, "decompile at most this many functions (0 = all)")
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, "usage: agent-tool %s [flags] <binary>\n\nDecompiles every known function of an x86/x64 PE/ELF binary to C, one JSON\nobject per line: {\"entry\",\"name\",\"c\"} or {\"entry\",\"error\"}.\n\n", DecompileAllArg)
+		fmt.Fprintf(stderr, "usage: agent-tool %s [flags] <binary>\n\nDecompiles every known function of an x86/x64 PE/ELF binary to C, one JSON\nobject per line: {\"entry\",\"name\",\"c\"} or {\"entry\",\"error\"}. Rerunning\nresumes the file and retries the error entries (e.g. with a larger -timeout).\n\n", DecompileAllArg)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -100,7 +100,7 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 		return 1
 	}
 
-	done, err := readCorpusEntries(*out)
+	done, retry, err := loadCorpus(*out)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
@@ -121,8 +121,8 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 	}
 	defer f.Close()
 	w := bufio.NewWriter(f)
-	fmt.Fprintf(stderr, "%s: %d functions, %d already in %s, %d to go, %d workers\n",
-		bin, len(starts), len(done), *out, len(todo), *jobs)
+	fmt.Fprintf(stderr, "%s: %d functions, %d already in %s, %d to go (%d failed before, retried), %d workers\n",
+		bin, len(starts), len(done), *out, len(todo), retry, *jobs)
 
 	var mu sync.Mutex
 	written, failed := 0, 0
@@ -166,9 +166,14 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 					pending.Add(-len(vas))
 					continue
 				}
-				n := corpusBatch(ctx, decompileRequest{Path: bin, PDBPath: *pdbPath, PDBForce: *pdbForce, IL2CPPScript: *il2cppScript}, vas, *perFunc, write)
+				n, isolate := corpusBatch(ctx, decompileRequest{Path: bin, PDBPath: *pdbPath, PDBForce: *pdbForce, IL2CPPScript: *il2cppScript}, vas, *perFunc, write)
 				pending.Add(-n)
-				if rest := vas[n:]; len(rest) > 0 {
+				rest := vas[n:]
+				if isolate {
+					queue <- rest[:1]
+					rest = rest[1:]
+				}
+				if len(rest) > 0 {
 					queue <- rest
 				}
 			}
@@ -177,6 +182,9 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 	wg.Wait()
 	w.Flush()
 	fmt.Fprintf(stderr, "done: %d written (%d failed) in %s -> %s\n", written, failed, time.Since(start).Round(time.Second), *out)
+	if failed > 0 {
+		fmt.Fprintf(stderr, "%d entries have \"error\" instead of \"c\". Rerun with a larger -timeout to retry only those, or decompile one with analyze decompile timeout_sec (max %d)\n", failed, decompileMaxTimeout)
+	}
 	if ctx.Err() != nil {
 		return 130
 	}
@@ -184,15 +192,17 @@ func RunDecompileAll(args []string, stderr io.Writer) int {
 }
 
 // corpusBatch decompiles vas on a pooled worker, writing an entry for each
-// function settled, and returns how many were (a prefix of vas).
-func corpusBatch(ctx context.Context, req decompileRequest, vas []uint64, perFunc int, write func(corpusEntry)) int {
+// function settled, and returns how many were (a prefix of vas). isolate asks
+// the caller to rerun the next function alone: when a batch times out or its
+// worker dies, the function running then may have had less than perFunc of
+// the shared budget, so a failure is recorded only for a function run alone.
+func corpusBatch(ctx context.Context, req decompileRequest, vas []uint64, perFunc int, write func(corpusEntry)) (n int, isolate bool) {
 	req.Targets = make([]string, len(vas))
 	for i, va := range vas {
 		req.Targets[i] = fmt.Sprintf("0x%x", va)
 	}
 	req.MemLimitMB = decompileMemLimitMB
 	lines, failure := runDecompileWorker(ctx, req, time.Duration(perFunc*len(vas))*time.Second)
-	n := 0
 	for _, l := range lines {
 		if l.Kind != "result" || n >= len(vas) {
 			continue
@@ -206,9 +216,12 @@ func corpusBatch(ctx context.Context, req decompileRequest, vas []uint64, perFun
 	}
 	if n < len(vas) && ctx.Err() == nil {
 		if failure != "" {
-			// The function that was running when the worker died or timed out.
-			write(corpusEntry{Entry: req.Targets[n], Error: failure})
-			return n + 1
+			if len(vas) > 1 {
+				return n, true
+			}
+			t := req.Targets[n]
+			write(corpusEntry{Entry: t, Error: failure + ". Rerun decompile-all with a larger -timeout to retry the error entries. " + decompileSuggestion("timeout", t)})
+			return n + 1, false
 		}
 		// Results missing without a failure: the worker reported a fatal
 		// error for the whole request (the binary did not load). Retrying
@@ -223,32 +236,78 @@ func corpusBatch(ctx context.Context, req decompileRequest, vas []uint64, perFun
 			write(corpusEntry{Entry: req.Targets[n], Error: msg})
 		}
 	}
-	return n
+	return n, false
 }
 
-// readCorpusEntries is the set of functions an existing corpus file holds.
-func readCorpusEntries(path string) (map[uint64]bool, error) {
-	done := map[uint64]bool{}
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return done, nil
+// loadCorpus returns the functions an existing corpus file holds C for and
+// how many error entries it dropped. Error entries and unparsable lines (a
+// line cut off by a killed run) are removed from the file so the rerun that
+// retries them appends without duplicates or a corrupt join.
+func loadCorpus(path string) (done map[uint64]bool, dropped int, err error) {
+	done, dropped, bad, err := scanCorpus(path, nil)
+	if err != nil || dropped+bad == 0 {
+		if os.IsNotExist(err) {
+			return map[uint64]bool{}, 0, nil
+		}
+		return done, dropped, err
+	}
+	tmp := path + ".tmp"
+	g, err := os.Create(tmp)
+	if err != nil {
+		return nil, 0, err
+	}
+	w := bufio.NewWriter(g)
+	_, _, _, err = scanCorpus(path, func(line []byte) {
+		w.Write(line)
+		w.WriteByte('\n')
+	})
+	if err == nil {
+		err = w.Flush()
+	}
+	if cerr := g.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
 	}
 	if err != nil {
-		return nil, err
+		os.Remove(tmp)
+		return nil, 0, err
+	}
+	return done, dropped, nil
+}
+
+// scanCorpus reads a corpus file, passing each line that holds C to keep.
+func scanCorpus(path string, keep func([]byte)) (done map[uint64]bool, dropped, bad int, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, 0, err
 	}
 	defer f.Close()
+	done = map[uint64]bool{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64<<10), 256<<20)
 	for sc.Scan() {
 		var e corpusEntry
 		var va uint64
-		if json.Unmarshal(sc.Bytes(), &e) == nil {
-			if _, err := fmt.Sscanf(e.Entry, "0x%x", &va); err == nil {
-				done[va] = true
-			}
+		if json.Unmarshal(sc.Bytes(), &e) != nil {
+			bad++
+			continue
+		}
+		if _, err := fmt.Sscanf(e.Entry, "0x%x", &va); err != nil {
+			bad++
+			continue
+		}
+		if e.Error != "" {
+			dropped++
+			continue
+		}
+		done[va] = true
+		if keep != nil {
+			keep(sc.Bytes())
 		}
 	}
-	return done, nil
+	return done, dropped, bad, sc.Err()
 }
 
 // corpusBatches groups vas, largest first, into batches of at most 32

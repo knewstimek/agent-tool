@@ -75,7 +75,8 @@ Decompile functions to C (x86/x64 PE and ELF; Gosleigh, a Go port of Ghidra's de
     agent-tool decompile-all [-j workers] [-timeout sec] [-pdb path [-pdb-force]]
         [-il2cpp-signatures path|none] [-limit n] [-o out.jsonl] <binary>
   One JSON object per line: {"entry","name","c","secs"} or {"entry","error"};
-  rerunning resumes an existing output file.
+  rerunning resumes an existing output file and retries its error entries, so
+  rerun with a larger -timeout (default 30) for the ones that timed out.
 
   Reading the output:
     Imported functions print by name, delay-loaded ones included. An import by
