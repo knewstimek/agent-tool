@@ -539,15 +539,16 @@ Use kind to filter. Omit query to list. Every word matches part of a name, alias
 Use limit (default 20, max 100) and pass next_offset as offset with the same filters to continue.
 Pass connection_profile to ssh, sftp, mysql, or httpreq. For httpreq also pass profile_kind (aws or cloudflare).
 Through toolbox: operation=call, tool=profile_search, arguments={"kind":"mysql","query":"reporting"}.
-For registration, unlock, and revision history see tools/credential_vault.
+For registration and revision history see tools/credential_vault.
 
 ## credential_vault
-Set up and unlock encrypted connection profiles in a local terminal.
-Run agent-tool vault init, then agent-tool vault put KIND NAME --help for connection flags. Values are entered without echo.
-Run agent-tool vault unlock in a separate terminal before connecting. Ctrl+C locks it for new operations.
+Register encrypted connection profiles. The default local vault opens automatically.
+Run agent-tool vault put KIND NAME --help for connection flags. Secrets are entered without echo.
+An optional vault created with vault init --passphrase requires vault unlock before connecting.
 Use vault list and vault history KIND NAME to read revisions. Pass --revision N on edits, replacement, and deletion.
 Run agent-tool vault import-ssh to copy legacy profiles under new names ending in -vault while keeping the original JSON and keys.
 SQLite lives at agent-tool/profiles.sqlite under local app data (Windows) or the user config directory (other systems).
+For an automatic vault, keep the matching profiles.sqlite.key file private. It is required to recover a copied database.
 For an alternate absolute path set AGENT_TOOL_VAULT_FILE for both AgentTool and the unlock terminal.
 Keep aliases, descriptions, and tags free of credentials. Old connections.json files and imported key files still exist on disk.
 

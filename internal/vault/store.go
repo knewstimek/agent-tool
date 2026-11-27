@@ -107,6 +107,14 @@ func Open() (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func initStore(ctx context.Context, path string, password []byte) error {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return err
+	}
+	return createStore(ctx, path, 1, salt, makeAEAD(password, salt))
+}
+
+func createStore(ctx context.Context, path string, version int, salt []byte, key cipher.AEAD) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("cannot create vault directory")
 	}
@@ -132,11 +140,6 @@ func initStore(ctx context.Context, path string, password []byte) error {
 		return err
 	}
 	defer store.Close()
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return err
-	}
-	key := makeAEAD(password, salt)
 	check := key.Seal(nil, nil, []byte("agent-tool-vault-v1"), []byte("vault-key-check"))
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -157,7 +160,7 @@ func initStore(ctx context.Context, path string, password []byte) error {
 	`); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO vault_key VALUES (1, ?, ?)", salt, check); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT INTO vault_key VALUES (?, ?, ?)", version, salt, check); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -170,6 +173,10 @@ func initStore(ctx context.Context, path string, password []byte) error {
 func makeAEAD(password, salt []byte) cipher.AEAD {
 	key := argon2.IDKey(password, salt, 3, 64*1024, 4, 32)
 	defer clear(key)
+	return aeadFromKey(key)
+}
+
+func aeadFromKey(key []byte) cipher.AEAD {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		panic(err)
@@ -182,18 +189,30 @@ func makeAEAD(password, salt []byte) cipher.AEAD {
 }
 
 func (s *Store) unlock(ctx context.Context, password []byte) (cipher.AEAD, error) {
-	var version int
-	var salt, check []byte
-	err := s.db.QueryRowContext(ctx, "SELECT version, salt, verifier FROM vault_key").Scan(&version, &salt, &check)
-	if err != nil || version != 1 || len(salt) != 16 {
-		return nil, fmt.Errorf("invalid vault database or unsupported version")
+	version, salt, check, err := s.keyHeader(ctx)
+	if err != nil || version != 1 {
+		return nil, fmt.Errorf("invalid passphrase vault database")
 	}
 	key := makeAEAD(password, salt)
-	plain, err := key.Open(nil, nil, check, []byte("vault-key-check"))
-	if err != nil || string(plain) != "agent-tool-vault-v1" {
+	if !verifyKey(key, check) {
 		return nil, fmt.Errorf("wrong vault passphrase or damaged vault")
 	}
 	return key, nil
+}
+
+func (s *Store) keyHeader(ctx context.Context) (int, []byte, []byte, error) {
+	var version int
+	var salt, check []byte
+	err := s.db.QueryRowContext(ctx, "SELECT version, salt, verifier FROM vault_key").Scan(&version, &salt, &check)
+	if err != nil || (version != 1 && version != 2) || (version == 1 && len(salt) != 16) {
+		return 0, nil, nil, fmt.Errorf("invalid vault database or unsupported version")
+	}
+	return version, salt, check, nil
+}
+
+func verifyKey(key cipher.AEAD, check []byte) bool {
+	plain, err := key.Open(nil, nil, check, []byte("vault-key-check"))
+	return err == nil && string(plain) == "agent-tool-vault-v1"
 }
 
 func validKind(kind string) bool {
