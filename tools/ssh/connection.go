@@ -43,6 +43,7 @@ type ConnectionProfile struct {
 	JumpKeyFile    string      `json:"jump_key_file,omitempty"`
 	JumpPassphrase string      `json:"jump_passphrase,omitempty"`
 	Trusted        bool        `json:"trusted,omitempty"`
+	searchMetadata profileSearchMetadata
 }
 
 // UnmarshalJSON treats local connection profiles as trusted unless they
@@ -55,6 +56,10 @@ func (p *ConnectionProfile) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*p = ConnectionProfile(decoded)
+	// These fields were previously ignored. Invalid metadata must not break an existing connection.
+	var metadata profileSearchMetadata
+	_ = json.Unmarshal(data, &metadata)
+	p.searchMetadata = metadata
 	return nil
 }
 
@@ -216,31 +221,39 @@ func hasExplicitConnectionFields(input SSHInput) bool {
 }
 
 func loadLocalConnectionProfile(name string) (ConnectionProfile, error) {
-	path := strings.TrimSpace(os.Getenv("AGENT_TOOL_CONNECTION_PROFILE_FILE"))
-	if path == "" {
-		configDir, err := os.UserConfigDir()
-		if err != nil {
-			return ConnectionProfile{}, fmt.Errorf("cannot locate local connection profile directory: %w", err)
-		}
-		path = filepath.Join(configDir, "agent-tool", "connections.json")
-	}
-	data, err := os.ReadFile(path)
+	profiles, path, err := readLocalConnectionProfiles()
 	if err != nil {
-		return ConnectionProfile{}, fmt.Errorf("cannot read local connection profiles %s: %w", path, err)
-	}
-	var file connectionProfileFile
-	if err := json.Unmarshal(data, &file); err != nil {
-		return ConnectionProfile{}, fmt.Errorf("invalid local connection profile file %s: %w", path, err)
-	}
-	profiles := file.Connections
-	if len(profiles) == 0 {
-		profiles = file.Profiles
+		return ConnectionProfile{}, err
 	}
 	profile, ok := profiles[name]
 	if !ok {
 		return ConnectionProfile{}, fmt.Errorf("connection_profile %q not found in %s", name, path)
 	}
 	return profile, nil
+}
+
+func readLocalConnectionProfiles() (map[string]ConnectionProfile, string, error) {
+	path := strings.TrimSpace(os.Getenv("AGENT_TOOL_CONNECTION_PROFILE_FILE"))
+	if path == "" {
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			return nil, "", fmt.Errorf("cannot locate local connection profile directory: %w", err)
+		}
+		path = filepath.Join(configDir, "agent-tool", "connections.json")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, path, fmt.Errorf("cannot read local connection profiles %s: %w", path, err)
+	}
+	var file connectionProfileFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil, path, fmt.Errorf("invalid local connection profile file %s: %w", path, err)
+	}
+	profiles := file.Connections
+	if len(profiles) == 0 {
+		profiles = file.Profiles
+	}
+	return profiles, path, nil
 }
 
 func rememberConnection(owner *mcp.ServerSession, input SSHInput) (string, error) {

@@ -241,6 +241,7 @@ func toolSpecs(server *mcp.Server) []toolbox.Spec {
 		{Name: "prockill", Group: "system", Register: func() { prockill.Register(server) }},
 
 		{Name: "ssh", Group: "remote", Register: func() { ssh.Register(server) }},
+		{Name: "profile_search", Group: "remote", Register: func() { ssh.RegisterProfileSearch(server) }},
 		{Name: "ssh_key", Group: "remote", Register: func() { sshkey.Register(server) }},
 		{Name: "sftp", Group: "remote", Register: func() { sftptool.Register(server) }},
 		{Name: "download", Group: "remote", Register: func() { download.Register(server) }},
