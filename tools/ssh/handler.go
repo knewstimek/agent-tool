@@ -64,7 +64,7 @@ type SSHInput struct {
 	JumpKeyFile    string      `json:"jump_key_file,omitempty" jsonschema:"Jump host SSH private key file. Default: same as key_file"`
 	JumpPassphrase string      `json:"jump_passphrase,omitempty" jsonschema:"Jump host key passphrase. Default: same as passphrase"`
 
-	ConnectionProfile string      `json:"connection_profile,omitempty" jsonschema:"Named connection from the local ignored profile file; replaces repeated host/user/key fields"`
+	ConnectionProfile string      `json:"connection_profile,omitempty" jsonschema:"Named local connection; find names with profile_search. Replaces repeated host/user/key fields."`
 	ConnectionID      string      `json:"connection_id,omitempty" jsonschema:"Opaque session-local connection handle returned by an earlier SSH/SFTP call"`
 	Quiet             bool        `json:"quiet,omitempty" jsonschema:"Suppress connection/session banners: true or false. Default: false"`
 	EchoCommand       interface{} `json:"echo_command,omitempty" jsonschema:"Echo the original remote command in normal output: true or false. Default: false"`

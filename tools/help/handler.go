@@ -193,6 +193,7 @@ directory_alias (through toolbox) registers session-only @name/subpath reference
 - prockill: Kill, suspend, or resume processes by PID or port (tree kill, signal selection, zombie handling, dry_run)
 - procexec: Execute commands as new processes; slow runs yield a job_id (wait/status/tail/cancel/list), background, suspended start
 - ssh: Execute commands on remote servers via SSH (IPv4/IPv6, ProxyJump, session pooling)
+- profile_search: Find named connections for SSH and SFTP
 - ssh_key: Convert local SSH private keys between PPK, PEM, OpenSSH, and PKCS#8
 - sftp: Transfer files and manage remote filesystems over SSH (upload, download, ls, stat, mkdir, rm, chmod, rename, async transfers)
 - bash: Persistent shell sessions with state retention and raw-retrievable diagnostic compaction
@@ -520,7 +521,7 @@ Non-zero remote exits return IsError=true. For long-running commands, use backgr
 	operation=start, then operation=wait/status/tail/cancel with job_id (tail_lines defaults to 50; wait_sec 30, max 300).
 	SSH jobs share the job registry, so toolbox operation=job also lists and waits on them.
 	powershell_script forces UTF-8 output and silences progress records, so non-English hosts return readable text.
-	connection_profile reads a named local ignored profile; connection_id reuses its
+	connection_profile reads a named local ignored profile (find names with profile_search); connection_id reuses its
 	connection fields for 30 minutes. remote_root in a profile or first call is also
 	retained in connection_id and shared with SFTP. Each command starts in that root;
 	failed cwd setup prevents execution. remote_shell: posix (default), cmd (default
@@ -531,6 +532,15 @@ Non-zero remote exits return IsError=true. For long-running commands, use backgr
 	key_file, passphrase, use_agent, command, powershell_script, disconnect, host_key_check, timeout_sec,
 	max_output_chars, output_mode, jump_host, jump_port, jump_user, jump_password,
 	jump_key_file, jump_passphrase, connection_profile, connection_id, remote_root, remote_shell, quiet, echo_command, result_only
+
+## profile_search
+Find connection_profile names for ssh and sftp in the local connections.json file.
+Use agent-tool/connections.json in the OS user config directory, or set AGENT_TOOL_CONNECTION_PROFILE_FILE.
+Set optional description (string), aliases and tags (string arrays) on each profile. Use only non-secret text in these fields.
+Omit query to list profiles. Every query word must occur in a name, alias, description, or tag, ignoring case.
+Use limit (default 20, max 100) and pass next_offset as offset with the same query for the next page.
+Pass a result's connection_profile to ssh or sftp. If several profiles match, use the one that matches the intended target.
+Through toolbox: operation=call, tool=profile_search, arguments={"query":"backup"}.
 
 ## ssh_key
 Convert a local SSH private-key file between PPK, PEM, PKCS#8 and OpenSSH.

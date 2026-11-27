@@ -57,7 +57,7 @@ type SFTPInput struct {
 	TransferID string       `json:"transfer_id,omitempty" jsonschema:"Transfer ID for status/cancel operations (returned by upload_async/download_async)"`
 	Uploads    []UploadItem `json:"uploads,omitempty" jsonschema:"Files for upload_many (maximum 100)"`
 
-	ConnectionProfile string `json:"connection_profile,omitempty" jsonschema:"Named connection from the local ignored profile file; replaces repeated host/user/key fields"`
+	ConnectionProfile string `json:"connection_profile,omitempty" jsonschema:"Named local connection; find names with profile_search. Replaces repeated host/user/key fields."`
 	ConnectionID      string `json:"connection_id,omitempty" jsonschema:"Opaque session-local connection handle returned by an earlier SSH/SFTP call"`
 	Quiet             bool   `json:"quiet,omitempty" jsonschema:"Suppress connection/session banners: true or false. Default: false"`
 	ResultOnly        bool   `json:"result_only,omitempty" jsonschema:"Return only the operation result without connection banners: true or false. Default: false"`

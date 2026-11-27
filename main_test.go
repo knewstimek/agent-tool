@@ -2,8 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"agent-tool/tools/ssh"
+	"agent-tool/tools/toolbox"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -40,6 +45,11 @@ func fullSession(t *testing.T) *mcp.ClientSession {
 	for _, spec := range toolSpecs(server) {
 		spec.Register()
 	}
+	return connectTestServer(t, server)
+}
+
+func connectTestServer(t *testing.T, server *mcp.Server) *mcp.ClientSession {
+	t.Helper()
 	a, b := mcp.NewInMemoryTransports()
 	session, err := server.Connect(t.Context(), a, nil)
 	if err != nil {
@@ -51,6 +61,97 @@ func fullSession(t *testing.T) *mcp.ClientSession {
 	}
 	t.Cleanup(func() { _ = peer.Close(); _ = session.Close(); _ = session.Wait() })
 	return peer
+}
+
+func TestProfileSearchThroughCoreLiteToolbox(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "connections.json")
+	t.Setenv("AGENT_TOOL_CONNECTION_PROFILE_FILE", path)
+	data := `{"profiles":{
+		" uncallable":{"host":"example.invalid"},
+		"legacy":{"host":"example.invalid","user":"example","tags":false},
+		"Archive":{"host":"example.invalid","user":"example","description":"Daily 백업","aliases":["copy"],"tags":["prod"],"password":"private-pass","key_file":"private-file","jump_passphrase":"private-jump"},
+		"copy":{"tags":["prod"]},
+		"other":{"aliases":["copy"],"tags":["prod"]}
+	}}`
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "agent-tool", Version: "test"}, nil)
+	manager := toolbox.NewManager(server, toolSpecs(server), Version)
+	if err := manager.EnableProfile("core-lite"); err != nil {
+		t.Fatal(err)
+	}
+	manager.RegisterTool()
+	peer := connectTestServer(t, server)
+
+	call := func(operation string, arguments map[string]any) *mcp.CallToolResult {
+		t.Helper()
+		params := map[string]any{"operation": operation, "tool": "profile_search"}
+		if arguments != nil {
+			params["arguments"] = arguments
+		}
+		result, err := peer.CallTool(t.Context(), &mcp.CallToolParams{Name: "toolbox", Arguments: params})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	describe := call("describe", nil)
+	if describe.IsError || !strings.Contains(describe.Content[0].(*mcp.TextContent).Text, `"query"`) {
+		t.Fatalf("profile search schema unavailable: %+v", describe)
+	}
+	check := func(args map[string]any, names string, total, next int) {
+		t.Helper()
+		result := call("call", args)
+		raw, err := json.Marshal(result)
+		if err != nil || result.IsError || strings.Contains(string(raw), "private-") {
+			t.Fatalf("unexpected profile search result: %s (%v)", raw, err)
+		}
+		raw = []byte(result.Content[0].(*mcp.TextContent).Text)
+		var output struct {
+			Profiles []struct {
+				Name string `json:"connection_profile"`
+			} `json:"profiles"`
+			Total int `json:"total"`
+			Next  int `json:"next_offset"`
+		}
+		if err := json.Unmarshal(raw, &output); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, profile := range output.Profiles {
+			got = append(got, profile.Name)
+		}
+		if output.Profiles == nil || strings.Join(got, ",") != names || output.Total != total || output.Next != next {
+			t.Fatalf("unexpected profile page: %s", raw)
+		}
+	}
+	check(map[string]any{"query": "COPY", "limit": 1}, "copy", 3, 1)
+	check(map[string]any{"query": "copy", "offset": 1}, "Archive,other", 3, 0)
+	check(map[string]any{"query": "백업 PROD"}, "Archive", 1, 0)
+	connection := ssh.SSHInput{ConnectionProfile: "Archive"}
+	if _, err := ssh.ResolveConnection(&connection); err != nil || connection.Host != "example.invalid" {
+		t.Fatalf("search result did not resolve to the configured connection: %v", err)
+	}
+	check(nil, "Archive,copy,legacy,other", 4, 0)
+	check(map[string]any{"query": "private"}, "", 0, 0)
+	if result := call("call", map[string]any{"offset": -1}); !result.IsError {
+		t.Fatal("negative offset succeeded")
+	}
+	long := strings.Repeat("x", 20*1024)
+	data = `{"connections":{"first":{"description":"` + long + `"},"second":{"description":"` + long + `"}}}`
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	check(nil, "first", 2, 1)
+	check(map[string]any{"offset": 1}, "second", 2, 0)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	result := call("call", nil)
+	if !result.IsError || strings.Contains(result.Content[0].(*mcp.TextContent).Text, path) {
+		t.Fatal("missing configured file must give a path-free tool error")
+	}
 }
 
 func TestToolDescriptionsStayActionable(t *testing.T) {
