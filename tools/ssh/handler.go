@@ -73,6 +73,9 @@ type SSHInput struct {
 	TrustedProfile       bool   `json:"-"`
 	ResolvedConnectionID string `json:"-"`
 	requestSession       *mcp.ServerSession
+	vaultName            string
+	privateKey           string
+	jumpPrivateKey       string
 }
 
 type SSHOutput struct {
@@ -447,6 +450,7 @@ func dialJumpHost(input SSHInput, jumpResolvedIP string) (*gossh.Client, net.Con
 		KeyFile:    input.JumpKeyFile,
 		Passphrase: input.JumpPassphrase,
 		UseAgent:   input.UseAgent,
+		privateKey: input.jumpPrivateKey,
 	}
 
 	jumpAuth, err := buildAuthMethods(jumpInput)
@@ -592,9 +596,13 @@ func validateInput(input *SSHInput) error {
 		if containsUnsafe(input.JumpUser) {
 			return fmt.Errorf("invalid characters in jump_user")
 		}
-		// Default jump auth to main auth
-		if input.JumpPassword == "" {
+		// Keep independently configured vault jump credentials separate.
+		vaultFallback := input.vaultName != "" && input.JumpPassword == "" && input.jumpPrivateKey == ""
+		if input.JumpPassword == "" && (input.vaultName == "" || vaultFallback) {
 			input.JumpPassword = input.Password
+		}
+		if vaultFallback {
+			input.jumpPrivateKey, input.JumpPassphrase = input.privateKey, input.Passphrase
 		}
 		if input.JumpKeyFile == "" {
 			input.JumpKeyFile = input.KeyFile
@@ -602,7 +610,7 @@ func validateInput(input *SSHInput) error {
 			input.JumpKeyFile = strings.TrimSpace(input.JumpKeyFile)
 			input.JumpKeyFile = expandTilde(input.JumpKeyFile)
 		}
-		if input.JumpPassphrase == "" {
+		if input.JumpPassphrase == "" && input.vaultName == "" {
 			input.JumpPassphrase = input.Passphrase
 		}
 	}
@@ -645,6 +653,7 @@ func sanitizeError(err error, input SSHInput) string {
 	for _, secret := range []string{
 		input.Password, input.Passphrase,
 		input.JumpPassword, input.JumpPassphrase,
+		input.privateKey, input.jumpPrivateKey,
 	} {
 		if secret != "" {
 			msg = strings.ReplaceAll(msg, secret, "***")

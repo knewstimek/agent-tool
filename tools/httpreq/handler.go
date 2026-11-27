@@ -29,16 +29,18 @@ var allowedMethods = map[string]bool{
 }
 
 type HTTPReqInput struct {
-	URL           string            `json:"url" jsonschema:"URL to send the request to,required"`
-	Method        string            `json:"method" jsonschema:"HTTP method: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS,required"`
-	Body          string            `json:"body,omitempty" jsonschema:"Request body (string). Typically JSON for API calls"`
-	Headers       map[string]string `json:"headers,omitempty" jsonschema:"Custom HTTP headers (e.g. Authorization, Accept)"`
-	ContentType   string            `json:"content_type,omitempty" jsonschema:"Content-Type header. Default: application/json"`
-	TimeoutSec    interface{}       `json:"timeout_sec,omitempty" jsonschema:"Request timeout in seconds. Default: 30, Max: 120"`
-	ProxyURL      string            `json:"proxy_url,omitempty" jsonschema:"HTTP or SOCKS5 proxy URL (e.g. http://proxy:8080, socks5://proxy:1080)"`
-	NoDoH         interface{}       `json:"no_doh,omitempty" jsonschema:"Disable DNS over HTTPS: true or false. Default: false (DoH enabled)"`
-	NoECH         interface{}       `json:"no_ech,omitempty" jsonschema:"Disable Encrypted Client Hello: true or false. Default: false (ECH enabled)"`
-	MaxResponseKB interface{}       `json:"max_response_kb,omitempty" jsonschema:"Maximum response body size in KB. Default: 32, Max: 128"`
+	URL               string            `json:"url" jsonschema:"URL to send the request to,required"`
+	Method            string            `json:"method" jsonschema:"HTTP method: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS,required"`
+	Body              string            `json:"body,omitempty" jsonschema:"Request body (string). Typically JSON for API calls"`
+	Headers           map[string]string `json:"headers,omitempty" jsonschema:"Custom HTTP headers (e.g. Authorization, Accept)"`
+	ContentType       string            `json:"content_type,omitempty" jsonschema:"Content-Type header. Default: application/json"`
+	TimeoutSec        interface{}       `json:"timeout_sec,omitempty" jsonschema:"Request timeout in seconds. Default: 30, Max: 120"`
+	ProxyURL          string            `json:"proxy_url,omitempty" jsonschema:"HTTP or SOCKS5 proxy URL (e.g. http://proxy:8080, socks5://proxy:1080)"`
+	NoDoH             interface{}       `json:"no_doh,omitempty" jsonschema:"Disable DNS over HTTPS: true or false. Default: false (DoH enabled)"`
+	NoECH             interface{}       `json:"no_ech,omitempty" jsonschema:"Disable Encrypted Client Hello: true or false. Default: false (ECH enabled)"`
+	MaxResponseKB     interface{}       `json:"max_response_kb,omitempty" jsonschema:"Maximum response body size in KB. Default: 32, Max: 128"`
+	ConnectionProfile string            `json:"connection_profile,omitempty" jsonschema:"Encrypted Cloudflare or AWS profile from profile_search."`
+	ProfileKind       string            `json:"profile_kind,omitempty" jsonschema:"cloudflare or aws, required with connection_profile."`
 }
 
 type HTTPReqOutput struct {
@@ -47,6 +49,10 @@ type HTTPReqOutput struct {
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (*mcp.CallToolResult, HTTPReqOutput, error) {
+	profileRequest := strings.TrimSpace(input.ConnectionProfile) != ""
+	if !profileRequest && input.ProfileKind != "" {
+		return errorResult("profile_kind requires connection_profile")
+	}
 	// Validate URL
 	if strings.TrimSpace(input.URL) == "" {
 		return errorResult("url is required")
@@ -60,7 +66,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 	}
 
 	// SSRF policy check — warn on private IP access (helps detect prompt injection)
-	_, ssrfWarning, ssrfErr := common.CheckHostSSRF(ctx, parsedURL.Hostname(), common.GetAllowHTTPPrivate(), "http")
+	_, ssrfWarning, ssrfErr := common.CheckHostSSRF(ctx, parsedURL.Hostname(), !profileRequest && common.GetAllowHTTPPrivate(), "http")
 	if ssrfErr != nil {
 		return errorResult(ssrfErr.Error())
 	}
@@ -123,6 +129,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 	if err != nil {
 		return errorResult(fmt.Sprintf("client setup failed: %v", err))
 	}
+	defer client.CloseIdleConnections()
 
 	// Build request
 	var bodyReader io.Reader
@@ -150,10 +157,24 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 		}
 		httpReq.Header.Set(k, v)
 	}
+	redact := func(text string) string { return text }
+	maxReadBytes := maxRespBytes + 1
+	if profileRequest {
+		redact, err = authorizeProfile(ctx, httpReq, input)
+		if err != nil {
+			return errorResult(err.Error())
+		}
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		// Leave room to redact credentials that straddle the displayed boundary.
+		maxReadBytes += 256 * 1024
+	}
 
 	// Execute
 	resp, err := common.DoRequestWithECH(ctx, client, httpReq, !noECH && common.GetEnableECH())
 	if err != nil {
+		if profileRequest {
+			return errorResult("vault HTTP request failed before receiving a response")
+		}
 		msg := fmt.Sprintf("request failed: %v", err)
 		if ssrfWarning != "" {
 			msg = ssrfWarning + "\n\n" + msg
@@ -164,12 +185,12 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 
 	// Format response header
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("HTTP %s %s\n", input.Method, input.URL))
-	sb.WriteString(fmt.Sprintf("Status: %s\n", resp.Status))
+	sb.WriteString(fmt.Sprintf("HTTP %s %s\n", input.Method, redact(input.URL)))
+	sb.WriteString(fmt.Sprintf("Status: %s\n", redact(resp.Status)))
 
 	ct := resp.Header.Get("Content-Type")
 	if ct != "" {
-		sb.WriteString(fmt.Sprintf("Content-Type: %s\n", ct))
+		sb.WriteString(fmt.Sprintf("Content-Type: %s\n", redact(ct)))
 	}
 	if resp.ContentLength >= 0 {
 		sb.WriteString(fmt.Sprintf("Content-Length: %d\n", resp.ContentLength))
@@ -184,13 +205,17 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 	}
 
 	// Read response body
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxReadBytes))
 	if err != nil {
-		return errorResult(fmt.Sprintf("read response: %v", err))
+		return errorResult(redact(fmt.Sprintf("read response: %v", err)))
 	}
 
 	truncated := int64(len(body)) > maxRespBytes
-	if truncated {
+	if profileRequest {
+		body = []byte(redact(string(body)))
+	}
+	if int64(len(body)) > maxRespBytes {
+		truncated = true
 		body = body[:maxRespBytes]
 	}
 
@@ -198,7 +223,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input HTTPReqInput) (
 
 	// Show body if text-like, otherwise just report size
 	if isBinaryContent(ct, body) {
-		sb.WriteString(fmt.Sprintf("[Binary response: %d bytes, Content-Type: %s]", len(body), ct))
+		sb.WriteString(fmt.Sprintf("[Binary response: %d bytes, Content-Type: %s]", len(body), redact(ct)))
 	} else {
 		sb.WriteString(string(body))
 	}
@@ -224,6 +249,7 @@ func Register(server *mcp.Server) {
 		Description: `Execute HTTP requests with any method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS).
 ECH and DNS over HTTPS are on by default (no_ech / no_doh turn them off).
 Supports custom headers, request body, and HTTP/SOCKS5 proxies.
+For Cloudflare or AWS authentication, use connection_profile and profile_kind.
 SSRF protection blocks private/internal IPs. Response body is truncated at max_response_kb.
 For downloading files, use download.`,
 	}, Handle)

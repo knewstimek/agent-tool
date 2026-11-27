@@ -97,6 +97,9 @@ func sessionKey(input SSHInput) string {
 		input.Password, input.KeyFile, input.UseAgent, input.Passphrase, input.HostKeyCheck,
 		input.JumpHost, input.JumpPortInt, input.JumpUser, input.JumpPassword,
 		input.JumpKeyFile, input.JumpPassphrase, input.requestSession)
+	if input.vaultName != "" {
+		identity += fmt.Sprintf("\x00%q\x00%x\x00%x", input.vaultName, sha256.Sum256([]byte(input.privateKey)), sha256.Sum256([]byte(input.jumpPrivateKey)))
+	}
 	sum := sha256.Sum256([]byte(identity))
 	return fmt.Sprintf("%s:%d:%s:%s", input.Host, input.PortInt, input.User, hex.EncodeToString(sum[:]))
 }

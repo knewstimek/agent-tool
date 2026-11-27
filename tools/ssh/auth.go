@@ -28,11 +28,16 @@ func buildAuthMethods(input SSHInput) (*authResult, error) {
 	result := &authResult{}
 
 	// 1. Key file
-	if input.KeyFile != "" {
-		keyBytes, err := os.ReadFile(input.KeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read key file %s: %w", input.KeyFile, err)
+	if input.privateKey != "" || input.KeyFile != "" {
+		keyBytes := []byte(input.privateKey)
+		if input.privateKey == "" {
+			var err error
+			keyBytes, err = os.ReadFile(input.KeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read key file %s: %w", input.KeyFile, err)
+			}
 		}
+		defer clear(keyBytes)
 		signer, err := parseKey(keyBytes, input.Passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse private key: %w", err)

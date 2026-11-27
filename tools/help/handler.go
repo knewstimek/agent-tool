@@ -193,7 +193,7 @@ directory_alias (through toolbox) registers session-only @name/subpath reference
 - prockill: Kill, suspend, or resume processes by PID or port (tree kill, signal selection, zombie handling, dry_run)
 - procexec: Execute commands as new processes; slow runs yield a job_id (wait/status/tail/cancel/list), background, suspended start
 - ssh: Execute commands on remote servers via SSH (IPv4/IPv6, ProxyJump, session pooling)
-- profile_search: Find named connections for SSH and SFTP
+- profile_search: Find named SSH/SFTP, MySQL, Cloudflare, and AWS connections
 - ssh_key: Convert local SSH private keys between PPK, PEM, OpenSSH, and PKCS#8
 - sftp: Transfer files and manage remote filesystems over SSH (upload, download, ls, stat, mkdir, rm, chmod, rename, async transfers)
 - bash: Persistent shell sessions with state retention and raw-retrievable diagnostic compaction
@@ -521,7 +521,7 @@ Non-zero remote exits return IsError=true. For long-running commands, use backgr
 	operation=start, then operation=wait/status/tail/cancel with job_id (tail_lines defaults to 50; wait_sec 30, max 300).
 	SSH jobs share the job registry, so toolbox operation=job also lists and waits on them.
 	powershell_script forces UTF-8 output and silences progress records, so non-English hosts return readable text.
-	connection_profile reads a named local ignored profile (find names with profile_search); connection_id reuses its
+	connection_profile resolves a local profile (find names with profile_search); connection_id reuses its
 	connection fields for 30 minutes. remote_root in a profile or first call is also
 	retained in connection_id and shared with SFTP. Each command starts in that root;
 	failed cwd setup prevents execution. remote_shell: posix (default), cmd (default
@@ -534,13 +534,21 @@ Non-zero remote exits return IsError=true. For long-running commands, use backgr
 	jump_key_file, jump_passphrase, connection_profile, connection_id, remote_root, remote_shell, quiet, echo_command, result_only
 
 ## profile_search
-Find connection_profile names for ssh and sftp in the local connections.json file.
-Use agent-tool/connections.json in the OS user config directory, or set AGENT_TOOL_CONNECTION_PROFILE_FILE.
-Set optional description (string), aliases and tags (string arrays) on each profile. Use only non-secret text in these fields.
-Omit query to list profiles. Every query word must occur in a name, alias, description, or tag, ignoring case.
-Use limit (default 20, max 100) and pass next_offset as offset with the same query for the next page.
-Pass a result's connection_profile to ssh or sftp. If several profiles match, use the one that matches the intended target.
-Through toolbox: operation=call, tool=profile_search, arguments={"query":"backup"}.
+Find named SSH/SFTP, MySQL, Cloudflare, and AWS connections by non-secret profile metadata.
+Use kind to filter. Omit query to list. Every word matches part of a name, alias, description, or tag, ignoring case.
+Use limit (default 20, max 100) and pass next_offset as offset with the same filters to continue.
+Pass connection_profile to ssh, sftp, mysql, or httpreq. For httpreq also pass profile_kind (aws or cloudflare).
+Through toolbox: operation=call, tool=profile_search, arguments={"kind":"mysql","query":"reporting"}.
+For registration, unlock, and revision history see tools/credential_vault.
+
+## credential_vault
+Set up and unlock encrypted connection profiles in a local terminal.
+Run agent-tool vault init, then agent-tool vault put KIND NAME --help for connection flags. Values are entered without echo.
+Run agent-tool vault unlock in a separate terminal before connecting. Ctrl+C locks it for new operations.
+Use vault list and vault history KIND NAME to read revisions. Pass --revision N on edits, replacement, and deletion.
+SQLite lives at agent-tool/profiles.sqlite under local app data (Windows) or the user config directory (other systems).
+For an alternate absolute path set AGENT_TOOL_VAULT_FILE for both AgentTool and the unlock terminal.
+Keep aliases, descriptions, and tags free of credentials. Old connections.json files and imported key files still exist on disk.
 
 ## ssh_key
 Convert a local SSH private-key file between PPK, PEM, PKCS#8 and OpenSSH.
@@ -593,6 +601,7 @@ Parameters: url, output_path, headers, overwrite, timeout_sec (default 60, max 6
 
 ## httpreq
 Execute HTTP requests with any method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS).
+Vault profiles use connection_profile and profile_kind. Cloudflare uses api.cloudflare.com/client/v4/. AWS uses the profile's fixed HTTPS origin and SigV4. Vault requests do not follow redirects or accept a proxy override.
 ECH and DoH enabled by default. Cloud metadata SSRF protection. HTTP and SOCKS5 proxy support.
 DLP: POST/PUT/PATCH bodies are scanned for sensitive data (PEM keys, AWS keys, tokens, .env dumps) and blocked before transmission.
 Response body is truncated at max_response_kb. Binary responses show Content-Type and size only.
@@ -684,6 +693,7 @@ Parameters: operation, host, record_type, use_doh, doh_endpoint, port, timeout_s
 
 ## mysql
 Execute SQL queries on a MySQL/MariaDB server.
+With connection_profile, omit host, port, user, password, database, and tls.
 SELECT/SHOW/DESCRIBE/EXPLAIN queries return results as formatted table.
 Other queries (INSERT/UPDATE/DELETE) return affected rows and last insert ID.
 Connection is opened and closed per call (no session pooling).

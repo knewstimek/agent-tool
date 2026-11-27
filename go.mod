@@ -4,6 +4,8 @@ go 1.25.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Microsoft/go-winio v0.6.2
+	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/go-dap v0.12.0
 	github.com/google/jsonschema-go v0.4.2
@@ -21,6 +23,7 @@ require (
 	golang.org/x/crypto v0.50.0
 	golang.org/x/net v0.53.0
 	golang.org/x/sys v0.43.0
+	golang.org/x/term v0.42.0
 	golang.org/x/text v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.48.0

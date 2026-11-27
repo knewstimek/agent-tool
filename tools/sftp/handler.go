@@ -21,6 +21,7 @@ type SFTPInput struct {
 	localAliases  map[string]string
 	remoteAliases map[string]string
 	session       *mcp.ServerSession
+	resolved      *ssh.SSHInput
 	// SSH connection parameters (same as ssh tool, minus Command/Disconnect/TimeoutSec)
 	Host         string      `json:"host,omitempty" jsonschema:"SSH server hostname or IP address (IPv4 or IPv6). Required unless connection_profile or connection_id is used"`
 	Port         interface{} `json:"port,omitempty" jsonschema:"SSH port number. Default: 22"`
@@ -301,6 +302,9 @@ Recursive delete is limited to 10,000 items for safety.`,
 
 // toSSHInput converts SFTP connection parameters to ssh.SSHInput for pool reuse.
 func toSSHInput(input SFTPInput) ssh.SSHInput {
+	if input.resolved != nil {
+		return *input.resolved
+	}
 	return ssh.WithConnectionSession(ssh.SSHInput{
 		RemoteRoot:        input.RemoteRoot,
 		RemoteShell:       input.RemoteShell,
@@ -324,6 +328,7 @@ func toSSHInput(input SFTPInput) ssh.SSHInput {
 }
 
 func applyResolvedConnection(input *SFTPInput, resolved ssh.SSHInput) {
+	input.resolved = &resolved
 	input.RemoteRoot = resolved.RemoteRoot
 	input.RemoteShell = resolved.RemoteShell
 	input.Host = resolved.Host
