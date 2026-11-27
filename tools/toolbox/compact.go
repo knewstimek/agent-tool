@@ -35,7 +35,7 @@ var compactOperationShapes = map[string]map[string]operationShape{
 			required: []string{"operation", "file_path"},
 		},
 		"instruction_search": {
-			fields:   []string{"operation", "file_path", "mnemonic", "register", "immediate", "displacement", "call_target", "findings", "trace_values", "trace_scope", "max_results"},
+			fields:   []string{"operation", "file_path", "mnemonic", "register", "immediate", "displacement", "call_target", "findings", "trace_values", "trace_scope", "max_results", "result_offset", "max_output_chars", "group_by_function"},
 			required: []string{"operation", "file_path"},
 		},
 		"pe_info": {

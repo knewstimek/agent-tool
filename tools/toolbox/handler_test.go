@@ -189,7 +189,7 @@ func TestCompactDescribeFiltersByTargetOperationAndReusesHandle(t *testing.T) {
 		t.Fatalf("instruction_search describe failed: result=%v err=%v", instructionSearch, err)
 	}
 	instructionText := instructionSearch.Content[0].(*mcp.TextContent).Text
-	for _, want := range []string{`"operation"`, `"file_path"`, `"mnemonic"`, `"register"`, `"immediate"`, `"call_target"`, `"findings"`, `"trace_values"`, `"required":["operation","file_path"]`} {
+	for _, want := range []string{`"operation"`, `"file_path"`, `"mnemonic"`, `"register"`, `"immediate"`, `"call_target"`, `"findings"`, `"trace_values"`, `"result_offset"`, `"max_output_chars"`, `"group_by_function"`, `"required":["operation","file_path"]`} {
 		if !strings.Contains(instructionText, want) {
 			t.Fatalf("instruction_search compact schema omitted %s: %s", want, instructionText)
 		}

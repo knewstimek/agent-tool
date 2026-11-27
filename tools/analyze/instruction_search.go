@@ -23,10 +23,9 @@ import (
 )
 
 const (
-	defaultInstructionSearchResults = 200
-	maxInstructionSearchResults     = 1000
-	instructionSearchBudget         = 40_000_000
-	maxAbstractConstants            = 8
+	maxInstructionSearchResults = 1000
+	instructionSearchBudget     = 40_000_000
+	maxAbstractConstants        = 8
 )
 
 type instructionSearchSpec struct {
@@ -44,6 +43,7 @@ type instructionSearchSpec struct {
 	// matches by function (xref field over a one-byte displacement) can get
 	// hundreds of thousands of them.
 	rvaOnly bool
+	matches *rvaBits
 }
 
 type instructionHit struct {
@@ -60,6 +60,9 @@ type valueTraceHit struct {
 }
 
 func opInstructionSearch(input AnalyzeInput) (string, error) {
+	if input.MaxOutputChars > 0 && input.MaxOutputChars < 256 {
+		return "", fmt.Errorf("instruction_search max_output_chars must be at least 256")
+	}
 	spec, err := parseInstructionSearchSpec(input)
 	if err != nil {
 		return "", err
@@ -74,25 +77,19 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 		return "", fmt.Errorf("instruction_search currently supports x86/x64 binaries (got %s)", bin.arch)
 	}
 
-	maxResults := input.MaxResults
-	if maxResults <= 0 {
-		maxResults = defaultInstructionSearchResults
-	}
-	if maxResults > maxInstructionSearchResults {
-		maxResults = maxInstructionSearchResults
-	}
-
 	traceValues := spec.hasImmediate
 	if input.TraceValues != nil {
 		traceValues = *input.TraceValues
 	}
 
 	reachable, interiors, budgetComplete := sb0.reachable, sb0.interiors, sb0.complete
-	hits, totalMatches, seeds := scanInstructions(bin, spec, reachable, interiors, maxResults)
 	showDirect := spec.findings != "call"
-	if !showDirect {
-		hits, totalMatches = nil, 0
+	sections := append([]cgSection(nil), bin.execSections...)
+	sort.Slice(sections, func(i, j int) bool { return sections[i].rva < sections[j].rva })
+	if showDirect {
+		spec.matches = newRVABits(sections)
 	}
+	_, _, seeds := scanInstructions(bin, spec, reachable, interiors, 0)
 	var traces []valueTraceHit
 	if traceValues {
 		only := seeds
@@ -100,75 +97,11 @@ func opInstructionSearch(input AnalyzeInput) (string, error) {
 			only = nil
 		}
 		var traceComplete bool
-		traces, traceComplete = flowsFor(bin, spec, true, maxResults, only, reachable, interiors)
+		traces, traceComplete = flowsFor(bin, spec, true, 0, only, reachable, interiors)
 		budgetComplete = budgetComplete && traceComplete
 	}
 
-	// Name the function of each hit (PDB, export and symbol names, else sub_).
-	loc := &xrefLocator{imageBase: bin.imageBase, funcs: bin.funcTable, symbols: bin.symbols}
-	where := func(rva uint32) string {
-		if name, _ := loc.function(bin.imageBase + uint64(rva)); name != "" {
-			return "  ; in " + name
-		}
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Instruction search: " + formatInstructionFilter(spec) + "\n")
-
-	if showDirect && len(hits) == 0 {
-		sb.WriteString("Direct instruction matches: none\n")
-	} else if showDirect {
-		sb.WriteString(fmt.Sprintf("Direct instruction matches (%d shown", len(hits)))
-		if totalMatches > len(hits) {
-			sb.WriteString(fmt.Sprintf(", %d total", totalMatches))
-		}
-		sb.WriteString("):\n")
-		for _, hit := range hits {
-			va := bin.imageBase + uint64(hit.rva)
-			sb.WriteString(fmt.Sprintf("  [%s] 0x%x: %s%s\n", hit.confidence, va, hit.text, where(hit.rva)))
-		}
-		for _, hit := range hits {
-			if hit.confidence == "candidate" {
-				sb.WriteString("  candidate = exhaustive executable-byte recovery; may be indirect code or embedded data\n")
-				break
-			}
-		}
-	}
-
-	if traceValues {
-		if showDirect {
-			sb.WriteString("\n")
-		}
-		if strings.EqualFold(strings.TrimSpace(input.TraceScope), "all") {
-			sb.WriteString("Value-flow findings (every function traced):\n")
-		} else {
-			sb.WriteString(fmt.Sprintf("Value-flow findings (traced in the %d function(s) holding 0x%x; trace_scope=all also finds values computed from other constants):\n", len(seeds), spec.immediate))
-		}
-		if len(traces) == 0 {
-			sb.WriteString(fmt.Sprintf("  none for 0x%x\n", spec.immediate))
-		} else {
-			for _, hit := range traces {
-				confidence := "confirmed"
-				if hit.possible {
-					confidence = "possible"
-				}
-				sb.WriteString(fmt.Sprintf("  [%s] 0x%x: %s%s\n", confidence,
-					bin.imageBase+uint64(hit.rva), hit.text, where(hit.rva)))
-			}
-		}
-	}
-	if !budgetComplete {
-		sb.WriteString("\n** partial analysis: CFG confidence/value traces may be incomplete (decode budget exhausted)")
-		if showDirect {
-			sb.WriteString("; direct exhaustive matches remain complete up to max_results")
-		}
-		sb.WriteString(" **\n")
-	}
-	if totalMatches > maxResults {
-		sb.WriteString(fmt.Sprintf("\n(direct results truncated at max_results=%d; %d matches found)\n", maxResults, totalMatches))
-	}
-	return sb.String(), nil
+	return renderInstructionSearch(input, spec, bin, reachable, traces, traceValues, budgetComplete)
 }
 
 func parseInstructionSearchSpec(input AnalyzeInput) (instructionSearchSpec, error) {
@@ -345,6 +278,13 @@ func scanInstructions(bin *cgBinary, spec instructionSearchSpec, reachable, inte
 						continue
 					}
 					out.total++
+					if spec.matches != nil {
+						spec.matches.set(rva)
+						continue
+					}
+					if maxResults == 0 {
+						continue
+					}
 					hit := instructionHit{rva: rva, confidence: "candidate"}
 					if !spec.rvaOnly {
 						hit.text = x86asm.IntelSyntax(inst, bin.imageBase+uint64(rva), nil)
@@ -744,7 +684,7 @@ func flowsFor(bin *cgBinary, spec instructionSearchSpec, trace bool, maxResults 
 		}
 		return traces[i].rva < traces[j].rva
 	})
-	if len(traces) > maxResults {
+	if maxResults > 0 && len(traces) > maxResults {
 		traces = traces[:maxResults]
 	}
 	return traces, budget.Load() > 0
@@ -782,7 +722,7 @@ func (c *traceCollector) add(rva uint32, text string, possible bool, kind string
 		// Several converged blocks may reach it with different values.
 		c.traces[index].possible = c.traces[index].possible || possible
 	case exists:
-	case len(c.traces) < c.max:
+	case c.max == 0 || len(c.traces) < c.max:
 		c.index[key] = len(c.traces)
 		c.traces = append(c.traces, valueTraceHit{rva: rva, text: text, possible: possible || !c.finalPass, kind: kind})
 		c.settled[key] = c.finalPass
