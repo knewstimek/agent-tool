@@ -430,10 +430,14 @@ and `connection_id` handles also belong to the calling MCP session. Other client
 cannot reuse or disconnect them. Pool capacity never evicts another client's
 connection; creation fails when no owned entry is available for eviction.
 
-### Local SSH/SFTP connection profiles
+### Encrypted connection profiles
+
+Use the credential vault for SSH/SFTP, MySQL, Cloudflare, and AWS, and find registered profiles with `profile_search`. See `agent_tool_help(topic="tools/credential_vault")` for setup and revisions.
+
+### Legacy local SSH/SFTP connection profiles
 
 SSH and SFTP accept either `connection_profile` or a session-local `connection_id`,
-so host, user, key, and jump-host fields do not need to be repeated. Profiles are
+so host, user, key, and jump-host fields do not need to be repeated. Legacy profiles are
 read from the OS user config directory at `agent-tool/connections.json`; override the
 location with `AGENT_TOOL_CONNECTION_PROFILE_FILE`. Keep this file local and explicitly
 ignored if it is placed inside a workspace.

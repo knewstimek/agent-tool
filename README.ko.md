@@ -419,10 +419,14 @@ SSH 포트·인증 기본값의 동등한 표현은 같은 대상 범위를 사�
 SFTP 비동기 전송의 조회·취소는 시작한 MCP 세션에서만 가능합니다. 실제 경로를 보관하고
 조회 시 현재 별칭으로 표시하므로, 별칭이 삭제되거나 바뀌었으면 원격 절대경로를 표시합니다.
 
-### 로컬 SSH/SFTP connection profile
+### 암호화 접속 프로필
+
+SSH·SFTP, MySQL, Cloudflare, AWS 자격 증명은 보관소에 등록하고 `profile_search`로 찾을 수 있습니다. 설정과 리비전 관리 방법은 `agent_tool_help(topic="tools/credential_vault")`를 참고하세요.
+
+### 기존 로컬 SSH/SFTP 접속 프로필
 
 SSH와 SFTP는 `connection_profile` 또는 세션 로컬 `connection_id`를 받아 host, user,
-key, jump host 필드 반복을 없앨 수 있습니다. 프로필은 OS 사용자 설정 디렉터리의
+key, jump host 필드 반복을 없앨 수 있습니다. 기존 프로필은 OS 사용자 설정 디렉터리의
 `agent-tool/connections.json`에서 읽으며 `AGENT_TOOL_CONNECTION_PROFILE_FILE`로 위치를
 바꿀 수 있습니다. workspace 안에 둘 경우 반드시 명시적으로 ignore하고 로컬에만 보관하세요.
 
