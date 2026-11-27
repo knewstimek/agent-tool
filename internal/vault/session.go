@@ -44,8 +44,20 @@ func load(ctx context.Context, kind, name string) ([]byte, error) {
 		return nil, err
 	}
 	defer store.Close()
-	if _, _, _, err = store.ciphertext(ctx, kind, name); err != nil {
+	revision, metadata, ciphertext, err := store.ciphertext(ctx, kind, name)
+	if err != nil {
 		return nil, err
+	}
+	key, err := store.automaticKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if key != nil {
+		payload, err := key.Open(nil, nil, ciphertext, aad(kind, name, revision, metadata))
+		if err != nil {
+			return nil, fmt.Errorf("vault profile authentication failed")
+		}
+		return payload, nil
 	}
 	path := store.Path
 	body, err := json.Marshal(lookup{kind, name})

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 )
 
@@ -43,35 +42,26 @@ func ImportSSH(ctx context.Context, records []SSHImportRecord) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "Ready to copy %d SSH profiles. Original files are kept.\n", len(items))
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		password, err := readHidden("New vault passphrase")
-		if err != nil {
+	store, err := open(path, "rw")
+	if errors.Is(err, ErrUninitialized) {
+		if err := initAutomaticStore(ctx, path); err != nil {
 			return err
 		}
-		defer clear(password)
-		if len(password) < 14 {
-			return fmt.Errorf("use a vault passphrase of at least 14 bytes")
-		}
-		confirm, err := readHidden("Confirm vault passphrase")
-		if err != nil {
-			return err
-		}
-		defer clear(confirm)
-		if !bytes.Equal(password, confirm) {
-			return fmt.Errorf("passphrases do not match")
-		}
-		if err := initStore(ctx, path, password); err != nil {
-			return err
-		}
-		return finishSSHImport(ctx, path, password, items)
+		store, err = open(path, "rw")
 	}
-	password, err := readHidden("Vault passphrase")
 	if err != nil {
 		return err
 	}
-	defer clear(password)
-	return finishSSHImport(ctx, path, password, items)
+	defer store.Close()
+	key, err := keyForWrite(ctx, store)
+	if err != nil {
+		return err
+	}
+	added, unchanged, err := store.importSSH(ctx, key, items)
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]int{"imported": added, "unchanged": unchanged, "verified": added + unchanged})
 }
 
 func prepareSSHImport(record SSHImportRecord) (preparedImport, error) {
@@ -123,23 +113,6 @@ func prepareSSHImport(record SSHImportRecord) (preparedImport, error) {
 		return preparedImport{}, err
 	}
 	return preparedImport{profile: p, metadata: metadata, credential: payload}, nil
-}
-
-func finishSSHImport(ctx context.Context, path string, password []byte, items []preparedImport) error {
-	store, err := open(path, "rw")
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-	key, err := store.unlock(ctx, password)
-	if err != nil {
-		return err
-	}
-	added, unchanged, err := store.importSSH(ctx, key, items)
-	if err != nil {
-		return err
-	}
-	return printJSON(map[string]int{"imported": added, "unchanged": unchanged, "verified": added + unchanged})
 }
 
 func (s *Store) importSSH(ctx context.Context, key cipher.AEAD, items []preparedImport) (added, unchanged int, _ error) {

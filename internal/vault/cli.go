@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/cipher"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,8 +16,8 @@ import (
 	"golang.org/x/term"
 )
 
-const cliUsage = `agent-tool vault init
-agent-tool vault unlock [--duration 8h]
+const cliUsage = `agent-tool vault init [--passphrase]
+agent-tool vault unlock [--duration 8h]  (only for passphrase vaults)
 agent-tool vault list [ssh|mysql|cloudflare|aws]
 agent-tool vault import-ssh [--suffix=-vault]
 agent-tool vault put KIND NAME [--revision N] [--description TEXT] [--alias NAME] [--tag TAG] [connection flags]
@@ -25,6 +26,7 @@ agent-tool vault history KIND NAME
 agent-tool vault delete KIND NAME --revision N
 
 Credentials are prompted without echo. To import credential JSON, use --input FILE or --stdin.
+By default the vault uses a local key and opens automatically.
 Run "agent-tool vault put KIND NAME --help" for connection flags. Only use non-secret text in metadata.
 Replacing credentials keeps the profile metadata when no metadata flags are supplied.
 The metadata command replaces description, aliases, and tags, leaving credentials intact.`
@@ -40,8 +42,15 @@ func RunCLI(ctx context.Context, args []string) error {
 	}
 	switch command := args[0]; command {
 	case "init":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: agent-tool vault init")
+		if len(args) == 1 {
+			if err := initAutomaticStore(ctx, path); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stdout, "Vault initialized.")
+			return nil
+		}
+		if len(args) != 2 || args[1] != "--passphrase" {
+			return fmt.Errorf("usage: agent-tool vault init [--passphrase]")
 		}
 		if _, err := os.Stat(path); err == nil {
 			return fmt.Errorf("vault already exists")
@@ -81,6 +90,14 @@ func RunCLI(ctx context.Context, args []string) error {
 			return err
 		}
 		defer store.Close()
+		automatic, err := store.automaticKey(ctx)
+		if err != nil {
+			return err
+		}
+		if automatic != nil {
+			fmt.Fprintln(os.Stdout, "This vault opens automatically.")
+			return nil
+		}
 		key, err := promptUnlock(ctx, store)
 		if err != nil {
 			return err
@@ -193,11 +210,17 @@ func changeProfile(ctx context.Context, path, operation string, p Profile, args 
 		return fmt.Errorf("choose either --input or --stdin")
 	}
 	store, err := open(path, "rw")
+	if errors.Is(err, ErrUninitialized) && operation == "put" {
+		if err := initAutomaticStore(ctx, path); err != nil {
+			return err
+		}
+		store, err = open(path, "rw")
+	}
 	if err != nil {
 		return err
 	}
 	defer store.Close()
-	key, err := promptUnlock(ctx, store)
+	key, err := keyForWrite(ctx, store)
 	if err != nil {
 		return err
 	}
@@ -325,6 +348,14 @@ func promptUnlock(ctx context.Context, store *Store) (cipher.AEAD, error) {
 	}
 	defer clear(password)
 	return store.unlock(ctx, password)
+}
+
+func keyForWrite(ctx context.Context, store *Store) (cipher.AEAD, error) {
+	key, err := store.automaticKey(ctx)
+	if err != nil || key != nil {
+		return key, err
+	}
+	return promptUnlock(ctx, store)
 }
 
 func flagError(err error) error {
