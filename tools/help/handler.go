@@ -546,6 +546,7 @@ Set up and unlock encrypted connection profiles in a local terminal.
 Run agent-tool vault init, then agent-tool vault put KIND NAME --help for connection flags. Values are entered without echo.
 Run agent-tool vault unlock in a separate terminal before connecting. Ctrl+C locks it for new operations.
 Use vault list and vault history KIND NAME to read revisions. Pass --revision N on edits, replacement, and deletion.
+Run agent-tool vault import-ssh to copy legacy profiles under new names ending in -vault while keeping the original JSON and keys.
 SQLite lives at agent-tool/profiles.sqlite under local app data (Windows) or the user config directory (other systems).
 For an alternate absolute path set AGENT_TOOL_VAULT_FILE for both AgentTool and the unlock terminal.
 Keep aliases, descriptions, and tags free of credentials. Old connections.json files and imported key files still exist on disk.

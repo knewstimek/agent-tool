@@ -63,7 +63,13 @@ func main() {
 	if len(args) > 0 && args[0] == "vault" {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
-		if err := vault.RunCLI(ctx, args[1:]); err != nil {
+		var err error
+		if len(args) > 1 && args[1] == "import-ssh" {
+			err = ssh.ImportLegacyProfiles(ctx, args[2:])
+		} else {
+			err = vault.RunCLI(ctx, args[1:])
+		}
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
