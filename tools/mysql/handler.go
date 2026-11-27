@@ -5,11 +5,14 @@ import (
 	"crypto/tls"
 	"database/sql"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"agent-tool/common"
+	"agent-tool/internal/vault"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -31,18 +34,19 @@ const (
 )
 
 type MySQLInput struct {
-	Host           string      `json:"host" jsonschema:"MySQL server hostname or IP address,required"`
-	Port           interface{} `json:"port,omitempty" jsonschema:"MySQL port number. Default: 3306"`
-	User           string      `json:"user" jsonschema:"MySQL username,required"`
-	Password       string      `json:"password,omitempty" jsonschema:"Password for authentication"`
-	Database       string      `json:"database,omitempty" jsonschema:"Database name to connect to"`
-	Query          string      `json:"query" jsonschema:"SQL query to execute,required"`
-	TimeoutSec     interface{} `json:"timeout_sec,omitempty" jsonschema:"Query timeout in seconds. Default: 30, Max: 120"`
-	TLS            interface{} `json:"tls,omitempty" jsonschema:"Use verified TLS encryption: true or false. Default: false"`
-	MaxRows        int         `json:"max_rows,omitempty" jsonschema:"Maximum rows returned by SELECT-like queries. Default: 1000, Max: 10000"`
-	MaxColumns     int         `json:"max_columns,omitempty" jsonschema:"Maximum columns displayed. Default: 100, Max: 1000"`
-	MaxValueChars  int         `json:"max_value_chars,omitempty" jsonschema:"Maximum characters displayed per cell. Default: 200, Max: 10000"`
-	MaxOutputChars int         `json:"max_output_chars,omitempty" jsonschema:"Maximum total returned text characters. Default: 32768, Max: 131072"`
+	Host              string      `json:"host,omitempty" jsonschema:"MySQL server hostname or IP address. Required without connection_profile."`
+	Port              interface{} `json:"port,omitempty" jsonschema:"MySQL port number. Default: 3306"`
+	User              string      `json:"user,omitempty" jsonschema:"MySQL username. Required without connection_profile."`
+	Password          string      `json:"password,omitempty" jsonschema:"Password for authentication"`
+	Database          string      `json:"database,omitempty" jsonschema:"Database name to connect to"`
+	Query             string      `json:"query" jsonschema:"SQL query to execute,required"`
+	TimeoutSec        interface{} `json:"timeout_sec,omitempty" jsonschema:"Query timeout in seconds. Default: 30, Max: 120"`
+	TLS               interface{} `json:"tls,omitempty" jsonschema:"Use verified TLS encryption: true or false. Default: false"`
+	MaxRows           int         `json:"max_rows,omitempty" jsonschema:"Maximum rows returned by SELECT-like queries. Default: 1000, Max: 10000"`
+	MaxColumns        int         `json:"max_columns,omitempty" jsonschema:"Maximum columns displayed. Default: 100, Max: 1000"`
+	MaxValueChars     int         `json:"max_value_chars,omitempty" jsonschema:"Maximum characters displayed per cell. Default: 200, Max: 10000"`
+	MaxOutputChars    int         `json:"max_output_chars,omitempty" jsonschema:"Maximum total returned text characters. Default: 32768, Max: 131072"`
+	ConnectionProfile string      `json:"connection_profile,omitempty" jsonschema:"Encrypted MySQL profile from profile_search(kind=mysql). Omit host, port, user, password, database, and tls."`
 }
 
 type MySQLOutput struct {
@@ -50,6 +54,18 @@ type MySQLOutput struct {
 }
 
 func Handle(ctx context.Context, req *mcp.CallToolRequest, input MySQLInput) (*mcp.CallToolResult, MySQLOutput, error) {
+	if name := strings.TrimSpace(input.ConnectionProfile); name != "" {
+		if input.Host != "" || input.Port != nil || input.User != "" || input.Password != "" || input.Database != "" || input.TLS != nil {
+			return errorResult("vault MySQL profiles cannot be combined with connection or TLS overrides")
+		}
+		credential, err := vault.Resolve(ctx, vault.MySQL, name)
+		if err != nil {
+			return errorResult(err.Error())
+		}
+		input.Host, input.Port, input.User = credential.Host, credential.Port, credential.User
+		input.Password, input.Database = credential.Password, credential.Database
+		input.TLS = credential.TLS == nil || *credential.TLS
+	}
 	// Validate required fields
 	input.Host = strings.TrimSpace(input.Host)
 	if input.Host == "" {
@@ -133,7 +149,7 @@ func Handle(ctx context.Context, req *mcp.CallToolRequest, input MySQLInput) (*m
 	cfg.User = input.User
 	cfg.Passwd = input.Password
 	cfg.Net = "tcp"
-	cfg.Addr = fmt.Sprintf("%s:%d", connectAddr, port)
+	cfg.Addr = net.JoinHostPort(connectAddr, strconv.Itoa(port))
 	cfg.DBName = input.Database
 	cfg.Timeout = timeout
 	cfg.ReadTimeout = timeout

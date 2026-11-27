@@ -64,8 +64,10 @@ func connectTestServer(t *testing.T, server *mcp.Server) *mcp.ClientSession {
 }
 
 func TestProfileSearchThroughCoreLiteToolbox(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "connections.json")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "connections.json")
 	t.Setenv("AGENT_TOOL_CONNECTION_PROFILE_FILE", path)
+	t.Setenv("AGENT_TOOL_VAULT_FILE", filepath.Join(dir, "profiles.sqlite"))
 	data := `{"profiles":{
 		" uncallable":{"host":"example.invalid"},
 		"legacy":{"host":"example.invalid","user":"example","tags":false},
@@ -135,6 +137,8 @@ func TestProfileSearchThroughCoreLiteToolbox(t *testing.T) {
 	}
 	check(nil, "Archive,copy,legacy,other", 4, 0)
 	check(map[string]any{"query": "private"}, "", 0, 0)
+	check(map[string]any{"kind": "mysql"}, "", 0, 0)
+	check(map[string]any{"kind": "sftp", "query": "백업"}, "Archive", 1, 0)
 	if result := call("call", map[string]any{"offset": -1}); !result.IsError {
 		t.Fatal("negative offset succeeded")
 	}

@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
 
 	"agent-tool/common"
 	"agent-tool/install"
+	"agent-tool/internal/vault"
 	"agent-tool/tools/analyze"
 	bashtool "agent-tool/tools/bash"
 	"agent-tool/tools/checksum"
@@ -58,6 +60,15 @@ const Version = "v1.1.3"
 
 func main() {
 	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "vault" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		if err := vault.RunCLI(ctx, args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Decompile worker: the server re-executes itself with this hidden
 	// subcommand (see analyze.DecompileWorkerArg). The parent watch is the

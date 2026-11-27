@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"agent-tool/common"
+	"agent-tool/internal/vault"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -44,6 +46,9 @@ type ConnectionProfile struct {
 	JumpPassphrase string      `json:"jump_passphrase,omitempty"`
 	Trusted        bool        `json:"trusted,omitempty"`
 	searchMetadata profileSearchMetadata
+	vaultName      string
+	privateKey     string
+	jumpPrivateKey string
 }
 
 // UnmarshalJSON treats local connection profiles as trusted unless they
@@ -83,7 +88,7 @@ var connectionHandles = struct {
 // an opaque handle in the nil-session namespace. Explicit request fields override
 // local profile defaults. The returned handle can be reused by SSH and SFTP.
 func ResolveConnection(input *SSHInput) (string, error) {
-	return resolveConnection(nil, input, nil)
+	return resolveConnection(context.Background(), nil, input, nil)
 }
 
 // Only the hash is retained as a private scope key; credentials are never emitted.
@@ -95,28 +100,31 @@ func ConnectionAliasScope(input SSHInput) string {
 	if err := validateInput(&canonical); err == nil {
 		profile = profileFromInput(canonical)
 		profile.Port = canonical.PortInt
-		profile.UseAgent = common.FlexBool(canonical.UseAgent) || canonical.KeyFile == "" && canonical.Password == ""
+		profile.UseAgent = common.FlexBool(canonical.UseAgent) || canonical.KeyFile == "" && canonical.privateKey == "" && canonical.Password == ""
 		if canonical.JumpHost != "" {
 			profile.JumpPort = canonical.JumpPortInt
 		}
 	}
 	profile.RemoteRoot, profile.RemoteShell, profile.Trusted = "", "", false
 	data, _ := json.Marshal(profile)
+	if profile.vaultName != "" {
+		data = fmt.Appendf(data, "\x00%q\x00%q\x00%q", profile.vaultName, profile.privateKey, profile.jumpPrivateKey)
+	}
 	return fmt.Sprintf("remote:%x", sha256.Sum256(data))
 }
 
 // Management resolves identity without depending on a possibly unregistered
 // remote_root alias, and does not allocate connection handles or connect.
 func ResolveDirectoryAliasScope(profileName, handleID string) (string, error) {
-	return resolveDirectoryAliasScope(nil, profileName, handleID)
+	return resolveDirectoryAliasScope(context.Background(), nil, profileName, handleID)
 }
 
 func ResolveDirectoryAliasScopeForRequest(ctx context.Context, req *mcp.CallToolRequest, profileName, handleID string) (string, error) {
 	ctx = common.WithToolRequest(ctx, req)
-	return resolveDirectoryAliasScope(common.ToolSession(ctx), profileName, handleID)
+	return resolveDirectoryAliasScope(ctx, common.ToolSession(ctx), profileName, handleID)
 }
 
-func resolveDirectoryAliasScope(owner *mcp.ServerSession, profileName, handleID string) (string, error) {
+func resolveDirectoryAliasScope(ctx context.Context, owner *mcp.ServerSession, profileName, handleID string) (string, error) {
 	profileName, handleID = strings.TrimSpace(profileName), strings.TrimSpace(handleID)
 	if profileName != "" && handleID != "" {
 		return "", fmt.Errorf("use either connection_profile or connection_id, not both")
@@ -124,9 +132,9 @@ func resolveDirectoryAliasScope(owner *mcp.ServerSession, profileName, handleID 
 	var profile ConnectionProfile
 	var err error
 	if handleID != "" {
-		profile, err = loadConnectionHandle(owner, handleID)
+		profile, err = loadConnectionHandle(ctx, owner, handleID)
 	} else if profileName != "" {
-		profile, err = loadLocalConnectionProfile(profileName)
+		profile, err = loadConnectionProfile(ctx, profileName)
 	} else {
 		return "", fmt.Errorf("remote connection reference required")
 	}
@@ -143,7 +151,7 @@ func ResolveConnectionForRequest(ctx context.Context, req *mcp.CallToolRequest, 
 	if input != nil {
 		input.requestSession = common.ToolSession(ctx)
 	}
-	return resolveConnection(common.ToolSession(ctx), input, func(root string) (string, error) {
+	return resolveConnection(ctx, common.ToolSession(ctx), input, func(root string) (string, error) {
 		if !strings.HasPrefix(root, "@") {
 			return root, nil
 		}
@@ -158,7 +166,7 @@ func WithConnectionSession(input SSHInput, owner *mcp.ServerSession) SSHInput {
 	return input
 }
 
-func resolveConnection(owner *mcp.ServerSession, input *SSHInput, expandRoot func(string) (string, error)) (string, error) {
+func resolveConnection(ctx context.Context, owner *mcp.ServerSession, input *SSHInput, expandRoot func(string) (string, error)) (string, error) {
 	if input == nil {
 		return "", fmt.Errorf("connection input is required")
 	}
@@ -175,15 +183,18 @@ func resolveConnection(owner *mcp.ServerSession, input *SSHInput, expandRoot fun
 	var base ConnectionProfile
 	var err error
 	if handleID != "" {
-		base, err = loadConnectionHandle(owner, handleID)
+		base, err = loadConnectionHandle(ctx, owner, handleID)
 		if err != nil {
 			return "", err
 		}
 	} else if profileName != "" {
-		base, err = loadLocalConnectionProfile(profileName)
+		base, err = loadConnectionProfile(ctx, profileName)
 		if err != nil {
 			return "", err
 		}
+	}
+	if base.vaultName != "" && hasOverrides {
+		return "", fmt.Errorf("vault SSH profiles cannot be combined with host, authentication, or jump overrides")
 	}
 	if profileName != "" && hasOverrides {
 		// Redirecting a trusted profile must not inherit warning suppression.
@@ -211,6 +222,28 @@ func resolveConnection(owner *mcp.ServerSession, input *SSHInput, expandRoot fun
 	}
 	input.ResolvedConnectionID = handleID
 	return handleID, nil
+}
+
+func loadConnectionProfile(ctx context.Context, name string) (ConnectionProfile, error) {
+	profile, err := loadVaultConnectionProfile(ctx, name)
+	if errors.Is(err, vault.ErrNotFound) || errors.Is(err, vault.ErrUninitialized) {
+		return loadLocalConnectionProfile(name)
+	}
+	return profile, err
+}
+
+func loadVaultConnectionProfile(ctx context.Context, name string) (ConnectionProfile, error) {
+	c, err := vault.Resolve(ctx, vault.SSH, name)
+	if err != nil {
+		return ConnectionProfile{}, err
+	}
+	return ConnectionProfile{
+		Host: c.Host, Port: c.Port, User: c.User, Password: c.Password,
+		Passphrase: c.Passphrase, UseAgent: c.UseAgent, HostKeyCheck: c.HostKeyCheck,
+		RemoteRoot: c.RemoteRoot, RemoteShell: c.RemoteShell,
+		JumpHost: c.JumpHost, JumpPort: c.JumpPort, JumpUser: c.JumpUser, JumpPassword: c.JumpPassword, JumpPassphrase: c.JumpPassphrase,
+		vaultName: name, privateKey: c.PrivateKey, jumpPrivateKey: c.JumpPrivateKey,
+	}, nil
 }
 
 func hasExplicitConnectionFields(input SSHInput) bool {
@@ -258,6 +291,9 @@ func readLocalConnectionProfiles() (map[string]ConnectionProfile, string, error)
 
 func rememberConnection(owner *mcp.ServerSession, input SSHInput) (string, error) {
 	profile := profileFromInput(input)
+	if profile.vaultName != "" {
+		profile = ConnectionProfile{vaultName: profile.vaultName, RemoteRoot: profile.RemoteRoot, RemoteShell: profile.RemoteShell}
+	}
 	now := time.Now()
 	connectionHandles.Lock()
 	defer connectionHandles.Unlock()
@@ -289,18 +325,27 @@ func rememberConnection(owner *mcp.ServerSession, input SSHInput) (string, error
 	return id, nil
 }
 
-func loadConnectionHandle(owner *mcp.ServerSession, id string) (ConnectionProfile, error) {
+func loadConnectionHandle(ctx context.Context, owner *mcp.ServerSession, id string) (ConnectionProfile, error) {
 	connectionHandles.Lock()
-	defer connectionHandles.Unlock()
 	now := time.Now()
 	pruneConnectionHandlesLocked(now)
 	entry, ok := connectionHandles.items[id]
 	if !ok || entry.owner != owner {
+		connectionHandles.Unlock()
 		return ConnectionProfile{}, fmt.Errorf("connection_id %q not found or expired", id)
 	}
 	entry.lastUsed = now
 	connectionHandles.items[id] = entry
-	return entry.profile, nil
+	connectionHandles.Unlock()
+	if entry.profile.vaultName == "" {
+		return entry.profile, nil
+	}
+	profile, err := loadVaultConnectionProfile(ctx, entry.profile.vaultName)
+	if err != nil {
+		return ConnectionProfile{}, err
+	}
+	profile.RemoteRoot, profile.RemoteShell = entry.profile.RemoteRoot, entry.profile.RemoteShell
+	return profile, nil
 }
 
 func pruneConnectionHandlesLocked(now time.Time) {
@@ -319,11 +364,13 @@ func profileFromInput(input SSHInput) ConnectionProfile {
 		HostKeyCheck: input.HostKeyCheck, JumpHost: input.JumpHost, JumpPort: input.JumpPort,
 		JumpUser: input.JumpUser, JumpPassword: input.JumpPassword,
 		JumpKeyFile: input.JumpKeyFile, JumpPassphrase: input.JumpPassphrase,
-		Trusted: input.TrustedProfile,
+		Trusted:   input.TrustedProfile,
+		vaultName: input.vaultName, privateKey: input.privateKey, jumpPrivateKey: input.jumpPrivateKey,
 	}
 }
 
 func applyProfileDefaults(input *SSHInput, profile ConnectionProfile) {
+	input.vaultName, input.privateKey, input.jumpPrivateKey = profile.vaultName, profile.privateKey, profile.jumpPrivateKey
 	if input.RemoteRoot == "" {
 		input.RemoteRoot = profile.RemoteRoot
 	}
