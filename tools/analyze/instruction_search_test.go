@@ -1,11 +1,61 @@
 package analyze
 
 import (
+	"bytes"
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"golang.org/x/arch/x86/x86asm"
 )
+
+func TestInstructionSearchPagesAndGroupsAllMatches(t *testing.T) {
+	bin := testSearchBinary(bytes.Repeat([]byte{0x90}, 1205),
+		funcRange{begin: 0x1000, end: 0x12bc}, funcRange{begin: 0x12bc, end: 0x14b0})
+	reached := newRVABits(bin.execSections)
+	for rva := uint32(0x1000); rva < 0x14b0; rva++ {
+		reached.set(rva)
+	}
+	spec := instructionSearchSpec{mnemonic: "NOP", matches: newRVABits(bin.execSections)}
+	scanInstructions(bin, spec, reached, newRVABits(bin.execSections), 0)
+	traces := []valueTraceHit{{rva: 0x1000, text: "synthetic tracing hit", possible: true}}
+	render := func(input AnalyzeInput) string {
+		t.Helper()
+		text, err := renderInstructionSearch(input, spec, bin, reached, traces, true, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return text
+	}
+	first := render(AnalyzeInput{MaxOutputChars: 256})
+	if utf8.RuneCountInString(first) > 256 || !strings.Contains(first, "of 1206 matches") || !strings.Contains(first, "0x140001000:") {
+		t.Fatalf("incorrect default ordering or page budget:\n%s", first)
+	}
+	_, continuation, ok := strings.Cut(first, "result_offset=")
+	var offset int
+	if _, err := fmt.Sscanf(continuation, "%d", &offset); !ok || err != nil || offset <= 0 {
+		t.Fatalf("missing usable continuation:\n%s", first)
+	}
+	next := render(AnalyzeInput{MaxOutputChars: 256, ResultOffset: offset})
+	nextAddress := fmt.Sprintf("0x%x:", bin.imageBase+uint64(0x1000+offset))
+	if strings.Contains(first, nextAddress) || !strings.Contains(next, nextAddress) || strings.Contains(next, "0x140001000:") {
+		t.Fatalf("overlapping or skipped results:\n%s\n%s", first, next)
+	}
+	tail := render(AnalyzeInput{ResultOffset: 1204})
+	if !strings.Contains(tail, "[candidate] 0x1400014b4:") || !strings.Contains(tail, "[trace possible]") || strings.Contains(tail, "Continue with") {
+		t.Fatalf("could not page past the old result limit:\n%s", tail)
+	}
+	grouped := render(AnalyzeInput{GroupByFunction: true})
+	for _, want := range []string{"701 matches (700 direct, 1 trace", "500 matches (500 direct, 0 trace", "outside known functions: 5 matches"} {
+		if !strings.Contains(grouped, want) {
+			t.Fatalf("missing function summary %q:\n%s", want, grouped)
+		}
+	}
+	if strings.Contains(grouped, "[confirmed]") {
+		t.Fatalf("summary still contains instruction rows:\n%s", grouped)
+	}
+}
 
 func testSearchBinary(code []byte, functions ...funcRange) *cgBinary {
 	return &cgBinary{

@@ -281,7 +281,11 @@ Find x86/x64 instructions by mnemonic, register, immediate or memory displacemen
     findings: all (default), call, or producer
     trace_values: default true when immediate is supplied
     trace_scope: seeded (default) or all
-    max_results: direct and trace results (default 200, max 1000)
+    max_output_chars: page budget (default 32768, minimum 256)
+    result_offset: next row index printed by the previous page. Keep the filters and view unchanged.
+    max_results: optional per-page row limit (max 1000)
+    group_by_function: one row per function with its address and direct/trace counts
+  The result reports total matches and rows shown. Partial analysis marks traces that may be incomplete.
 
 ## pe_info
 Parse PE headers (EXE/DLL): sections, imports with IAT slot VAs, exports and an RVA-to-file-offset table.

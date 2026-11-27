@@ -45,21 +45,22 @@ type AnalyzeInput struct {
 	// pe_info / elf_info / macho_info parameters
 	Section        string `json:"section,omitempty" jsonschema:"Filter by section name (e.g. '.text', '.rdata'). Empty = show all"`
 	RVA            string `json:"rva,omitempty" jsonschema:"RVA to convert to file offset (hex string, e.g. '0x36A20'). For pe_info and annotation_set/list; annotations resolve RVA from the PE image base"`
-	ResultOffset   int    `json:"result_offset,omitempty" jsonschema:"Paging offset: row index for annotation_list; import index for pe_info; character offset for disassemble, decompile and type_info (a truncated output names the value that continues it). Default: 0"`
+	ResultOffset   int    `json:"result_offset,omitempty" jsonschema:"Paging offset: row index for annotation_list and instruction_search; import index for pe_info; character offset for disassemble, decompile and type_info. Default: 0"`
 	MaxOutputChars int    `json:"max_output_chars,omitempty" jsonschema:"Maximum returned text characters for paged analysis output. Default: 32768, Max: 131072. Annotation writes require at least 256; large write results return a short success receipt."`
 
 	// pattern_search parameters
 	Pattern string `json:"pattern,omitempty" jsonschema:"Hex byte pattern with ?? wildcards (e.g. '4D 5A ?? ?? 50 45'). For pattern_search"`
 
 	// instruction_search parameters
-	Mnemonic     string `json:"mnemonic,omitempty" jsonschema:"Optional assembly mnemonic filter such as MOV, ADD, or CALL. For instruction_search"`
-	Register     string `json:"register,omitempty" jsonschema:"Optional explicit register operand filter such as R9D, EAX, or RCX. With displacement it also matches the base/index of that [reg+disp] operand, so register=RSP displacement=0xf8 finds [rsp+0xf8] (stack bases are otherwise skipped). For instruction_search"`
-	Immediate    string `json:"immediate,omitempty" jsonschema:"Optional immediate value filter in hex or decimal, e.g. 0x327 or 807. For instruction_search"`
-	Displacement string `json:"displacement,omitempty" jsonschema:"Optional memory displacement filter (hex or decimal): instructions addressing [reg+0x410] style operands, e.g. who reads or writes a struct field at that offset. For instruction_search"`
-	TraceScope   string `json:"trace_scope,omitempty" jsonschema:"Value tracing scope: seeded (default; functions holding the value as an immediate or read-only constant) or all (every function, also values computed from other constants; slower). For instruction_search"`
-	TraceValues  *bool  `json:"trace_values,omitempty" jsonschema:"Trace the immediate through bounded function-local register and stack data flow and report matching call arguments. Default: true when immediate is set. For instruction_search"`
-	CallTarget   string `json:"call_target,omitempty" jsonschema:"Optional case-insensitive call target symbol/address substring, e.g. DeviceApi or 0x140002000. Requires immediate value tracing. Defaults findings to call. For instruction_search"`
-	Findings     string `json:"findings,omitempty" jsonschema:"Result kind: all (default), call (CALL/tail-call value arguments only), or producer (direct instructions and value producers only). For instruction_search"`
+	Mnemonic        string `json:"mnemonic,omitempty" jsonschema:"Optional assembly mnemonic filter such as MOV, ADD, or CALL. For instruction_search"`
+	Register        string `json:"register,omitempty" jsonschema:"Optional explicit register operand filter such as R9D, EAX, or RCX. With displacement it also matches the base/index of that [reg+disp] operand, so register=RSP displacement=0xf8 finds [rsp+0xf8] (stack bases are otherwise skipped). For instruction_search"`
+	Immediate       string `json:"immediate,omitempty" jsonschema:"Optional immediate value filter in hex or decimal, e.g. 0x327 or 807. For instruction_search"`
+	Displacement    string `json:"displacement,omitempty" jsonschema:"Optional memory displacement filter (hex or decimal): instructions addressing [reg+0x410] style operands, e.g. who reads or writes a struct field at that offset. For instruction_search"`
+	TraceScope      string `json:"trace_scope,omitempty" jsonschema:"Value tracing scope: seeded (default; functions holding the value as an immediate or read-only constant) or all (every function, also values computed from other constants; slower). For instruction_search"`
+	TraceValues     *bool  `json:"trace_values,omitempty" jsonschema:"Trace the immediate through bounded function-local register and stack data flow and report matching call arguments. Default: true when immediate is set. For instruction_search"`
+	CallTarget      string `json:"call_target,omitempty" jsonschema:"Optional case-insensitive call target symbol/address substring, e.g. DeviceApi or 0x140002000. Requires immediate value tracing. Defaults findings to call. For instruction_search"`
+	Findings        string `json:"findings,omitempty" jsonschema:"Result kind: all (default), call (CALL/tail-call value arguments only), or producer (direct instructions and value producers only). For instruction_search"`
+	GroupByFunction bool   `json:"group_by_function,omitempty" jsonschema:"instruction_search: list one row per function with its address and match counts."`
 
 	// xref parameters
 	TargetVA    string `json:"target_va,omitempty" jsonschema:"Target address to find references to (hex or a symbol name), or inclusive range start when target_end_va is set. For xref operation."`
