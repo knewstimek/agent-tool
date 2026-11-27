@@ -17,10 +17,11 @@ import (
 )
 
 type profileSearchInput struct {
-	Query  string `json:"query,omitempty" jsonschema:"Words to match across profile names, aliases, descriptions, and tags. Omit to list profiles."`
-	Kind   string `json:"kind,omitempty" jsonschema:"Filter by ssh, sftp, mysql, cloudflare, or aws."`
-	Limit  int    `json:"limit,omitempty" jsonschema:"Maximum results per page, default 20, up to 100."`
-	Offset int    `json:"offset,omitempty" jsonschema:"Use the previous next_offset with the same query to continue."`
+	Query   string `json:"query,omitempty" jsonschema:"Words to match across profile names, aliases, descriptions, and tags. Omit to list profiles."`
+	Kind    string `json:"kind,omitempty" jsonschema:"Filter by ssh, sftp, mysql, cloudflare, or aws."`
+	Storage string `json:"storage,omitempty" jsonschema:"Filter by vault or legacy. By default encrypted vault profiles appear first."`
+	Limit   int    `json:"limit,omitempty" jsonschema:"Maximum results per page, default 20, up to 100."`
+	Offset  int    `json:"offset,omitempty" jsonschema:"Use the previous next_offset with the same query to continue."`
 }
 
 type profileSearchMetadata = vault.Metadata
@@ -28,6 +29,7 @@ type profileSearchMetadata = vault.Metadata
 type profileSearchMatch struct {
 	ConnectionProfile string `json:"connection_profile"`
 	Kind              string `json:"kind"`
+	Storage           string `json:"storage"`
 	Revision          int64  `json:"revision,omitempty"`
 	profileSearchMetadata
 }
@@ -36,12 +38,18 @@ type profileSearchOutput struct {
 	Profiles   []profileSearchMatch `json:"profiles"`
 	Total      int                  `json:"total"`
 	NextOffset int                  `json:"next_offset,omitempty"`
+	Warnings   []string             `json:"warnings,omitempty"`
 }
+
+const (
+	storageVault  = "vault"
+	storageLegacy = "legacy"
+)
 
 func RegisterProfileSearch(server *mcp.Server) {
 	common.SafeAddTool(server, &mcp.Tool{
 		Name:        "profile_search",
-		Description: "Find SSH/SFTP, MySQL, Cloudflare, or AWS profiles by name, alias, description, or tag. Pass a result's connection_profile to the matching tool.",
+		Description: "Find SSH/SFTP, MySQL, Cloudflare, or AWS profiles. Encrypted vault profiles appear first. Pass a result's connection_profile to the matching tool.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, handleProfileSearch)
 }
@@ -63,7 +71,11 @@ func handleProfileSearch(ctx context.Context, _ *mcp.CallToolRequest, input prof
 	default:
 		return nil, profileSearchOutput{}, fmt.Errorf("kind must be ssh, sftp, mysql, cloudflare, or aws")
 	}
-	profiles, err := discoverProfiles(ctx, kind)
+	storage := strings.ToLower(strings.TrimSpace(input.Storage))
+	if storage != "" && storage != storageVault && storage != storageLegacy {
+		return nil, profileSearchOutput{}, fmt.Errorf("storage must be vault or legacy")
+	}
+	profiles, warnings, err := discoverProfiles(ctx, kind, storage)
 	if err != nil {
 		return nil, profileSearchOutput{}, err
 	}
@@ -98,6 +110,9 @@ func handleProfileSearch(ctx context.Context, _ *mcp.CallToolRequest, input prof
 		matches = append(matches, rankedMatch{profile, rank})
 	}
 	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].match.Storage != matches[j].match.Storage {
+			return matches[i].match.Storage == storageVault
+		}
 		if matches[i].rank != matches[j].rank {
 			return matches[i].rank < matches[j].rank
 		}
@@ -109,8 +124,14 @@ func handleProfileSearch(ctx context.Context, _ *mcp.CallToolRequest, input prof
 
 	start := min(input.Offset, len(matches))
 	end := start + min(limit, len(matches)-start)
-	output := profileSearchOutput{Profiles: make([]profileSearchMatch, 0, end-start), Total: len(matches)}
-	remaining := common.DefaultOutputChars - 128 // Reserve space for the page envelope.
+	output := profileSearchOutput{
+		Profiles: make([]profileSearchMatch, 0, end-start), Total: len(matches), Warnings: warnings,
+	}
+	envelope, err := json.Marshal(output)
+	if err != nil {
+		return nil, profileSearchOutput{}, err
+	}
+	remaining := common.DefaultOutputChars - len(envelope) - 64
 	for _, entry := range matches[start:end] {
 		row, err := json.Marshal(entry.match)
 		if err != nil {
@@ -135,38 +156,66 @@ func handleProfileSearch(ctx context.Context, _ *mcp.CallToolRequest, input prof
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(data)}}}, output, nil
 }
 
-func discoverProfiles(ctx context.Context, kind string) ([]profileSearchMatch, error) {
-	found := []profileSearchMatch{}
-	shadowed := make(map[string]bool)
-	store, err := vault.Open()
-	if err == nil {
-		defer store.Close()
-		profiles, err := store.Profiles(ctx, kind, true)
-		if err != nil {
-			return nil, fmt.Errorf("cannot read vault profile catalog")
-		}
-		for _, p := range profiles {
-			if p.Kind == vault.SSH {
-				shadowed[p.Name] = true
-			}
-			if !p.Removed {
-				found = append(found, profileSearchMatch{p.Name, p.Kind, p.Revision, p.Metadata})
-			}
-		}
-	} else if !errors.Is(err, vault.ErrUninitialized) {
-		return nil, err
+func discoverProfiles(ctx context.Context, kind, storage string) ([]profileSearchMatch, []string, error) {
+	legacyKind := kind == "" || kind == vault.SSH
+	if storage == storageLegacy && !legacyKind {
+		return nil, nil, nil
 	}
-	if kind != "" && kind != vault.SSH {
-		return found, nil
+	vaultProfiles, vaultAvailable, vaultErr := readVaultProfileCatalog(ctx, kind)
+	if ctx.Err() != nil {
+		return nil, nil, ctx.Err()
+	}
+	var found []profileSearchMatch
+	shadowed := make(map[string]bool)
+	for _, p := range vaultProfiles {
+		if p.Kind == vault.SSH {
+			shadowed[p.Name] = true
+		}
+		if storage != storageLegacy && !p.Removed {
+			found = append(found, profileSearchMatch{
+				ConnectionProfile: p.Name, Kind: p.Kind, Storage: storageVault, Revision: p.Revision, profileSearchMetadata: p.Metadata,
+			})
+		}
+	}
+	if !legacyKind || storage == storageVault {
+		return found, nil, vaultErr
 	}
 	legacy, _, err := readLocalConnectionProfiles()
 	if err != nil && (!errors.Is(err, os.ErrNotExist) || strings.TrimSpace(os.Getenv("AGENT_TOOL_CONNECTION_PROFILE_FILE")) != "") {
-		return nil, fmt.Errorf("cannot load local connection profiles; check that the configured file exists, is readable, and contains valid profile JSON")
+		legacyErr := fmt.Errorf("cannot load local connection profiles; check that the configured file exists, is readable, and contains valid profile JSON")
+		if !vaultAvailable || storage == storageLegacy {
+			return nil, nil, errors.Join(legacyErr, vaultErr)
+		}
+		return found, []string{legacyErr.Error()}, nil
 	}
 	for name, p := range legacy {
 		if name != "" && name == strings.TrimSpace(name) && !shadowed[name] {
-			found = append(found, profileSearchMatch{ConnectionProfile: name, Kind: vault.SSH, profileSearchMetadata: p.searchMetadata})
+			found = append(found, profileSearchMatch{
+				ConnectionProfile: name, Kind: vault.SSH, Storage: storageLegacy, profileSearchMetadata: p.searchMetadata,
+			})
 		}
 	}
-	return found, nil
+	if vaultErr != nil {
+		if err != nil {
+			return nil, nil, vaultErr
+		}
+		return found, []string{vaultErr.Error() + "; SSH profile names may not resolve until the vault is readable"}, nil
+	}
+	return found, nil, nil
+}
+
+func readVaultProfileCatalog(ctx context.Context, kind string) ([]vault.Profile, bool, error) {
+	store, err := vault.Open()
+	if errors.Is(err, vault.ErrUninitialized) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("cannot read vault profile catalog")
+	}
+	defer store.Close()
+	profiles, err := store.Profiles(ctx, kind, true)
+	if err != nil {
+		return nil, false, fmt.Errorf("cannot read vault profile catalog")
+	}
+	return profiles, true, nil
 }

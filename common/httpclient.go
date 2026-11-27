@@ -3,11 +3,14 @@ package common
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -309,6 +312,7 @@ func DoRequestWithECH(ctx context.Context, client *http.Client, req *http.Reques
 	}
 
 	echTransport := transport.Clone()
+	defer echTransport.CloseIdleConnections()
 	if echTransport.TLSClientConfig == nil {
 		echTransport.TLSClientConfig = &tls.Config{}
 	}
@@ -320,22 +324,39 @@ func DoRequestWithECH(ctx context.Context, client *http.Client, req *http.Reques
 		CheckRedirect: client.CheckRedirect,
 	}
 
-	resp, err := echClient.Do(req)
-	if err != nil {
-		// ECH failed — restore body for retry if possible
-		if req.GetBody != nil {
-			req.Body, _ = req.GetBody()
+	var sent atomic.Bool
+	trace := &httptrace.ClientTrace{
+		WroteHeaders: func() { sent.Store(true) },
+		WroteRequest: func(httptrace.WroteRequestInfo) { sent.Store(true) },
+	}
+	resp, err := echClient.Do(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	if err == nil {
+		return resp, nil
+	}
+	return retryWithoutECH(client, req, err, sent.Load())
+}
+
+func retryWithoutECH(client *http.Client, req *http.Request, err error, sent bool) (*http.Response, error) {
+	var rejection *tls.ECHRejectionError
+	switch req.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+	default:
+		// An ECH rejection before any write is the only safe fallback for changes.
+		if sent || !errors.As(err, &rejection) {
+			return nil, err
 		}
-		// Retry without ECH (automatic fallback)
-		if _, ok := err.(*tls.ECHRejectionError); ok {
-			return client.Do(req)
+	}
+	retry := req.Clone(req.Context())
+	if req.GetBody != nil {
+		body, bodyErr := req.GetBody()
+		if bodyErr != nil {
+			return nil, errors.Join(err, bodyErr)
 		}
-		// Other TLS errors might also be ECH-related, try fallback
-		resp2, err2 := client.Do(req)
-		if err2 != nil {
-			return nil, err // return original error
-		}
-		return resp2, nil
+		retry.Body = body
+	}
+	resp, retryErr := client.Do(retry)
+	if retryErr != nil {
+		return nil, err
 	}
 	return resp, nil
 }
