@@ -18,6 +18,7 @@ import (
 const cliUsage = `agent-tool vault init
 agent-tool vault unlock [--duration 8h]
 agent-tool vault list [ssh|mysql|cloudflare|aws]
+agent-tool vault import-ssh [--suffix=-vault]
 agent-tool vault put KIND NAME [--revision N] [--description TEXT] [--alias NAME] [--tag TAG] [connection flags]
 agent-tool vault metadata KIND NAME --revision N [--description TEXT] [--alias NAME] [--tag TAG]
 agent-tool vault history KIND NAME
