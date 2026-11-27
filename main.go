@@ -56,7 +56,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "v1.1.3"
+const Version = "v1.1.4"
 
 func main() {
 	args := os.Args[1:]
