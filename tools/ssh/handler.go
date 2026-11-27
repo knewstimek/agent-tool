@@ -74,6 +74,7 @@ type SSHInput struct {
 	ResolvedConnectionID string `json:"-"`
 	requestSession       *mcp.ServerSession
 	vaultName            string
+	vaultFingerprint     [32]byte
 	privateKey           string
 	jumpPrivateKey       string
 }

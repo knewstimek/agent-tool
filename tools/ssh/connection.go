@@ -28,27 +28,28 @@ const (
 // ConnectionProfile is the non-command portion of an SSH/SFTP request. Local
 // profile files may contain secrets and must not be checked into source control.
 type ConnectionProfile struct {
-	RemoteRoot     string      `json:"remote_root,omitempty"`
-	RemoteShell    string      `json:"remote_shell,omitempty"`
-	Host           string      `json:"host"`
-	Port           interface{} `json:"port,omitempty"`
-	User           string      `json:"user"`
-	Password       string      `json:"password,omitempty"`
-	KeyFile        string      `json:"key_file,omitempty"`
-	Passphrase     string      `json:"passphrase,omitempty"`
-	UseAgent       interface{} `json:"use_agent,omitempty"`
-	HostKeyCheck   string      `json:"host_key_check,omitempty"`
-	JumpHost       string      `json:"jump_host,omitempty"`
-	JumpPort       interface{} `json:"jump_port,omitempty"`
-	JumpUser       string      `json:"jump_user,omitempty"`
-	JumpPassword   string      `json:"jump_password,omitempty"`
-	JumpKeyFile    string      `json:"jump_key_file,omitempty"`
-	JumpPassphrase string      `json:"jump_passphrase,omitempty"`
-	Trusted        bool        `json:"trusted,omitempty"`
-	searchMetadata profileSearchMetadata
-	vaultName      string
-	privateKey     string
-	jumpPrivateKey string
+	RemoteRoot       string      `json:"remote_root,omitempty"`
+	RemoteShell      string      `json:"remote_shell,omitempty"`
+	Host             string      `json:"host"`
+	Port             interface{} `json:"port,omitempty"`
+	User             string      `json:"user"`
+	Password         string      `json:"password,omitempty"`
+	KeyFile          string      `json:"key_file,omitempty"`
+	Passphrase       string      `json:"passphrase,omitempty"`
+	UseAgent         interface{} `json:"use_agent,omitempty"`
+	HostKeyCheck     string      `json:"host_key_check,omitempty"`
+	JumpHost         string      `json:"jump_host,omitempty"`
+	JumpPort         interface{} `json:"jump_port,omitempty"`
+	JumpUser         string      `json:"jump_user,omitempty"`
+	JumpPassword     string      `json:"jump_password,omitempty"`
+	JumpKeyFile      string      `json:"jump_key_file,omitempty"`
+	JumpPassphrase   string      `json:"jump_passphrase,omitempty"`
+	Trusted          bool        `json:"trusted,omitempty"`
+	searchMetadata   profileSearchMetadata
+	vaultName        string
+	vaultFingerprint [sha256.Size]byte
+	privateKey       string
+	jumpPrivateKey   string
 }
 
 // UnmarshalJSON treats local connection profiles as trusted unless they
@@ -237,12 +238,17 @@ func loadVaultConnectionProfile(ctx context.Context, name string) (ConnectionPro
 	if err != nil {
 		return ConnectionProfile{}, err
 	}
+	encoded, err := json.Marshal(c)
+	if err != nil {
+		return ConnectionProfile{}, err
+	}
+	defer clear(encoded)
 	return ConnectionProfile{
 		Host: c.Host, Port: c.Port, User: c.User, Password: c.Password,
 		Passphrase: c.Passphrase, UseAgent: c.UseAgent, HostKeyCheck: c.HostKeyCheck,
 		RemoteRoot: c.RemoteRoot, RemoteShell: c.RemoteShell,
 		JumpHost: c.JumpHost, JumpPort: c.JumpPort, JumpUser: c.JumpUser, JumpPassword: c.JumpPassword, JumpPassphrase: c.JumpPassphrase,
-		vaultName: name, privateKey: c.PrivateKey, jumpPrivateKey: c.JumpPrivateKey,
+		vaultName: name, vaultFingerprint: sha256.Sum256(encoded), privateKey: c.PrivateKey, jumpPrivateKey: c.JumpPrivateKey,
 	}, nil
 }
 
@@ -292,7 +298,10 @@ func readLocalConnectionProfiles() (map[string]ConnectionProfile, string, error)
 func rememberConnection(owner *mcp.ServerSession, input SSHInput) (string, error) {
 	profile := profileFromInput(input)
 	if profile.vaultName != "" {
-		profile = ConnectionProfile{vaultName: profile.vaultName, RemoteRoot: profile.RemoteRoot, RemoteShell: profile.RemoteShell}
+		profile = ConnectionProfile{
+			vaultName: profile.vaultName, vaultFingerprint: profile.vaultFingerprint,
+			RemoteRoot: profile.RemoteRoot, RemoteShell: profile.RemoteShell,
+		}
 	}
 	now := time.Now()
 	connectionHandles.Lock()
@@ -344,6 +353,12 @@ func loadConnectionHandle(ctx context.Context, owner *mcp.ServerSession, id stri
 	if err != nil {
 		return ConnectionProfile{}, err
 	}
+	if profile.vaultFingerprint != entry.profile.vaultFingerprint {
+		connectionHandles.Lock()
+		delete(connectionHandles.items, id)
+		connectionHandles.Unlock()
+		return ConnectionProfile{}, fmt.Errorf("connection profile changed; call again with connection_profile to obtain a new connection_id")
+	}
 	profile.RemoteRoot, profile.RemoteShell = entry.profile.RemoteRoot, entry.profile.RemoteShell
 	return profile, nil
 }
@@ -365,12 +380,13 @@ func profileFromInput(input SSHInput) ConnectionProfile {
 		JumpUser: input.JumpUser, JumpPassword: input.JumpPassword,
 		JumpKeyFile: input.JumpKeyFile, JumpPassphrase: input.JumpPassphrase,
 		Trusted:   input.TrustedProfile,
-		vaultName: input.vaultName, privateKey: input.privateKey, jumpPrivateKey: input.jumpPrivateKey,
+		vaultName: input.vaultName, vaultFingerprint: input.vaultFingerprint, privateKey: input.privateKey, jumpPrivateKey: input.jumpPrivateKey,
 	}
 }
 
 func applyProfileDefaults(input *SSHInput, profile ConnectionProfile) {
 	input.vaultName, input.privateKey, input.jumpPrivateKey = profile.vaultName, profile.privateKey, profile.jumpPrivateKey
+	input.vaultFingerprint = profile.vaultFingerprint
 	if input.RemoteRoot == "" {
 		input.RemoteRoot = profile.RemoteRoot
 	}

@@ -536,6 +536,7 @@ Non-zero remote exits return IsError=true. For long-running commands, use backgr
 ## profile_search
 Find named SSH/SFTP, MySQL, Cloudflare, and AWS connections by non-secret profile metadata.
 Use kind to filter. Omit query to list. Every word matches part of a name, alias, description, or tag, ignoring case.
+Vault results appear first. Set storage to vault or legacy to filter, and check warnings when a source could not be read.
 Use limit (default 20, max 100) and pass next_offset as offset with the same filters to continue.
 Pass connection_profile to ssh, sftp, mysql, or httpreq. For httpreq also pass profile_kind (aws or cloudflare).
 Through toolbox: operation=call, tool=profile_search, arguments={"kind":"mysql","query":"reporting"}.
